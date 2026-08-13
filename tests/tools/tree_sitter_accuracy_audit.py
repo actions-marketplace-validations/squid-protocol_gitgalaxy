@@ -272,7 +272,13 @@ NODE_MAPS = {
         # no-return-type constructor shape), but was previously invisible to real_functions,
         # so every real constructor scored as a false "extra" here.
         "func_node_types": {"method_declaration", "local_function_statement", "constructor_declaration"},
-        "class_node_types": {"class_declaration", "struct_declaration", "interface_declaration"},
+        # class_node_types was missing enum_declaration -- GitGalaxy's csharp class_start regex
+        # deliberately matches `enum` too (same design choice as java's class_node_types, which
+        # already includes enum_declaration), so every real enum in the corpus scored as a false
+        # "extra" class here. Confirmed via direct breakdown: 11 of LanguageParser.cs's 13
+        # "extra_classes" were real enums (AccessorDeclaringKind, NameOptions, Precedence, etc.)
+        # that GitGalaxy correctly found but the ground truth didn't count as a class.
+        "class_node_types": {"class_declaration", "struct_declaration", "interface_declaration", "enum_declaration"},
     },
     "java": {
         "ts_lang": "java",
