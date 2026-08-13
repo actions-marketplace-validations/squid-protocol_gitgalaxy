@@ -46,7 +46,7 @@ for the same metrics tracked over time across pushes to main.
 | Haskell | 56.4% | 65.4% | 100.0% | 100.0% |
 | Html | N/A | N/A | N/A | N/A |
 | Java | 87.6% | 100.0% | 100.0% | 100.0% |
-| Javascript | 96.1% | 73.5% | 100.0% | 100.0% |
+| Javascript | 96.1% | 74.1% | 100.0% | 100.0% |
 | Kotlin | 100.0% | 95.8% | 100.0% | 100.0% |
 | Lua | N/A | N/A | N/A | N/A |
 | Makefile | 100.0% | 100.0% | N/A | N/A |
@@ -756,7 +756,7 @@ LANGUAGE_DEFINITIONS: dict[str, Any] = {
                 # working the same as before; only a bare statement with
                 # neither `{` nor `=>` anywhere (e.g. `next();`) is newly
                 # rejected.
-                r"^[ \t]*(?:static[ \t\n]+)?(?:async[ \t\n]+)?(?:get\s+|set\s+)?\*?(?!(?:if|for|while|switch|catch|return|throw|new|typeof|jQuery|function)\b|\$)#?[a-zA-Z_$][\w$]*(?=[ \t\n]*\([^)]*\)[ \t\n]*(?:=>[ \t\n]*)?\{)"
+                r"^[ \t]*(?:static[ \t\n]+)?(?:async[ \t\n]+)?(?:get\s+|set\s+)?\*?(?!(?:if|for|while|switch|catch|return|throw|new|typeof|jQuery|function)\b|\$)#?[a-zA-Z_$][\w$]*(?=[ \t\n]*\([^)(]*\)[ \t\n]*(?:=>[ \t\n]*)?\{)"
                 r")",
                 re.M,
             ),
