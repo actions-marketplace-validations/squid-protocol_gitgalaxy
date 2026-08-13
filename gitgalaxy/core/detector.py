@@ -1853,6 +1853,8 @@ class StructuralExtractor:
 
         def fast_shield(m):
             text = m.group(0)
+            if lang_id == "zig" and text.startswith('@"'):
+                return text
             if "\n" not in text:
                 return " " * len(text)
             return "\n".join(" " * len(line) for line in text.split("\n"))
@@ -1873,8 +1875,12 @@ class StructuralExtractor:
         if lang_id == "scala":
             backtick = r"`(?:\\.|[^`\\]){0,200}`"
 
+        csharp_verbatim = r'@"[^"]*(?:""[^"]*)*"|'
+        if lang_id == "zig":
+            csharp_verbatim = r'@"(?:\\.|[^"\\])*"|'
+
         combined_pattern = (
-            r'""".*?"""|@"[^"]*(?:""[^"]*)*"|R"([a-zA-Z0-9_]*)\(.*?\)\1"|'
+            r'""".*?"""|' + csharp_verbatim + r'R"([a-zA-Z0-9_]*)\(.*?\)\1"|'
             r'"(?:\\.|[^"\\])*"|' + single_quote + r"|" + backtick + r"|//[^\n]*|/\*.*?\*/"
         )
 
@@ -2101,7 +2107,7 @@ class StructuralExtractor:
             # would truncate a completely normal function at that `;`. Track
             # `[`/`]` depth and only treat `{`/`;` as the terminator at
             # depth 0.
-            elif lang_id == "rust":
+            elif lang_id in ("rust", "zig"):
                 params_end_idx = self._find_balanced_end(safe_code, match.end(), "(", ")")
                 depth = 0
                 pos = params_end_idx
@@ -3374,6 +3380,9 @@ class StructuralExtractor:
         regex capture block by isolating the last valid alphanumeric token before parameter boundaries.
         """
         match_strip = raw_match.strip()
+
+        if match_strip.startswith('@"'):
+            return match_strip
 
         # 1. Objective-C Message Passing Normalization
         if match_strip.startswith("-") or match_strip.startswith("+"):

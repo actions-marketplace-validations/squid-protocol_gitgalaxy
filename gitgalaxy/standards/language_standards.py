@@ -64,7 +64,7 @@ for the same metrics tracked over time across pushes to main.
 | Swift | 98.9% | 100.0% | 100.0% | 100.0% |
 | Tcl | 98.6% | 98.6% | N/A | N/A |
 | Typescript | 92.7% | 89.8% | 100.0% | 100.0% |
-| Zig | 73.9% | 100.0% | 96.0% | 99.8% |
+| Zig | 98.0% | 100.0% | 96.0% | 99.8% |
 <!-- TREE_SITTER_ACCURACY_TABLE:END -->
 """
 
@@ -8624,7 +8624,7 @@ LANGUAGE_DEFINITIONS: dict[str, Any] = {
             ),
             # 4. func_start: Executable Logic Anchors. Anchors logic blocks (fn). EXCLUDES struct/enum/union headers.
             "func_start": re.compile(
-                r"^[ \t]*(?:(?:pub|export|extern(?:[ \t]+\"[^\"]+\")?|inline|noinline|callconv\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\([^)(]*\))*\))*\))*\))*\)|linksection\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\([^)(]*\))*\))*\))*\))*\)|align\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\([^)(]*\))*\))*\))*\))*\))[ \t\n]+)*fn[ \t\n]+(@\"[^\"]+\"|[a-zA-Z_]\w*)(?=[ \t\n]*\()",
+                r"^[ \t]*(?:(?:pub|export(?:[ \t]+\"(?:[^\"\\]|\\.)*\")?|extern(?:[ \t]+\"(?:[^\"\\]|\\.)*\")?|inline|noinline|callconv\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\([^)(]*\))*\))*\))*\))*\)|linksection\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\([^)(]*\))*\))*\))*\))*\)|align\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\([^)(]*\))*\))*\))*\))*\))[ \t\n]+)*fn[ \t\n]+(@\"(?:[^\"\\]|\\.)*\"|[a-zA-Z_]\w*)(?=[ \t\n]*\()",
                 re.M,
             ),
             # 5. class_start: Object / Entity Declarations. Defines structural entities (struct, enum, union, error, opaque).
