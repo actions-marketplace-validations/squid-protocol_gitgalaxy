@@ -54,7 +54,7 @@ for the same metrics tracked over time across pushes to main.
 | Objective-C | 98.7% | 98.7% | 100.0% | 100.0% |
 | Perl | 70.6% | 99.9% | 100.0% | 100.0% |
 | Php | 100.0% | 99.9% | 100.0% | 96.6% |
-| Powershell | 69.1% | 92.7% | 100.0% | 100.0% |
+| Powershell | 100.0% | 99.1% | 100.0% | 100.0% |
 | Python | 99.7% | 99.2% | 99.6% | 100.0% |
 | Ruby | 100.0% | 90.7% | 100.0% | 100.0% |
 | Rust | 99.7% | 93.2% | 100.0% | 90.7% |
@@ -4041,8 +4041,8 @@ LANGUAGE_DEFINITIONS: dict[str, Any] = {
             # keyword exclusion.
             "func_start": re.compile(
                 r"^[ \t]*(?:function|filter|workflow)\s+(?:(?:global|script|local|private):)?([a-zA-Z0-9_-]+)"
-                r"|^[ \t]*(?:(?:hidden|static)\s+)*\[(?:[^\[\]]|\[[^\[\]]*\])+\]\s+([a-zA-Z_]\w*)(?=\s*\()"
-                r"|^[ \t]*(?:(?:hidden|static)\s+)*(?!(?:if|elseif|switch|while|for|foreach|until|trap|catch)\b)"
+                r"|^[ \t]*(?:(?:hidden|static)\s+)*\[(?:[^\[\]]|\[[^\[\]]*\])+\]\s+(?!(?:if|elseif|switch|while|for|foreach|until|trap|catch|param)\b)([a-zA-Z_]\w*)(?=\s*\()"
+                r"|^[ \t]*(?:(?:hidden|static)\s+)*(?!(?:if|elseif|switch|while|for|foreach|until|trap|catch|param)\b)"
                 r"([A-Za-z_]\w*)\s*\((?:[^()]|\([^()]*\))*\)\s*[ \t\n]*\{",
                 re.I | re.M,
             ),
