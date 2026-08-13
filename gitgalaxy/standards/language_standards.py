@@ -39,7 +39,7 @@ for the same metrics tracked over time across pushes to main.
 | Cpp | 93.4% | 95.4% | 98.6% | 92.6% |
 | Csharp | 99.5% | 65.0% | 89.5% | 56.7% |
 | Css | 100.0% | 100.0% | N/A | N/A |
-| Dart | 93.8% | 66.8% | 100.0% | 100.0% |
+| Dart | 93.8% | 68.7% | 100.0% | 100.0% |
 | Fortran | 98.3% | 88.1% | 100.0% | 100.0% |
 | Go | 95.6% | 100.0% | 82.1% | 100.0% |
 | Groovy | N/A | N/A | N/A | N/A |
@@ -9137,14 +9137,14 @@ LANGUAGE_DEFINITIONS: dict[str, Any] = {
                 r"(?:"
                 r"(?:(?:static|external|abstract|covariant|late)[ \t\n]+){1,5}"
                 r"(?!(?:(?:(?:[\w<>\[\],?]|\((?:[^()]|\([^()]*\))*\))+[ \t\n]+){0,5}?)(?:class|mixin|enum|extension|typedef|if|for|while|switch|catch|case|when|return|throw|new|var|final|const)\b)"
-                r"(?:(?:(?:[\w<>\[\],?]|\((?:[^()]|\([^()]*\))*\))+[ \t\n]+){0,5}?)"
+                r"(?:(?:(?:[\w<>\[\],?]|\((?:[^()]|\([^()]*\))*\))+[ \t\n]+){0,4}?(?:(?:[\w<>\[\],?]|\((?:[^()]|\([^()]*\))*\))+(?<!,)[ \t\n]+))?"
                 r"(?!(?:class|mixin|enum|extension|typedef|if|for|while|switch|catch|case|when|return|throw|new|var|final|const|Function)\b)"
                 r"(?:(?:get|set|factory)[ \t\n]+)?((?:[a-zA-Z_]\w*\.)?[a-zA-Z_]\w*|operator[ \t\n]+[^\s\w]+)"
                 r"(?=[ \t\n]*(?:<[^>]*>[ \t\n]*)?(?:\(|=>|\{|;))"
                 r"|"
                 r"(?:(?:static|external|abstract|covariant|late)[ \t\n]+){0,5}"
                 r"(?!(?:(?:(?:[\w<>\[\],?]|\((?:[^()]|\([^()]*\))*\))+[ \t\n]+){0,5}?)(?:class|mixin|enum|extension|typedef|if|for|while|switch|catch|case|when|return|throw|new|var|final|const)\b)"
-                r"(?:(?:(?:[\w<>\[\],?]|\((?:[^()]|\([^()]*\))*\))+[ \t\n]+){1,5}?)"
+                r"(?:(?!\?[ \t\n]+(?:get|set|factory|[a-zA-Z_]))(?:(?:(?:[\w<>\[\],?]|\((?:[^()]|\([^()]*\))*\))+[ \t\n]+){0,4}?(?:(?:[\w<>\[\],?]|\((?:[^()]|\([^()]*\))*\))+(?<!,)[ \t\n]+)))"
                 r"(?!(?:class|mixin|enum|extension|typedef|if|for|while|switch|catch|case|when|return|throw|new|var|final|const|Function)\b)"
                 r"(?:(?:get|set|factory)[ \t\n]+)?((?:[a-zA-Z_]\w*\.)?[a-zA-Z_]\w*|operator[ \t\n]+[^\s\w]+)"
                 r"(?=[ \t\n]*(?:<[^>]*>[ \t\n]*)?(?:\(|=>|\{|;))"
