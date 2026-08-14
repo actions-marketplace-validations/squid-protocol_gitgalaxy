@@ -134,15 +134,104 @@ recovery for unrelated surrounding code.
 
 **The evidence:** `tests/tools/tree_sitter_accuracy_audit.py` measures csharp against
 tree-sitter-c-sharp (via `tree_sitter_language_pack`). `language-crucible/data/csharp/roslyn/LanguageParser.cs`
-(14,680 lines) declares `private ref struct DisposableResetPoint` at line 14575 — a C# 7.2+ `ref
-struct`, ordinary modern C#, not an extension syntax the grammar has no notion of. The installed
-grammar version fails to parse it (`tree.root_node.has_error == True`), and the resulting `ERROR`
-node recovery leaves the ground-truth tree with zero `method_declaration` nodes for several real
-methods elsewhere in the file, confirmed for three (`AccumulateExplicitInterfaceName`,
-`CanFollowCast`, `CanReuseVariableDeclarator`) via three independent checks: a raw regex
-`.finditer()` against the source, an isolated single-file `galaxyscope` scan, and a direct SQL
-query against the resulting corpus DB — all three agree GitGalaxy finds exactly one occurrence of
-each, correctly, while tree-sitter's parse has no record of any of them (#1427).
+(14,680 lines) was first flagged for this in #1427, which found the ground-truth tree missing
+`method_declaration` nodes for three real methods (`AccumulateExplicitInterfaceName`,
+`CanFollowCast`, `CanReuseVariableDeclarator`) and attributed it to `private ref struct
+DisposableResetPoint` at line 14575 (`tree.root_node.has_error == True`).
+
+**Correction (2026-08-14):** that attribution was wrong, and the real scope is far larger than
+three names. Re-bisecting the file confirms the `ref struct` at line 14575 parses cleanly in
+isolation — tested standalone (`private ref struct DisposableResetPoint : IDisposable { ... }`
+inside a plain class), `has_error` is `False`. The actual trigger is a C# 11 list pattern
+combined with a property pattern, over 9,000 lines earlier, at line 5198:
+```csharp
+if (modifiers is [.., SyntaxToken { Kind: SyntaxKind.ScopedKeyword } scopedKeyword])
+```
+Tested in isolation, this single construct alone produces `has_error == True`. Once tree-sitter
+hits it, recovery never resynchronizes for the rest of the file: `real_functions` ground truth is
+157 (matching GitGalaxy almost exactly — only 2 "extra") for everything *before* line 5198, and
+exactly **0** for everything from line 5198 to the end of the file (line 14680) — despite that
+region containing hundreds of ordinary, valid methods (`GetOriginalModifiers`,
+`ParseEventFieldDeclaration`, `HasEntryPointSignature`, `TryGetInterceptor`, and on). Every one of
+csharp's 316 "extra" (false-positive) functions reported by the audit tool falls in this region;
+GitGalaxy finds all of them correctly (spot-checked several against the source directly) — the
+`ref struct` at 14575 was never the cause, just one more casualty deep inside the same
+already-corrupted 9,500-line stretch. #1427's 3-name exclusion undersold this by roughly two
+orders of magnitude; a proper fix needs to exclude the whole post-5198 region of this one file,
+not name-list three functions within it.
+
+### How long can a gap like this actually last?
+
+*Note: the tracker research below was done against the original (incorrect) `ref struct`
+attribution, before the 2026-08-14 correction above identified the real trigger as a list-pattern
++ property-pattern construct instead. It's kept as background evidence that tree-sitter-c-sharp
+has a real, independently-confirmed class of "one bad construct corrupts recovery for the rest of
+the file" bugs — the general mechanism still holds — but none of the specific issues cited below
+were checked against the list-pattern construct itself; that tracker research hasn't been done.*
+
+Checked this against the upstream grammar's own bug tracker rather than assuming it's a
+one-off, since the answer changes how much weight this claim should carry. `tree-sitter-language-pack`
+pins an exact commit hash per grammar in a manifest (not "always latest"), so staleness here has
+two independent layers: whatever the upstream grammar itself hasn't fixed yet, *plus* whatever gap
+opens up between that and whenever this repo's pinned pack version last got bumped. Tracing the
+first layer for `ref struct` specifically, on `tree-sitter/tree-sitter-c-sharp`:
+
+- **Issue #14** ("Add ref_type," filed Nov 2019) — closed via a real fix, **PR #251** ("Add
+  ref/ref readonly types," Dec 2022). So basic `ref`-type support isn't an abandoned, decade-old
+  gap — it landed a bit over 3 years after being reported.
+- **Issue #361** ("`struct`'s modifiers are too sensitive to order," filed Dec 2024, **still open**
+  as of the most recent activity) — this is the live mechanism, reported independently by the
+  grammar's own users: if `ref` isn't textually adjacent to `struct` (other modifiers like
+  `private`/`partial` sitting between them), the grammar misparses the whole declaration as a
+  `ref_type` variable declaration instead of a `struct_declaration`. The reporter's own words:
+  *"It's enough to have just one such error in a file to completely mess up its parsing"* —
+  independent confirmation, from the people who wrote the grammar, of exactly the cascade Claim 3
+  describes.
+- **PR #439** (Aug 2026, days before this was written) — the maintainers shipped a set of
+  *deliberately failing* corpus tests documenting 8 more known parse gaps, explicitly framed as
+  "a bug report expressed as executable tests," not fixes.
+
+So the honest answer is **years, even against an actively-maintained grammar** — this repo had
+real commits within the month this was written. These aren't neglect; they're genuine parsing
+ambiguities (grammar conflicts that are hard to resolve without breaking something else), and the
+maintainers are transparent that a backlog of them exists on purpose rather than hidden.
+
+(Sources: [tree-sitter-c-sharp#14](https://github.com/tree-sitter/tree-sitter-c-sharp/issues/14),
+[#361](https://github.com/tree-sitter/tree-sitter-c-sharp/issues/361),
+[#439](https://github.com/tree-sitter/tree-sitter-c-sharp/pull/439),
+[xberg-io/tree-sitter-language-pack](https://github.com/xberg-io/tree-sitter-language-pack) — checked
+directly via `gh api`/`WebFetch`, not recalled from memory.)
+
+### Why GitGalaxy doesn't hit this particular wall
+
+This is the more general point Claim 3 is really an instance of. GitGalaxy commits to exactly four
+things per file — classes, functions, arguments, and a fixed set of structural signatures
+(branch/io/safety_bypasses/etc.) — never a complete, general-purpose parse tree. That narrower
+contract is what frees it from several constraints a real grammar has no choice but to carry:
+
+- **No obligation to resolve every valid ordering/combination into one canonical tree.** A grammar
+  has to decide, unambiguously, what `private ref partial readonly struct Foo` parses into for
+  *every* legal permutation of C#'s modifier keywords, because downstream consumers (LSPs,
+  refactoring tools, syntax highlighters) need one authoritative tree to build on. A regex only
+  needs to recognize "roughly this shape, in roughly this area" — modifier order essentially never
+  matters to it, because it was never trying to build a tree in the first place.
+- **No global coherence requirement.** A parse tree is one connected structure; an error anywhere
+  in it has to be *recovered from* somehow, and recovery can misattribute large stretches of
+  otherwise-normal code to the wrong node (exactly what happened here). GitGalaxy's regex matches
+  are independent per-occurrence — a construct it can't parse just doesn't match, and every other
+  match in the file is completely unaffected, because there's no shared tree state for the failure
+  to propagate through.
+- **No obligation to track the full, versioned grammar surface.** A real grammar has to be
+  extended and re-validated against every new construct a language ever adds, forever, or it
+  starts silently misparsing modern code (exactly the `ref struct` gap here). The *shape* of a
+  function or class declaration — a name, a parameter list, an opening brace — is far more stable
+  across decades of language evolution than the full grammar surface is, which is a large part of
+  why the regex approach ages better on this specific axis even as it loses on parsing depth.
+
+None of this makes GitGalaxy's structural-signature engine more *capable* than a real parser —
+it still can't tell you a variable's inferred type, walk an expression tree, or resolve a symbol.
+It's a narrower promise, and Claims 1 through 3 are exactly the places where that narrower promise
+turns out to be an advantage instead of a limitation.
 
 ### How long can a gap like this actually last?
 
@@ -220,10 +309,11 @@ turns out to be an advantage instead of a limitation.
   swallows otherwise-unrelated real code.
 - True recovery (walking into the `ERROR` node for salvageable structure) wasn't feasible here —
   the node has no structural subtree at all, just flat unstructured tokens — so the fix in
-  `tree_sitter_accuracy_audit.py` is a narrow, file+name-scoped ground-truth exclusion for the
-  three confirmed-affected names, not a general "any `ERROR` node nearby" heuristic. Other
-  functions elsewhere in the same corrupted region may still be silently affected but unconfirmed
-  — noted as an open question in #1427, not chased further.
+  `tree_sitter_accuracy_audit.py` needs to be a file+line-range-scoped ground-truth exclusion (the
+  whole region from the line-5198 trigger to end of file), not a name list. #1427's original
+  3-name exclusion was confirmed too narrow by the 2026-08-14 correction above: the real scope is
+  the entire back half of the file (0 real_functions recognized past line 5198, vs. 157 before
+  it), not 3 isolated names.
 
 ## Where this doc is used
 
