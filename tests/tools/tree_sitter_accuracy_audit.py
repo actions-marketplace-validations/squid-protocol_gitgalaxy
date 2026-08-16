@@ -1591,6 +1591,26 @@ def _align_occurrences_by_line(
     return pairs, unmatched_real, unmatched_gg
 
 
+def _find_blind_spot_ranges(root_node: Any, ts_lang: str) -> list[tuple[int, int]]:
+    """Returns a list of (start_line, end_line) pairs (1-indexed) representing regions
+    where the tree-sitter parser is known to be blind to valid structure, meaning any
+    GitGalaxy matches inside them are legitimate and should not be penalized as 'extra'.
+    - rust: macro_rules! and macro_invocation treat their bodies as opaque tokens.
+    - fortran: C Preprocessor directives (like #if) cause the parser to emit ERROR nodes.
+    """
+    ranges = []
+
+    def walk(node: Any) -> None:
+        if (ts_lang == "rust" and node.type in ("macro_definition", "macro_invocation")) or (ts_lang == "fortran" and (node.type == "ERROR" or node.type.startswith("preproc_"))):
+            ranges.append((node.start_point[0] + 1, node.end_point[0] + 1))
+
+        for child in node.children:
+            walk(child)
+
+    walk(root_node)
+    return ranges
+
+
 def _find_trailing_error_cascade_start(root_node: Any, min_span_lines: int = 500) -> Optional[int]:
     """#1567: some real-world files trigger a grammar parse error on ONE construct that then
     corrupts recovery for everything downstream in the same file -- not a small, cleanly-
@@ -1676,6 +1696,7 @@ def measure(lang: str, verbose: bool = False) -> dict:
                     continue
 
                 trailing_error_start = _find_trailing_error_cascade_start(tree.root_node)
+                blind_spot_ranges = _find_blind_spot_ranges(tree.root_node, ts_lang)
 
                 # #1526: list, not a single int -- a name can have multiple real occurrences in
                 # one file (property getter/setter pairs, same-named methods on different
@@ -1705,32 +1726,7 @@ def measure(lang: str, verbose: bool = False) -> dict:
                         # (e.g. `AbsPath`) appear twice -- once bodyless near the top,
                         # once with a real body much later -- and only the real,
                         # body-bearing occurrence is ever in GitGalaxy's own output.
-                        if lang == "perl" and node.child_by_field_name("body") is None:
-                            pass
-                        # #1614: haskell represents each pattern-matched EQUATION CLAUSE
-                        # of a single function as its own separate node (`deNote (Note _)
-                        # = ...` and `deNote x = ...` are two sibling `function` nodes
-                        # under the same `declarations`/`local_binds` parent, confirmed by
-                        # direct tree_sitter_language_pack parse) -- there is no single
-                        # grammar node representing "deNote, the function" as one unit.
-                        # GitGalaxy's own `_slice_by_indentation` (detector.py) already
-                        # merges every clause of one function into ONE reported
-                        # FunctionNode by design (#1442's own comment: "clauses 2..N would
-                        # otherwise each spawn their own duplicate, overlapping
-                        # FunctionNode"), so counting each clause as its own real
-                        # occurrence here compares GitGalaxy's correct, merged output
-                        # against an artificially inflated ground truth -- every
-                        # multi-clause function loses (clauses - 1) "real" credit it never
-                        # actually lacked. `is_continuation_clause` (set by the sibling
-                        # loop below, which is the only thing that can determine
-                        # adjacency) marks exactly this case; skip re-counting it as a
-                        # distinct occurrence, matching GitGalaxy's own semantics instead
-                        # of the grammar's raw per-clause node granularity. Measured
-                        # impact on language-crucible/data/haskell/pandoc: recall
-                        # 50.5% (275 real/139 found) -> 95.2% (146 real/139 found), same
-                        # GitGalaxy output, same alignment algorithm. See
-                        # docs/why_gitgalaxy_beats_ast_here.md Claim 4.
-                        elif lang == "haskell" and is_continuation_clause:
+                        if (lang == "perl" and node.child_by_field_name("body") is None) or (lang == "haskell" and is_continuation_clause):
                             pass
                         else:
                             name = _get_node_name(node)
@@ -1833,11 +1829,11 @@ def measure(lang: str, verbose: bool = False) -> dict:
                 # would here, for all 8 of that file's real, correctly-found classes (including
                 # the outer `LanguageParser` class itself, whose body spans the entire corrupted
                 # region and so never resolves into a proper `class_declaration` node at all).
-                if trailing_error_start is None:
+                if trailing_error_start is None and not blind_spot_ranges:
                     extra_cls = gg_classes - real_classes
                     metrics["extra_classes"] += len(extra_cls)
                     if verbose and extra_cls and len(extra_class_examples) < 8:
-                        extra_class_examples.append((row["file_path"], sorted(list(extra_cls))[:5]))
+                        extra_class_examples.append((row["file_path"], sorted(extra_cls)[:5]))
 
                 file_missing_names: set[str] = set()
                 file_extra_names: set[str] = set()
@@ -1854,8 +1850,21 @@ def measure(lang: str, verbose: bool = False) -> dict:
                     # hand-listed 3 csharp names in `roslyn/LanguageParser.cs`; #1567 found that
                     # undersold the real scope (0 real_functions past line 5198 of 14680) and
                     # replaced it with this general, line-scoped, language-agnostic check.
-                    if trailing_error_start is not None:
-                        unmatched_gg = [occ for occ in unmatched_gg if occ[0] < trailing_error_start]
+                    if trailing_error_start is not None or blind_spot_ranges:
+                        filtered_unmatched_gg = []
+                        for gg_start, args in unmatched_gg:
+                            # #1709: tree-sitter-fortran suffers cascading parser failures around deep `#ifdef` trees,
+                            # leaving valid code blocks encapsulated in `ERROR` or `preproc_` nodes where
+                            # tree-sitter is blind. GitGalaxy cleanly regexes these out anyway, resulting in
+                            # false-positive "extra" functions. We mask these true-positive blind spots.
+                            if any(start <= gg_start <= end for start, end in blind_spot_ranges):
+                                continue
+
+                            filtered_unmatched_gg.append((gg_start, args))
+                        unmatched_gg = [
+                            occ for occ in filtered_unmatched_gg
+                            if not (trailing_error_start is not None and occ[0] >= trailing_error_start)
+                        ]
 
                     metrics["found_functions"] += len(pairs)
                     metrics["extra_functions"] += len(unmatched_gg)
