@@ -413,6 +413,102 @@ def test_detector_c_macro_dead_branch_shield():
     assert result["equations"]["high_risk_execution"] == 0, "Failed to scrub dead preprocessor branches!"
 
 
+def test_detector_c_macro_else_branch_is_scanned_issue_1720():
+    """
+    Regression test for #1720: the preprocessor shield used to assume the
+    first branch of every #if/#ifdef is the active one and blindly blanked
+    the #else branch, so real implementations living in #else were silently
+    dropped from extraction. With an unknown condition (e.g. #if FEATURE_FLAG)
+    the shield now scans BOTH branches; only statically-decidable conditions
+    (#if 0 / #if 1) prune a branch.
+    """
+    opt_detector = StructuralExtractor("c", MOCK_LANG_DEFS)
+    code = (
+        "#if FEATURE_FLAG\n"
+        "int fastImplementation() {\n"
+        "    return 1;\n"
+        "}\n"
+        "#else\n"
+        "int portableImplementation() {\n"
+        "    return 2;\n"
+        "}\n"
+        "#endif\n"
+    )
+
+    result = opt_detector.splice(code, "")
+
+    names = [f["name"] for f in result["functions"]]
+    assert "fastImplementation" in names, "First branch of an unknown #if must still be scanned!"
+    assert "portableImplementation" in names, (
+        "#1720: implementation living in the #else branch was dropped from extraction!"
+    )
+
+
+def test_detector_c_macro_static_truth_prunes_branches():
+    """
+    Companion to the #1720 fix: statically-decidable #if conditions still
+    prune the dead branch. #if 0 => first branch dead, #else alive;
+    #if 1 => first branch alive, #else dead. Nested blocks must also honor
+    the outer branch's liveness (any() over the open-#if stack).
+    """
+    opt_detector = StructuralExtractor("c", MOCK_LANG_DEFS)
+
+    code_if_zero = "#if 0\nint deadFast() {\n    return 1;\n}\n#else\nint aliveFallback() {\n    return 2;\n}\n#endif\n"
+    names_zero = [f["name"] for f in opt_detector.splice(code_if_zero, "")["functions"]]
+    assert "deadFast" not in names_zero, "#if 0 first branch must be pruned!"
+    assert "aliveFallback" in names_zero, "#if 0 #else branch must survive!"
+
+    code_if_one = "#if 1\nint aliveFast() {\n    return 1;\n}\n#else\nint deadFallback() {\n    return 2;\n}\n#endif\n"
+    names_one = [f["name"] for f in opt_detector.splice(code_if_one, "")["functions"]]
+    assert "aliveFast" in names_one, "#if 1 first branch must survive!"
+    assert "deadFallback" not in names_one, "#if 1 #else branch must be pruned!"
+
+
+def test_detector_c_macro_no_space_boundaries_issue_1764():
+    """
+    Regression test for a bug where `#if(1)` or `#elif(0)` (valid C preprocessor
+    syntax without a space) failed to push onto the branch stack because
+    `startswith("#if ")` was used. This led to premature `#endif` pops and
+    desynced branch nesting.
+    """
+    opt_detector = StructuralExtractor("c", MOCK_LANG_DEFS)
+    code = (
+        "#if 0\n"
+        "int deadOne() { return 1; }\n"
+        "#if(1)\n"
+        "int deadTwo() { return 2; }\n"
+        "#endif\n"
+        "int deadThree() { return 3; }\n"  # should stay dead -- still inside outer #if 0, before #else
+        "#else\n"
+        "int aliveOne() { return 4; }\n"
+        "#endif\n"
+    )
+
+    result = opt_detector.splice(code, "")
+    names = [f["name"] for f in result["functions"]]
+
+    assert "deadThree" not in names, "Premature pop caused dead code to be scanned as alive!"
+    assert "aliveOne" in names, "Valid #else branch was dropped due to stack desync!"
+
+    code_nested = (
+        "#if 0\n"
+        "int a() { return 1; }\n"
+        "#else\n"
+        "int b() { return 2; }\n"
+        "#if 1\n"
+        "int c() { return 3; }\n"
+        "#else\n"
+        "int d() { return 4; }\n"
+        "#endif\n"
+        "int e() { return 5; }\n"
+        "#endif\n"
+    )
+    names_nested = [f["name"] for f in opt_detector.splice(code_nested, "")["functions"]]
+    assert set(names_nested) == {"b", "c", "e"}, (
+        "Nested #if liveness was not honored: expected only b, c, e, got %r" % names_nested
+    )
+
+
 def test_detector_nested_function_is_counted_as_own_node_braces():
     """
     #1041: the brace-slicing guard used to skip any match whose start fell
@@ -2255,12 +2351,7 @@ def test_detector_ts_param_function_type_annotation_not_counted_as_function():
 
         # The object-literal arrow property must still be counted: its line
         # is preceded by `{`/`,`, never `(`.
-        object_code = (
-            "export const Either = {\n"
-            "  URI,\n"
-            "  ap: (fab, fa) => ({ fab, fa }),\n"
-            "}\n"
-        )
+        object_code = "export const Either = {\n  URI,\n  ap: (fab, fa) => ({ fab, fa }),\n}\n"
         satellites2, _ = detector._slice_by_braces(object_code, lang, rules, 0, {})
         names2 = [s["name"] for s in satellites2]
         assert "ap" in names2, f"[{lang}] object-literal arrow property dropped: {names2}"
