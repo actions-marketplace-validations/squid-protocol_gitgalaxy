@@ -280,6 +280,23 @@ Fixed in `tests/tools/tree_sitter_accuracy_audit.py`'s `measure()` (`walk()` clo
 GitGalaxy's engine — this is purely a measurement-tool correction; GitGalaxy's own detected
 function set for this corpus is byte-for-byte identical before and after.
 
+## A third confirmed instance: C, local single-function recovery (2026-08-19)
+
+A narrower version of this same mechanism, found via the tri-comparison ledger
+(`c/function/existence/agree[gitgalaxy]_vs[ctags,tree_sitter]`, 4 occurrences,
+`cpython/typeobject.c`): a bare macro-invocation LINE at file scope with no expansion available to
+a raw grammar walk (`SLOT1(slot_mp_subscript, __getitem__, PyObject *)`, `SLOT0(slot_tp_str,
+__str__)` — real CPython macros that generate a wrapper function, but aren't themselves valid
+freestanding C without expansion) locally confuses both tree-sitter's and ctags' parse of the
+SINGLE function immediately following it. Confirmed directly at 4 sites, same shape every time —
+`slot_mp_ass_subscript` (line 10544), `slot_nb_inplace_power` (10697), `slot_tp_repr` (10714),
+`slot_tp_hash` (10730) are all ordinary, unremarkable `static ... name(...) { ... }` definitions
+with nothing unusual about them individually; each sits directly after one of these bare macro
+lines. GitGalaxy's regex has no such adjacency sensitivity and finds all 4 correctly; ctags and
+tree-sitter both miss all 4. Unlike the csharp/javascript cascades above, this recovers
+immediately (only the one adjacent function is lost, not everything downstream) — a third,
+narrower recovery shape worth naming alongside the other two rather than assuming either.
+
 ## Where Claim 3 does NOT apply
 
 - This is a grammar-*implementation* limitation (a specific parser version's bug/gap on one
@@ -475,6 +492,20 @@ both shapes, for the same reason (it reads macro bodies as raw tokens too, not j
 For codebases that rely heavily on C Preprocessor (CPP) directives, grammar-based parsers like tree-sitter can fail to build a valid syntax tree, missing large sections of code. GitGalaxy's regex is entirely unaffected by CPP noise and extracts these functions perfectly.
 
 **The evidence:** The `tree-sitter-fortran` ground truth parser completely fails on files that rely heavily on C Preprocessor directives (like `#if ( EM_CORE == 1 )` in the WRF corpus), throwing errors and missing entire sections of code that contain valid functions. GitGalaxy is completely unaffected by the CPP noise and extracts these subroutines perfectly, resulting in false positive 'extra functions' reported by the audit.
+
+**C instance, narrower in scale (2026-08-19, tri-comparison ledger
+`c/function/existence/agree[ctags,gitgalaxy]_vs[tree_sitter]`, 13 occurrences):** where Fortran's
+gap swallows entire trailing sections of a file, tree-sitter-c's version is local -- one function
+lost per trigger, not a cascading region -- but the same "CPP directive breaks the grammar's parse"
+root cause, confirmed at 3 distinct trigger shapes (all cpython/micropython, all GitGalaxy+ctags
+correct, tree-sitter alone missing the function): (1) an `#if`/`#else` pair splitting a single `if`
+condition inside a function body (`cpython/ceval.c:33`, `_Py_ReachedRecursionLimitWithMargin`'s
+`#if _Py_STACK_GROWS_DOWN` / `#else` around its recursion-limit check); (2) an `#if`/`#endif`
+wrapping only the `static` storage-class specifier, separated from the rest of the signature
+(`micropython/compile.c:3473-3476`, `mp_compile_to_raw_code`); (3) bare, un-semicoloned macro
+invocations (`_Py_COMP_DIAG_PUSH`/`_Py_COMP_DIAG_IGNORE_DEPR_DECLS`/`_Py_COMP_DIAG_POP`,
+`cpython/object.c:1269-1271`) whose lack of a trailing `;` the grammar can't cleanly recover from,
+losing the next real function (`_PyObject_SetAttributeErrorContext`).
 
 ## Claim 8: precision under C preprocessor noise — dead-code shielding and macro hallucinations
 

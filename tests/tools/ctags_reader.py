@@ -62,6 +62,30 @@ KIND MAPS
         structural ctags limitation, not a GitGalaxy or tree-sitter defect.
       - shell: no class-shaped kind either (alias/function/heredoc/script) -- matches GitGalaxy's
         and tree-sitter's own class_recall/precision being N/A for shell already.
+      - c: ctags' C parser misreads a MACRO INVOCATION (not a definition) as a real function
+        when the macro name is used to generate boilerplate, e.g. cpython/typeobject.c's
+        `RICHCMP_WRAPPER(lt, Py_LT)` and `SLOT1(slot_mp_subscript, __getitem__, PyObject *)` --
+        both real calls to a previously-`#define`d macro, confirmed by reading the source; ctags
+        tags `RICHCMP_WRAPPER`/`SLOT0`/`SLOT1`/`SLOT1BINFULL` themselves as function names,
+        GitGalaxy and tree-sitter both correctly don't. Deliberately NOT added as a curated
+        name-exclusion list here (unlike the anonymous-struct fix below, this would be a
+        ground-truth judgment call -- "these specific macro names are known bad" -- the same
+        category of decision `tri_comparison_gatherer.py`'s own docstring explains keeping out of
+        the raw readers and in reconciliation instead). Investigated via
+        `c/function/existence/agree[ctags]_vs[gitgalaxy,tree_sitter]` (7 occurrences) -- a real
+        ctags limitation, not a GitGalaxy or tree-sitter defect.
+        Separately (also c, but function-agnostic -- affects both CTAGS_FUNC_KINDS and
+        CTAGS_CLASS_KINDS the same way, so noted once here): ctags synthesizes a placeholder name
+        (`__anon<hex>`) for an anonymous struct/union/enum
+        (`typedef struct { ... } Foo;`, e.g. cpython/ceval.c's platform pthread-attr shim).
+        Neither GitGalaxy nor tree-sitter report a name for an anonymous type at all -- there
+        genuinely isn't one -- so ctags' own bookkeeping name always surfaced as a false
+        discrepancy. FIXED in `tri_comparison_gatherer.py` (`_is_ctags_synthetic_anon_name`,
+        applied to both func and class ctags readings) rather than just documented, since
+        matching a structural naming pattern (not a curated list of specific names) is the same
+        kind of neutral fact the C struct-body-check fix already established is fair game for the
+        walk itself. Investigated via `c/class/existence/agree[ctags]_vs[gitgalaxy,tree_sitter]`
+        (23 occurrences, cpython + doom).
     Cross-reference gitgalaxy/standards/language_standards.py's own class_start/func_start
     definitions before ever widening one of these maps -- do not add a kind because its letter
     looks right.
@@ -240,7 +264,13 @@ CTAGS_FUNC_KINDS: dict[str, set[str]] = {
 }
 
 CTAGS_CLASS_KINDS: dict[str, set[str]] = {
-    "c": {"s"},  # struct -- matches GitGalaxy's own C class_start convention
+    "c": {"s", "g", "u"},  # struct, enum, union -- matches GitGalaxy's own C class_start regex
+    # (struct|union|enum, gitgalaxy/standards/language_standards.py). Was struct-only until
+    # c/class/existence/agree[gitgalaxy,tree_sitter]_vs[ctags] (9 occurrences, 2026-08-19)
+    # surfaced it: ctags itself parses enum/union declarations fine (confirmed via a direct
+    # `ctags -x` run against sqlite/lemon.c and others), this map was just dropping them before
+    # reconciliation ever saw them -- a bug in this test harness, not in ctags, GitGalaxy, or
+    # tree-sitter.
     "cpp": {"c", "s"},  # class, struct
     "csharp": {"c", "s", "i"},  # class, struct, interface
     "css": {"c"},  # CSS "class" kind is a literal .class selector -- matches GitGalaxy's own
@@ -363,16 +393,32 @@ def read_ctags_symbols(filepath: Path, lang: str) -> list[CtagsSymbol]:
     for line in result.stdout.splitlines():
         if line.startswith("!"):
             continue
-        cols = line.split("\t")
-        if len(cols) < 4:
+        # NOT a blind line.split("\t") -- the address/pattern field (cols[2] in the naive
+        # reading) is `/^<verbatim matched source line>$/;"`, and that source text can itself
+        # contain a literal TAB character when the real code uses tabs for column alignment
+        # (confirmed real, not theoretical: language-crucible/data/c/doom/i_system.c's
+        # `byte*\tI_AllocLow(int length)` -- old-school Doom-era C formatting). A tab-splitting
+        # parser then reads a fragment of the SOURCE LINE as if it were the kind field, fails
+        # the `kind not in wanted_kinds` check below, and silently drops the whole symbol --
+        # confirmed via c/function/existence/agree[gitgalaxy,tree_sitter]_vs[ctags] (I_AllocLow,
+        # I_ZoneBase, I_BaseTiccmd, R_CheckBBox, R_AddLine all missing from ctags' reading purely
+        # because of this parsing bug, not because ctags itself failed to tag them -- a raw
+        # ctags run against these files finds every one of them correctly). The tag-file format
+        # guarantees the address field always ends with the literal `;"` marker before the
+        # kind/extension-field trailer begins (ctags' own TAG_FILE_FORMAT spec) -- split on
+        # THAT instead, and only tab-split the trailer (extension fields are simple `key:value`
+        # pairs with no embedded source text, so tab-splitting is safe there).
+        marker_idx = line.find(';"\t')
+        if marker_idx == -1:
             continue
-        name = cols[0]
-        # cols[2] is the /pattern/;" search pattern, cols[3] is the kind, cols[4:] are
-        # extension fields (line:N, signature:(...), class:Foo, etc.)
-        kind = cols[3]
+        name = line.split("\t", 1)[0]
+        if not name:
+            continue
+        trailer_cols = line[marker_idx + len(';"\t') :].split("\t")
+        kind = trailer_cols[0]
         if kind not in wanted_kinds:
             continue
-        fields = _parse_extension_fields("\t".join(cols[4:]))
+        fields = _parse_extension_fields("\t".join(trailer_cols[1:]))
         line_no = int(fields["line"]) if "line" in fields else -1
         signature = fields.get("signature")
         symbols.append(CtagsSymbol(name=name, line=line_no, kind=kind, signature=signature))
