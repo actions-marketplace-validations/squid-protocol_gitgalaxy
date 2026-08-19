@@ -461,7 +461,14 @@ this claim either; they're real GitGalaxy defects to fix, not ground-truth artif
 
 For languages with powerful macro systems, tree-sitter often treats the bodies of macro definitions and invocations as opaque token trees. GitGalaxy's regex-based structural signatures are completely unaffected by the macro wrapper and correctly parse these definitions, resulting in higher recall than tree-sitter.
 
-**The evidence:** The `tree-sitter-rust` parser treats the bodies of `macro_rules!` definitions and function-like macro invocations (e.g., `quote!`, `ast_struct!`) as opaque token trees. It does not emit nested `struct_item`, `enum_item`, or `function_item` nodes. GitGalaxy correctly parses these structural definitions, which the audit script misclassifies as false positive "extra" structures.
+**The evidence:** The `tree-sitter-rust` parser treats the bodies of `macro_rules!` definitions and function-like macro invocations (e.g., `quote!`, `ast_struct!`) as opaque token trees. It does not emit nested `struct_item`, `enum_item`, or `function_item` nodes. GitGalaxy correctly parses these structural definitions, which the audit script misclassifies as false positive "extra" structures. Confirmed concrete instances of both shapes, independently verified (tri-comparison ledger,
+2026-08-19): `bevy/bevy_ecs_macros.rs:456` -- real `fn get_param`/`init_access`/`apply`/etc.
+definitions inside a `quote! { ... }` invocation body; `serde/serde_core_de_impls.rs:90,112,136,
+998,1036,1403` -- real `struct NonZeroVisitor`/`SaturatingVisitor`/`SeqVisitor`/etc. definitions
+inside `macro_rules!` bodies (`impl_deserialize_num!`, `seq_impl!`, `tuple_impl_body!`), each
+immediately followed by a real `impl Visitor for <Name>` block confirming they're genuine,
+complete struct definitions, not fragments. ctags' Rust parser has the identical blind spot for
+both shapes, for the same reason (it reads macro bodies as raw tokens too, not just tree-sitter).
 
 ## Claim 7: function recall in the presence of heavy preprocessor directives (Fortran/C++)
 
@@ -491,6 +498,17 @@ baseline (`tests/tree_sitter_accuracy_baseline_c.json`), GitGalaxy's own `extra_
 now a live measured number instead of a doc snapshot. The same file's c `class_data` shows the
 same shape for bodyless forward-declared structs: `extra_classes` is 0 for GitGalaxy vs.
 `ts_extra_classes` = 27 for tree-sitter's raw reading.
+
+Confirmed again independently via the tri-comparison ledger (`c/function/existence/agree[
+tree_sitter]_vs[ctags,gitgalaxy]`, 74 occurrences, 2026-08-19), with exact citations this time:
+`language-crucible/data/c/cpython/dictobject.c:522-527`'s `#if SIZEOF_VOID_P > 4 / else if (...) /
+#endif` desyncs tree-sitter's parse into misreading the bare `if` keyword as a function name;
+`dictobject.c:5102`'s `DICT___REVERSED___METHODDEF` sits inside a `PyMethodDef` array initializer,
+not a definition; `dictobject.c:7396`'s `_PyObject_ManagedDictValidityCheck` and
+`frameobject.c:1264-1313`'s `tos_char`/`print_stack`/`print_stacks` are all genuinely
+well-formed function definitions living entirely inside an `#if 0 ... #endif` dead-code guard
+("useful for debugging the stack marking code"). GitGalaxy and ctags both correctly exclude all
+six; tree-sitter's raw parse has no preprocessor model and reads the dead branch as live.
 
 ## Claim 9: argument counting across grouped parameter declarations (Go)
 
