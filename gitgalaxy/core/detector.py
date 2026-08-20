@@ -472,6 +472,60 @@ _ANGLE_BRACKET_GENERIC_LANGUAGES = frozenset(
     {"cpp", "rust", "csharp", "java", "kotlin", "scala", "typescript", "swift", "go", "dart"}
 )
 
+# #1949: `_slice_by_labels`' shared `assembly_returns` terminator vocabulary is
+# ambiguous in these specific languages -- the same keyword is real, legitimate
+# MID-body control flow there, not a statement that ends the enclosing
+# function/paragraph/method, confirmed against real corpus source: Fortran's
+# `EXIT` is a DO-loop break (`language-crucible/data/fortran/wrf/module_sf_noahdrv.F:1999`,
+# inside `SUBROUTINE SFLX`), ABAP's `RETURN`/`EXIT` are an early-exit guard
+# clause and a DO-loop break respectively (both inside method `delete`,
+# `language-crucible/data/abap/abapGit/zcl_abapgit_ajson.clas.abap:192,307`).
+# Excluded per-language rather than dropped from the shared pattern outright,
+# since the same keyword IS a valid terminator in other Mode A languages (e.g.
+# COBOL's own `RETURN`/`EXIT`).
+_NON_TERMINATING_KEYWORDS_BY_LANG: dict[str, frozenset[str]] = {
+    "fortran": frozenset({"EXIT"}),
+    "abap": frozenset({"RETURN", "EXIT"}),
+}
+
+# #1949 follow-up: a Mode A "function" can be a bare data/constant definition
+# rather than real code -- confirmed against real corpus source. NASM's `equ`
+# directive assigns a constant to a label
+# (`max_entries:    equ sector_size/entry_size` in
+# `language-crucible/data/assembly/bootos/os.asm:166`), and GAS's dot-directives
+# define static data the same way (`ape.ident:` immediately followed by
+# `.long 2f-1f` -- an ELF note record, not a subroutine -- in
+# `language-crucible/data/assembly/cosmopolitan/ape.S:781`; `str.error:` followed
+# by `.asciz "error: "` at `ape.S:1226`). Checked against just the FIRST physical
+# line of the already-sliced block (not requiring the whole block collapse to one
+# line the way the original #1949 single-line-rescue check did) -- a data label's
+# swallowed span can run many lines past the directive itself (trailing comments,
+# blank lines, or a multi-field record like `ape.ident`'s), so gating on total
+# block length under-caught this same shape. Deliberately excludes alignment/
+# metadata directives (`.balign`, `.align`, `.p2align`, `.section`, `.size`,
+# `.type`) that a REAL function can legitimately open with (entry-point alignment
+# is a common, real optimization) -- only directives that unambiguously define a
+# VALUE are treated as proof this is data, not code. The gap between the label's
+# colon and the directive is `[ \t\n]{0,80}`, not same-line-only whitespace,
+# since GAS style commonly puts the label alone on its own line with the
+# directive on the next (`ape.ident:` / `\t.long\t2f-1f` on separate lines) --
+# bounded to 80 chars, same conservative cap this module's other single-char-class
+# gap regexes use, so it stays a fixed-cost lookahead, not an unbounded scan.
+# `assembly`'s own `func_start` regex has no visibility into what follows the
+# label's colon (it only anchors on the label itself), so this can't be excluded
+# there the way COBOL's reserved-word shield excludes SOURCE-COMPUTER/
+# OBJECT-COMPUTER -- checked here instead, against the sliced block. Scoped to
+# `assembly` only: agc_assembly's own data pseudo-ops are different (`EQUALS`,
+# `EBANK=`, ...) and its single-line rescues were confirmed all real via #1949's
+# own repro.
+_ASSEMBLY_DATA_DIRECTIVE_RE = re.compile(
+    r"^[A-Za-z_?@.][A-Za-z0-9_.$?@]*[ \t]*:[ \t\n]{0,80}"
+    r"(?:equ|db|dw|dd|dq|dt|do|resb|resw|resd|resq|rest|reso|times"
+    r"|\.byte|\.asciz|\.ascii|\.string|\.word|\.short|\.long|\.quad|\.octa"
+    r"|\.double|\.float|\.space|\.skip|\.zero|\.fill|\.set|\.equ)\b",
+    re.IGNORECASE,
+)
+
 
 def _resolve_class_start_match(match: re.Match, groups_count: int) -> tuple[Optional[int], str, list[str]]:
     """Given a `class_start` regex match and its pattern's total capture-group
@@ -576,8 +630,22 @@ class StructuralExtractor:
         self.primary_rules: dict[str, Any] = lang_config.get("rules", {})
         self.primary_family = lang_config.get("lexical_family", "c_style_comment")
 
+        # #1949: `END-PERFORM`/`END-IF` were removed entirely -- both are block
+        # *closers*, never a real function/paragraph-terminating statement in
+        # any Mode A language, so no per-language exclusion can save them; a
+        # COBOL paragraph's real trailing instructions were being dropped
+        # whenever a nested `IF ... END-IF` happened to appear before them
+        # (`language-crucible/data/cobol/cics-banking-sample-application-cbsa/BNKMENU.cbl:242`,
+        # paragraph `PMM010.`). `RELINT` was also removed outright (not just
+        # per-language-excluded) since AGC's own idiom commonly uses it to
+        # *open* a long interrupt handler rather than close one
+        # (`language-crucible/data/agc_assembly/apollo-11/AGC_BLOCK_TWO_SELF-CHECK.agc:303`,
+        # routine `ELOOPFIN`) -- unlike `EXIT`/`RETURN` below, no Mode A
+        # language in this corpus was observed using `RELINT` as a genuine
+        # terminator, so there was no case worth preserving via the
+        # per-language exclusion map instead.
         self.assembly_returns = re.compile(
-            r"\b(?:TC\s+Q|TCF\s+Q|RETURN|RESUME|RELINT|RET|RTS|JMP\s+LR|BLR|END-PERFORM|END-IF|GOBACK|EXIT)\b",
+            r"\b(?:TC\s+Q|TCF\s+Q|RETURN|RESUME|RET|RTS|JMP\s+LR|BLR|GOBACK|EXIT)\b",
             re.IGNORECASE,
         )
 
@@ -2021,12 +2089,42 @@ class StructuralExtractor:
             end_offset = len(sandbox)
 
             if self.assembly_returns:
-                ret_matches = list(self.assembly_returns.finditer(sandbox))
+                excluded_keywords = _NON_TERMINATING_KEYWORDS_BY_LANG.get(self.primary_lang_id, frozenset())
+                ret_matches = [
+                    m
+                    for m in self.assembly_returns.finditer(sandbox)
+                    # #1949: only a standalone statement -- start of line, modulo
+                    # leading whitespace -- counts as a real terminator. This
+                    # rejects matches embedded inside a doc-comment
+                    # (`// @return dl = pc_drive...` truncating label `pc:` in
+                    # `language-crucible/data/assembly/cosmopolitan/ape.S:251`)
+                    # and matches that are only a substring of a larger
+                    # hyphenated identifier (`\bEXIT\b` firing inside
+                    # `WS-EXIT-RETRY-LOOP`, since hyphens are non-word
+                    # characters that satisfy `\b` without being a real token
+                    # boundary -- `language-crucible/data/cobol/cics-banking-sample-application-cbsa/XFRFUN.cbl:105`).
+                    if not sandbox[sandbox.rfind("\n", 0, m.start()) + 1 : m.start()].strip()
+                    and m.group(0).upper().split()[0] not in excluded_keywords
+                ]
                 if ret_matches:
                     end_offset = ret_matches[-1].end()
 
+            # #1949: Mode A's "greedy to the next label" body is already a
+            # correct, real function boundary for this integration mode --
+            # single-instruction "trampoline" labels are completely normal in
+            # assembly-family code (seven consecutive one-instruction labels
+            # `SOPTION1`-`SOPTON10` in
+            # `language-crucible/data/agc_assembly/apollo-11/AGC_BLOCK_TWO_SELF-CHECK.agc:210-219`,
+            # a zero-instruction label immediately followed by the next in
+            # `language-crucible/data/assembly/bootos/os.asm:269-270`), so
+            # unlike other integration modes a one-line body here is not a
+            # mis-slice to discard -- only an actually-empty label has no
+            # real content.
             block = code[start_idx : start_idx + end_offset].strip()
-            if not block or len(block.splitlines()) < 2:
+            if not block:
+                continue
+
+            if self.primary_lang_id == "assembly" and _ASSEMBLY_DATA_DIRECTIVE_RE.match(block):
                 continue
 
             raw_name = match.group(match.lastindex) if match.lastindex else match.group(0)
