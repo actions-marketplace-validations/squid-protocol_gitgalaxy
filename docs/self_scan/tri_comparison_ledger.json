@@ -4,6 +4,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -11,7 +13,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "agc_assembly",
-      "last_reconciled_at": "2026-08-19T23:28:20Z",
+      "last_reconciled_at": "2026-08-20T00:34:37Z",
       "last_seen_count": 265,
       "last_seen_examples": [
         {
@@ -105,6 +107,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -112,7 +116,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "agc_assembly",
-      "last_reconciled_at": "2026-08-19T23:28:20Z",
+      "last_reconciled_at": "2026-08-20T00:34:37Z",
       "last_seen_count": 35,
       "last_seen_examples": [
         {
@@ -206,6 +210,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -213,7 +219,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "apex",
-      "last_reconciled_at": "2026-08-19T23:28:22Z",
+      "last_reconciled_at": "2026-08-20T00:34:39Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -243,6 +249,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -250,7 +258,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "assembly",
-      "last_reconciled_at": "2026-08-19T23:28:24Z",
+      "last_reconciled_at": "2026-08-20T00:34:41Z",
       "last_seen_count": 9,
       "last_seen_examples": [
         {
@@ -336,6 +344,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -343,7 +353,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "assembly",
-      "last_reconciled_at": "2026-08-19T23:28:24Z",
+      "last_reconciled_at": "2026-08-20T00:34:41Z",
       "last_seen_count": 20,
       "last_seen_examples": [
         {
@@ -437,6 +447,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -445,7 +457,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved + fixed directly, no dispatch needed)",
       "language": "c",
-      "last_reconciled_at": "2026-08-19T23:28:29Z",
+      "last_reconciled_at": "2026-08-20T00:34:46Z",
       "last_seen_count": 23,
       "last_seen_examples": [
         {
@@ -550,6 +562,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -557,7 +571,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "c",
-      "last_reconciled_at": "2026-08-19T23:28:29Z",
+      "last_reconciled_at": "2026-08-20T00:34:46Z",
       "last_seen_count": 9,
       "last_seen_examples": [
         {
@@ -652,6 +666,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
@@ -660,7 +676,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "c",
-      "last_reconciled_at": "2026-08-19T23:28:29Z",
+      "last_reconciled_at": "2026-08-20T00:34:46Z",
       "last_seen_count": 525,
       "last_seen_examples": [
         {
@@ -765,14 +781,16 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:18Z",
       "investigated_at": "2026-08-19T00:00:00Z",
-      "investigated_by": "Claude Sonnet 5 (resolved directly, no dispatch needed)",
+      "investigated_by": "Claude Sonnet 5 (resolved directly, no dispatch needed) -- corrected after cross-referencing #1837",
       "language": "c",
-      "last_reconciled_at": "2026-08-19T23:28:29Z",
+      "last_reconciled_at": "2026-08-20T00:34:46Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -789,13 +807,15 @@
       "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": "Not a tool defect on either side -- an inherent CPP-conditional-compilation ambiguity. gc_mark_subtree is declared AND defined twice in micropython/gc.c, once under `#if MICROPY_GC_SPLIT_HEAP` (2 args: area, block -- lines 137/501) and once under the matching `#else` (1 arg: block -- lines 139/503). Neither signature is more 'real' than the other -- which one actually compiles depends on a macro none of these three tools evaluates (no real preprocessor run in any of them). GG and ctags happened to align on the 2-arg branch, tree-sitter on the 1-arg branch; this is a coin-flip of which #if branch a tool's occurrence-matching happens to pick up, not a real disagreement about ground truth. N=1 in this corpus -- not chased further given the tiny sample and the ambiguity being structural rather than a bug."
+      "verdict": "CORRECTED 2026-08-19: this entry's original verdict ('inherent CPP-conditional-compilation ambiguity, not a defect, not chased further') was too quick to dismiss -- caught in a later issue-triage pass that #1837 (filed 2026-08-18, BEFORE this ledger shape was even investigated) already reports this exact function (gc_mark_subtree, language-crucible/data/c/micropython/gc.c) as a real, fixable gap: GitGalaxy's args extraction has no preprocessor model and its behavior across an #if/#else-duplicated signature is architecturally undefined, not a deliberate policy choice. The underlying fact from the original investigation still stands -- gc_mark_subtree IS declared/defined twice, once under `#if MICROPY_GC_SPLIT_HEAP` (2 args, lines 137/501) and once under the matching `#else` (1 arg, lines 139/503), and no real preprocessor evaluation happens in any of the three comparison tools, so there IS a genuine underlying ambiguity about which branch is 'real' -- but 'GitGalaxy currently happens to land on the #if branch here' is an accident of this one case, not a guaranteed, designed policy, and #1837 is right that this deserves a real fix (deterministic branch selection or a preprocessor-stripping pass) rather than being waved off. Tracked at #1837, not re-filed here. Lesson for this skill: 'structurally ambiguous, not a bug' is not the same claim as 'not worth fixing' -- check for an existing issue before concluding either."
     },
     "c/function/args/agree[gitgalaxy,tree_sitter]_vs[ctags]": {
       "agreeing_tools": [
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -803,7 +823,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved + fixed directly, no dispatch needed)",
       "language": "c",
-      "last_reconciled_at": "2026-08-19T23:28:29Z",
+      "last_reconciled_at": "2026-08-20T00:34:46Z",
       "last_seen_count": 104,
       "last_seen_examples": [
         {
@@ -908,6 +928,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -915,7 +937,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "c",
-      "last_reconciled_at": "2026-08-19T23:28:29Z",
+      "last_reconciled_at": "2026-08-20T00:34:46Z",
       "last_seen_count": 13,
       "last_seen_examples": [
         {
@@ -1020,6 +1042,11 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [
+        "ctags",
+        "tree_sitter"
+      ],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -1027,7 +1054,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved directly, no dispatch needed)",
       "language": "c",
-      "last_reconciled_at": "2026-08-19T23:28:29Z",
+      "last_reconciled_at": "2026-08-20T00:34:46Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -1068,6 +1095,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -1076,7 +1105,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved + fixed directly, no dispatch needed)",
       "language": "c",
-      "last_reconciled_at": "2026-08-19T23:28:29Z",
+      "last_reconciled_at": "2026-08-20T00:34:46Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -1154,6 +1183,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -1161,7 +1192,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "c",
-      "last_reconciled_at": "2026-08-19T23:28:29Z",
+      "last_reconciled_at": "2026-08-20T00:34:46Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -1202,6 +1233,10 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [
+        "gitgalaxy"
+      ],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -1210,7 +1245,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved directly, no dispatch needed)",
       "language": "c",
-      "last_reconciled_at": "2026-08-19T23:28:29Z",
+      "last_reconciled_at": "2026-08-20T00:34:46Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -1260,6 +1295,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
@@ -1268,7 +1305,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "c",
-      "last_reconciled_at": "2026-08-19T23:28:29Z",
+      "last_reconciled_at": "2026-08-20T00:34:46Z",
       "last_seen_count": 74,
       "last_seen_examples": [
         {
@@ -1372,6 +1409,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -1379,7 +1418,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cobol",
-      "last_reconciled_at": "2026-08-19T23:28:34Z",
+      "last_reconciled_at": "2026-08-20T00:34:51Z",
       "last_seen_count": 19,
       "last_seen_examples": [
         {
@@ -1473,6 +1512,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -1480,7 +1521,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cobol",
-      "last_reconciled_at": "2026-08-19T23:28:34Z",
+      "last_reconciled_at": "2026-08-20T00:34:51Z",
       "last_seen_count": 133,
       "last_seen_examples": [
         {
@@ -1574,6 +1615,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -1581,7 +1624,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cobol",
-      "last_reconciled_at": "2026-08-19T23:28:34Z",
+      "last_reconciled_at": "2026-08-20T00:34:51Z",
       "last_seen_count": 18,
       "last_seen_examples": [
         {
@@ -1675,6 +1718,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -1683,7 +1728,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -1716,6 +1761,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -1723,7 +1770,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 95,
       "last_seen_examples": [
         {
@@ -1827,6 +1874,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
@@ -1835,7 +1884,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 22,
       "last_seen_examples": [
         {
@@ -1940,6 +1989,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -1947,7 +1998,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 13,
       "last_seen_examples": [
         {
@@ -2052,6 +2103,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -2059,7 +2112,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 30,
       "last_seen_examples": [
         {
@@ -2164,6 +2217,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -2171,7 +2226,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -2192,6 +2247,8 @@
     },
     "cpp/function/args/agree[none]_vs[ctags,gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy",
@@ -2201,7 +2258,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -2225,6 +2282,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -2232,7 +2291,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 8,
       "last_seen_examples": [
         {
@@ -2319,6 +2378,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -2326,7 +2387,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -2349,6 +2410,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -2357,7 +2420,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 1074,
       "last_seen_examples": [
         {
@@ -2462,6 +2525,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -2469,7 +2534,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 1097,
       "last_seen_examples": [
         {
@@ -2573,6 +2638,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -2581,7 +2648,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 62,
       "last_seen_examples": [
         {
@@ -2685,6 +2752,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
@@ -2693,7 +2762,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-19T23:28:39Z",
+      "last_reconciled_at": "2026-08-20T00:34:56Z",
       "last_seen_count": 98,
       "last_seen_examples": [
         {
@@ -2798,6 +2867,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -2805,7 +2876,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -2847,6 +2918,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -2854,7 +2927,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 5,
       "last_seen_examples": [
         {
@@ -2913,6 +2986,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -2921,7 +2996,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 6,
       "last_seen_examples": [
         {
@@ -2990,6 +3065,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -2997,7 +3074,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -3021,6 +3098,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -3028,7 +3107,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -3106,6 +3185,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -3113,7 +3194,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -3161,6 +3242,8 @@
     },
     "csharp/function/args/agree[none]_vs[ctags,gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy",
@@ -3170,7 +3253,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -3194,6 +3277,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -3201,7 +3286,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 271,
       "last_seen_examples": [
         {
@@ -3306,6 +3391,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -3313,7 +3400,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -3363,6 +3450,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -3371,7 +3460,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -3395,6 +3484,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -3402,7 +3493,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 107,
       "last_seen_examples": [
         {
@@ -3506,6 +3597,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -3514,7 +3607,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 48,
       "last_seen_examples": [
         {
@@ -3618,6 +3711,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
@@ -3626,7 +3721,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-19T23:28:45Z",
+      "last_reconciled_at": "2026-08-20T00:35:02Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -3650,6 +3745,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -3657,7 +3754,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "css",
-      "last_reconciled_at": "2026-08-19T23:28:46Z",
+      "last_reconciled_at": "2026-08-20T00:35:03Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -3696,6 +3793,8 @@
     },
     "dart/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -3704,7 +3803,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "dart",
-      "last_reconciled_at": "2026-08-19T23:28:50Z",
+      "last_reconciled_at": "2026-08-20T00:35:07Z",
       "last_seen_count": 216,
       "last_seen_examples": [
         {
@@ -3798,6 +3897,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -3805,7 +3906,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "dart",
-      "last_reconciled_at": "2026-08-19T23:28:50Z",
+      "last_reconciled_at": "2026-08-20T00:35:07Z",
       "last_seen_count": 37,
       "last_seen_examples": [
         {
@@ -3899,6 +4000,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -3906,7 +4009,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "dart",
-      "last_reconciled_at": "2026-08-19T23:28:50Z",
+      "last_reconciled_at": "2026-08-20T00:35:07Z",
       "last_seen_count": 18,
       "last_seen_examples": [
         {
@@ -4001,6 +4104,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -4008,7 +4113,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "fortran",
-      "last_reconciled_at": "2026-08-19T23:28:56Z",
+      "last_reconciled_at": "2026-08-20T00:35:13Z",
       "last_seen_count": 8,
       "last_seen_examples": [
         {
@@ -4092,6 +4197,8 @@
     },
     "fortran/function/args/agree[none]_vs[ctags,gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy",
@@ -4101,7 +4208,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "fortran",
-      "last_reconciled_at": "2026-08-19T23:28:56Z",
+      "last_reconciled_at": "2026-08-20T00:35:13Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -4125,6 +4232,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -4132,7 +4241,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "fortran",
-      "last_reconciled_at": "2026-08-19T23:28:56Z",
+      "last_reconciled_at": "2026-08-20T00:35:13Z",
       "last_seen_count": 14,
       "last_seen_examples": [
         {
@@ -4237,6 +4346,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -4244,7 +4355,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "fortran",
-      "last_reconciled_at": "2026-08-19T23:28:56Z",
+      "last_reconciled_at": "2026-08-20T00:35:13Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -4276,6 +4387,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -4284,7 +4397,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "fortran",
-      "last_reconciled_at": "2026-08-19T23:28:56Z",
+      "last_reconciled_at": "2026-08-20T00:35:13Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -4317,6 +4430,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -4324,7 +4439,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "go",
-      "last_reconciled_at": "2026-08-19T23:28:58Z",
+      "last_reconciled_at": "2026-08-20T00:35:16Z",
       "last_seen_count": 75,
       "last_seen_examples": [
         {
@@ -4429,6 +4544,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -4436,7 +4553,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (session investigation)",
       "language": "haskell",
-      "last_reconciled_at": "2026-08-19T23:29:01Z",
+      "last_reconciled_at": "2026-08-20T00:35:19Z",
       "last_seen_count": 16,
       "last_seen_examples": [
         {
@@ -4538,6 +4655,8 @@
     },
     "haskell/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -4546,7 +4665,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (session investigation)",
       "language": "haskell",
-      "last_reconciled_at": "2026-08-19T23:29:01Z",
+      "last_reconciled_at": "2026-08-20T00:35:19Z",
       "last_seen_count": 9,
       "last_seen_examples": [
         {
@@ -4642,6 +4761,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -4649,7 +4770,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "haskell",
-      "last_reconciled_at": "2026-08-19T23:29:01Z",
+      "last_reconciled_at": "2026-08-20T00:35:19Z",
       "last_seen_count": 38,
       "last_seen_examples": [
         {
@@ -4753,6 +4874,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -4761,7 +4884,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (dispatched agent investigation)",
       "language": "haskell",
-      "last_reconciled_at": "2026-08-19T23:29:01Z",
+      "last_reconciled_at": "2026-08-20T00:35:19Z",
       "last_seen_count": 103,
       "last_seen_examples": [
         {
@@ -4866,6 +4989,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -4873,7 +4998,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (dispatched agent investigation)",
       "language": "haskell",
-      "last_reconciled_at": "2026-08-19T23:29:01Z",
+      "last_reconciled_at": "2026-08-20T00:35:19Z",
       "last_seen_count": 69,
       "last_seen_examples": [
         {
@@ -4977,6 +5102,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -4985,7 +5112,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (session investigation)",
       "language": "haskell",
-      "last_reconciled_at": "2026-08-19T23:29:01Z",
+      "last_reconciled_at": "2026-08-20T00:35:19Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -5017,6 +5144,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -5024,7 +5153,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "haskell",
-      "last_reconciled_at": "2026-08-19T23:29:01Z",
+      "last_reconciled_at": "2026-08-20T00:35:19Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -5054,6 +5183,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
@@ -5062,7 +5193,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "haskell",
-      "last_reconciled_at": "2026-08-19T23:29:01Z",
+      "last_reconciled_at": "2026-08-20T00:35:19Z",
       "last_seen_count": 91,
       "last_seen_examples": [
         {
@@ -5167,6 +5298,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -5174,7 +5307,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "java",
-      "last_reconciled_at": "2026-08-19T23:29:04Z",
+      "last_reconciled_at": "2026-08-20T00:35:22Z",
       "last_seen_count": 28,
       "last_seen_examples": [
         {
@@ -5279,6 +5412,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -5286,7 +5421,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "java",
-      "last_reconciled_at": "2026-08-19T23:29:04Z",
+      "last_reconciled_at": "2026-08-20T00:35:22Z",
       "last_seen_count": 12,
       "last_seen_examples": [
         {
@@ -5391,6 +5526,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -5398,7 +5535,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "java",
-      "last_reconciled_at": "2026-08-19T23:29:04Z",
+      "last_reconciled_at": "2026-08-20T00:35:22Z",
       "last_seen_count": 28,
       "last_seen_examples": [
         {
@@ -5500,6 +5637,8 @@
     },
     "java/function/args/agree[none]_vs[ctags,gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy",
@@ -5509,7 +5648,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "java",
-      "last_reconciled_at": "2026-08-19T23:29:04Z",
+      "last_reconciled_at": "2026-08-20T00:35:22Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -5533,6 +5672,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -5540,7 +5681,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "java",
-      "last_reconciled_at": "2026-08-19T23:29:04Z",
+      "last_reconciled_at": "2026-08-20T00:35:22Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -5582,6 +5723,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -5589,7 +5732,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "java",
-      "last_reconciled_at": "2026-08-19T23:29:04Z",
+      "last_reconciled_at": "2026-08-20T00:35:22Z",
       "last_seen_count": 315,
       "last_seen_examples": [
         {
@@ -5693,6 +5836,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
@@ -5701,7 +5846,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "java",
-      "last_reconciled_at": "2026-08-19T23:29:04Z",
+      "last_reconciled_at": "2026-08-20T00:35:22Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -5742,6 +5887,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -5750,7 +5897,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "javascript",
-      "last_reconciled_at": "2026-08-19T23:29:07Z",
+      "last_reconciled_at": "2026-08-20T00:35:24Z",
       "last_seen_count": 96,
       "last_seen_examples": [
         {
@@ -5855,6 +6002,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -5862,7 +6011,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "javascript",
-      "last_reconciled_at": "2026-08-19T23:29:07Z",
+      "last_reconciled_at": "2026-08-20T00:35:24Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -5940,6 +6089,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -5947,7 +6098,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "javascript",
-      "last_reconciled_at": "2026-08-19T23:29:07Z",
+      "last_reconciled_at": "2026-08-20T00:35:24Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -5980,6 +6131,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -5987,7 +6140,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "javascript",
-      "last_reconciled_at": "2026-08-19T23:29:07Z",
+      "last_reconciled_at": "2026-08-20T00:35:24Z",
       "last_seen_count": 11,
       "last_seen_examples": [
         {
@@ -6091,6 +6244,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -6099,7 +6254,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "javascript",
-      "last_reconciled_at": "2026-08-19T23:29:07Z",
+      "last_reconciled_at": "2026-08-20T00:35:24Z",
       "last_seen_count": 150,
       "last_seen_examples": [
         {
@@ -6204,6 +6359,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -6211,7 +6368,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "javascript",
-      "last_reconciled_at": "2026-08-19T23:29:07Z",
+      "last_reconciled_at": "2026-08-20T00:35:24Z",
       "last_seen_count": 266,
       "last_seen_examples": [
         {
@@ -6315,6 +6472,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -6323,7 +6482,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "javascript",
-      "last_reconciled_at": "2026-08-19T23:29:07Z",
+      "last_reconciled_at": "2026-08-20T00:35:24Z",
       "last_seen_count": 182,
       "last_seen_examples": [
         {
@@ -6427,6 +6586,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
@@ -6435,7 +6596,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "javascript",
-      "last_reconciled_at": "2026-08-19T23:29:07Z",
+      "last_reconciled_at": "2026-08-20T00:35:24Z",
       "last_seen_count": 104,
       "last_seen_examples": [
         {
@@ -6540,6 +6701,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -6547,7 +6710,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "kotlin",
-      "last_reconciled_at": "2026-08-19T23:29:10Z",
+      "last_reconciled_at": "2026-08-20T00:35:27Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -6588,6 +6751,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -6596,7 +6761,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "kotlin",
-      "last_reconciled_at": "2026-08-19T23:29:10Z",
+      "last_reconciled_at": "2026-08-20T00:35:27Z",
       "last_seen_count": 15,
       "last_seen_examples": [
         {
@@ -6700,6 +6865,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -6708,7 +6875,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "kotlin",
-      "last_reconciled_at": "2026-08-19T23:29:10Z",
+      "last_reconciled_at": "2026-08-20T00:35:27Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -6731,6 +6898,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -6738,7 +6907,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "m4",
-      "last_reconciled_at": "2026-08-19T23:29:16Z",
+      "last_reconciled_at": "2026-08-20T00:35:33Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -6784,6 +6953,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -6791,7 +6962,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "m4",
-      "last_reconciled_at": "2026-08-19T23:29:16Z",
+      "last_reconciled_at": "2026-08-20T00:35:33Z",
       "last_seen_count": 79,
       "last_seen_examples": [
         {
@@ -6885,6 +7056,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -6892,7 +7065,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "m4",
-      "last_reconciled_at": "2026-08-19T23:29:16Z",
+      "last_reconciled_at": "2026-08-20T00:35:33Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -6915,6 +7088,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -6922,7 +7097,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "makefile",
-      "last_reconciled_at": "2026-08-19T23:29:17Z",
+      "last_reconciled_at": "2026-08-20T00:35:34Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -6943,6 +7118,8 @@
     },
     "matlab/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -6951,7 +7128,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "matlab",
-      "last_reconciled_at": "2026-08-19T23:29:19Z",
+      "last_reconciled_at": "2026-08-20T00:35:36Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -6974,6 +7151,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -6982,7 +7161,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "objective-c",
-      "last_reconciled_at": "2026-08-19T23:29:20Z",
+      "last_reconciled_at": "2026-08-20T00:35:38Z",
       "last_seen_count": 91,
       "last_seen_examples": [
         {
@@ -7087,6 +7266,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -7094,7 +7275,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "objective-c",
-      "last_reconciled_at": "2026-08-19T23:29:20Z",
+      "last_reconciled_at": "2026-08-20T00:35:38Z",
       "last_seen_count": 104,
       "last_seen_examples": [
         {
@@ -7198,6 +7379,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -7206,7 +7389,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "objective-c",
-      "last_reconciled_at": "2026-08-19T23:29:20Z",
+      "last_reconciled_at": "2026-08-20T00:35:38Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -7229,6 +7412,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
@@ -7237,7 +7422,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "objective-c",
-      "last_reconciled_at": "2026-08-19T23:29:20Z",
+      "last_reconciled_at": "2026-08-20T00:35:38Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -7270,6 +7455,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -7277,7 +7464,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "perl",
-      "last_reconciled_at": "2026-08-19T23:29:26Z",
+      "last_reconciled_at": "2026-08-20T00:35:44Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -7300,6 +7487,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -7308,7 +7497,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "perl",
-      "last_reconciled_at": "2026-08-19T23:29:26Z",
+      "last_reconciled_at": "2026-08-20T00:35:44Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -7329,6 +7518,8 @@
     },
     "perl/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -7337,7 +7528,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "perl",
-      "last_reconciled_at": "2026-08-19T23:29:26Z",
+      "last_reconciled_at": "2026-08-20T00:35:44Z",
       "last_seen_count": 64,
       "last_seen_examples": [
         {
@@ -7441,6 +7632,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -7449,7 +7642,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "perl",
-      "last_reconciled_at": "2026-08-19T23:29:26Z",
+      "last_reconciled_at": "2026-08-20T00:35:44Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -7527,6 +7720,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -7534,7 +7729,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "perl",
-      "last_reconciled_at": "2026-08-19T23:29:26Z",
+      "last_reconciled_at": "2026-08-20T00:35:44Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -7611,6 +7806,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -7619,7 +7816,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "perl",
-      "last_reconciled_at": "2026-08-19T23:29:26Z",
+      "last_reconciled_at": "2026-08-20T00:35:44Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -7642,6 +7839,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
@@ -7650,7 +7849,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "perl",
-      "last_reconciled_at": "2026-08-19T23:29:26Z",
+      "last_reconciled_at": "2026-08-20T00:35:44Z",
       "last_seen_count": 122,
       "last_seen_examples": [
         {
@@ -7754,6 +7953,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -7762,7 +7963,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "php",
-      "last_reconciled_at": "2026-08-19T23:29:31Z",
+      "last_reconciled_at": "2026-08-20T00:35:48Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -7786,6 +7987,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -7793,7 +7996,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "php",
-      "last_reconciled_at": "2026-08-19T23:29:31Z",
+      "last_reconciled_at": "2026-08-20T00:35:48Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -7817,6 +8020,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -7824,7 +8029,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "php",
-      "last_reconciled_at": "2026-08-19T23:29:31Z",
+      "last_reconciled_at": "2026-08-20T00:35:48Z",
       "last_seen_count": 68,
       "last_seen_examples": [
         {
@@ -7929,6 +8134,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -7936,7 +8143,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "powershell",
-      "last_reconciled_at": "2026-08-19T23:29:33Z",
+      "last_reconciled_at": "2026-08-20T00:35:51Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -8011,6 +8218,8 @@
     },
     "powershell/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -8019,7 +8228,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "powershell",
-      "last_reconciled_at": "2026-08-19T23:29:33Z",
+      "last_reconciled_at": "2026-08-20T00:35:51Z",
       "last_seen_count": 5,
       "last_seen_examples": [
         {
@@ -8079,6 +8288,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -8086,7 +8297,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "powershell",
-      "last_reconciled_at": "2026-08-19T23:29:33Z",
+      "last_reconciled_at": "2026-08-20T00:35:51Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -8110,6 +8321,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -8117,7 +8330,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "powershell",
-      "last_reconciled_at": "2026-08-19T23:29:33Z",
+      "last_reconciled_at": "2026-08-20T00:35:51Z",
       "last_seen_count": 16,
       "last_seen_examples": [
         {
@@ -8222,6 +8435,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -8229,7 +8444,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "python",
-      "last_reconciled_at": "2026-08-19T23:29:42Z",
+      "last_reconciled_at": "2026-08-20T00:36:00Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -8280,6 +8495,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -8287,7 +8504,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "python",
-      "last_reconciled_at": "2026-08-19T23:29:42Z",
+      "last_reconciled_at": "2026-08-20T00:36:00Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -8311,6 +8528,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -8318,7 +8537,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "python",
-      "last_reconciled_at": "2026-08-19T23:29:42Z",
+      "last_reconciled_at": "2026-08-20T00:36:00Z",
       "last_seen_count": 32,
       "last_seen_examples": [
         {
@@ -8422,6 +8641,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -8430,7 +8651,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "python",
-      "last_reconciled_at": "2026-08-19T23:29:42Z",
+      "last_reconciled_at": "2026-08-20T00:36:00Z",
       "last_seen_count": 68,
       "last_seen_examples": [
         {
@@ -8534,6 +8755,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -8542,7 +8765,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "ruby",
-      "last_reconciled_at": "2026-08-19T23:29:44Z",
+      "last_reconciled_at": "2026-08-20T00:36:01Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -8575,6 +8798,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -8582,7 +8807,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "ruby",
-      "last_reconciled_at": "2026-08-19T23:29:44Z",
+      "last_reconciled_at": "2026-08-20T00:36:01Z",
       "last_seen_count": 6,
       "last_seen_examples": [
         {
@@ -8651,6 +8876,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -8658,7 +8885,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "ruby",
-      "last_reconciled_at": "2026-08-19T23:29:44Z",
+      "last_reconciled_at": "2026-08-20T00:36:01Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -8700,6 +8927,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -8707,7 +8936,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "ruby",
-      "last_reconciled_at": "2026-08-19T23:29:44Z",
+      "last_reconciled_at": "2026-08-20T00:36:01Z",
       "last_seen_count": 6,
       "last_seen_examples": [
         {
@@ -8776,6 +9005,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -8783,7 +9014,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved directly via live ctags run, no dispatch)",
       "language": "rust",
-      "last_reconciled_at": "2026-08-19T23:29:48Z",
+      "last_reconciled_at": "2026-08-20T00:36:05Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -8824,6 +9055,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -8832,7 +9065,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "rust",
-      "last_reconciled_at": "2026-08-19T23:29:48Z",
+      "last_reconciled_at": "2026-08-20T00:36:05Z",
       "last_seen_count": 25,
       "last_seen_examples": [
         {
@@ -8937,6 +9170,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -8944,7 +9179,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep, 2 rounds with self-correction), confirmed by Claude Sonnet 5",
       "language": "rust",
-      "last_reconciled_at": "2026-08-19T23:29:48Z",
+      "last_reconciled_at": "2026-08-20T00:36:05Z",
       "last_seen_count": 21,
       "last_seen_examples": [
         {
@@ -9046,6 +9281,8 @@
     },
     "rust/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -9054,7 +9291,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "rust",
-      "last_reconciled_at": "2026-08-19T23:29:48Z",
+      "last_reconciled_at": "2026-08-20T00:36:05Z",
       "last_seen_count": 21,
       "last_seen_examples": [
         {
@@ -9159,6 +9396,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -9166,7 +9405,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved directly via live ctags run, no dispatch)",
       "language": "rust",
-      "last_reconciled_at": "2026-08-19T23:29:48Z",
+      "last_reconciled_at": "2026-08-20T00:36:05Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9189,6 +9428,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -9197,7 +9438,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved from existing Claim 6 documentation, no dispatch)",
       "language": "rust",
-      "last_reconciled_at": "2026-08-19T23:29:48Z",
+      "last_reconciled_at": "2026-08-20T00:36:05Z",
       "last_seen_count": 152,
       "last_seen_examples": [
         {
@@ -9299,6 +9540,8 @@
     },
     "scala/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -9307,7 +9550,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "scala",
-      "last_reconciled_at": "2026-08-19T23:29:50Z",
+      "last_reconciled_at": "2026-08-20T00:36:08Z",
       "last_seen_count": 16,
       "last_seen_examples": [
         {
@@ -9401,6 +9644,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -9408,7 +9653,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "scheme",
-      "last_reconciled_at": "2026-08-19T23:29:54Z",
+      "last_reconciled_at": "2026-08-20T00:36:12Z",
       "last_seen_count": 92,
       "last_seen_examples": [
         {
@@ -9502,6 +9747,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -9510,7 +9757,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "shell",
-      "last_reconciled_at": "2026-08-19T23:29:56Z",
+      "last_reconciled_at": "2026-08-20T00:36:13Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9533,6 +9780,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -9540,7 +9789,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "solidity",
-      "last_reconciled_at": "2026-08-19T23:29:57Z",
+      "last_reconciled_at": "2026-08-20T00:36:15Z",
       "last_seen_count": 6,
       "last_seen_examples": [
         {
@@ -9600,6 +9849,8 @@
     },
     "swift/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -9608,7 +9859,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "swift",
-      "last_reconciled_at": "2026-08-19T23:29:59Z",
+      "last_reconciled_at": "2026-08-20T00:36:16Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9630,6 +9881,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -9637,7 +9890,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "swift",
-      "last_reconciled_at": "2026-08-19T23:29:59Z",
+      "last_reconciled_at": "2026-08-20T00:36:16Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9659,6 +9912,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -9666,7 +9921,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "swift",
-      "last_reconciled_at": "2026-08-19T23:29:59Z",
+      "last_reconciled_at": "2026-08-20T00:36:16Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9689,6 +9944,8 @@
         "ctags",
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -9696,7 +9953,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "tcl",
-      "last_reconciled_at": "2026-08-19T23:30:00Z",
+      "last_reconciled_at": "2026-08-20T00:36:18Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9720,6 +9977,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -9727,7 +9986,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "tcl",
-      "last_reconciled_at": "2026-08-19T23:30:00Z",
+      "last_reconciled_at": "2026-08-20T00:36:18Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -9760,6 +10019,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -9767,7 +10028,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "tcl",
-      "last_reconciled_at": "2026-08-19T23:30:00Z",
+      "last_reconciled_at": "2026-08-20T00:36:18Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -9817,6 +10078,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -9825,7 +10088,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "tcl",
-      "last_reconciled_at": "2026-08-19T23:30:00Z",
+      "last_reconciled_at": "2026-08-20T00:36:18Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9848,6 +10111,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -9856,7 +10121,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "typescript",
-      "last_reconciled_at": "2026-08-19T23:30:21Z",
+      "last_reconciled_at": "2026-08-20T00:36:39Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -9889,6 +10154,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -9896,7 +10163,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "typescript",
-      "last_reconciled_at": "2026-08-19T23:30:21Z",
+      "last_reconciled_at": "2026-08-20T00:36:39Z",
       "last_seen_count": 501,
       "last_seen_examples": [
         {
@@ -9998,6 +10265,8 @@
     },
     "typescript/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -10006,7 +10275,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "typescript",
-      "last_reconciled_at": "2026-08-19T23:30:21Z",
+      "last_reconciled_at": "2026-08-20T00:36:39Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -10057,6 +10326,8 @@
         "ctags",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -10064,7 +10335,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "typescript",
-      "last_reconciled_at": "2026-08-19T23:30:21Z",
+      "last_reconciled_at": "2026-08-20T00:36:39Z",
       "last_seen_count": 9,
       "last_seen_examples": [
         {
@@ -10159,6 +10430,8 @@
       "agreeing_tools": [
         "ctags"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
@@ -10167,7 +10440,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "typescript",
-      "last_reconciled_at": "2026-08-19T23:30:21Z",
+      "last_reconciled_at": "2026-08-20T00:36:39Z",
       "last_seen_count": 61,
       "last_seen_examples": [
         {
@@ -10272,6 +10545,8 @@
         "gitgalaxy",
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags"
       ],
@@ -10279,7 +10554,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "typescript",
-      "last_reconciled_at": "2026-08-19T23:30:21Z",
+      "last_reconciled_at": "2026-08-20T00:36:39Z",
       "last_seen_count": 1907,
       "last_seen_examples": [
         {
@@ -10383,6 +10658,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
@@ -10391,7 +10668,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "typescript",
-      "last_reconciled_at": "2026-08-19T23:30:21Z",
+      "last_reconciled_at": "2026-08-20T00:36:39Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -10423,6 +10700,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
@@ -10431,7 +10710,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "typescript",
-      "last_reconciled_at": "2026-08-19T23:30:21Z",
+      "last_reconciled_at": "2026-08-20T00:36:39Z",
       "last_seen_count": 174,
       "last_seen_examples": [
         {
@@ -10535,6 +10814,8 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
@@ -10542,7 +10823,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "zig",
-      "last_reconciled_at": "2026-08-19T23:30:30Z",
+      "last_reconciled_at": "2026-08-20T00:36:47Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -10564,6 +10845,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -10571,7 +10854,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "zig",
-      "last_reconciled_at": "2026-08-19T23:30:30Z",
+      "last_reconciled_at": "2026-08-20T00:36:47Z",
       "last_seen_count": 10,
       "last_seen_examples": [
         {
@@ -10665,6 +10948,8 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
+      "credit_tools": [],
+      "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
@@ -10672,7 +10957,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "zig",
-      "last_reconciled_at": "2026-08-19T23:30:30Z",
+      "last_reconciled_at": "2026-08-20T00:36:47Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {

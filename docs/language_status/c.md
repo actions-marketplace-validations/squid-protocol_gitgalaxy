@@ -276,18 +276,43 @@ tools produced against each other was investigated by reading real source
 `docs/self_scan/tri_comparison_ledger.json`, filterable to `"language": "c"`.
 
 **Result: 11 of 11 discrepancy shapes (766 individual occurrences) resolved, zero confirmed
-GitGalaxy engine defects.** Every disagreement either resolved in GitGalaxy's favor, or turned out
-to be a bug in this repo's own comparison tooling (found and fixed as part of the same pass) or a
-known tree-sitter-c/ctags limitation — never GitGalaxy's regex engine itself. Current measured
-numbers (`tests/tools/tri_comparison_chart.py --languages c`, `language-crucible/data/c/` —
+GitGalaxy engine defects *among the discrepancies this methodology actually surfaced*** (see the
+scope caveat near the end of this section — a handful of real, independently-filed C/C++
+args-counting bugs exist and predate this sweep; this methodology can only catch what the three
+tools disagree about, not a shared blind spot). Every disagreement that DID surface either
+resolved in GitGalaxy's favor, or turned out to be a bug in this repo's own comparison tooling
+(found and fixed as part of the same pass) or a known tree-sitter-c/ctags limitation — never
+GitGalaxy's regex engine itself. Current measured numbers
+(`tests/tools/tri_comparison_chart.py --languages c`, `language-crucible/data/c/` —
 cpython, doom, sqlite, micropython, and more):
 
 | Signal | GitGalaxy | tree-sitter | ctags | Read as |
 |---|---|---|---|---|
 | Functions found (of 1,814 total claimed by any tool) | 1,730 | 1,790 | 1,733 | tree-sitter's higher count is mostly noise, not real recall — see precision row |
-| Function precision (of what each tool claimed, how much corroborates) | **99.8%** (1726/1730) | 95.9% (1716/1790) | 99.6% (1726/1733) | GitGalaxy has the highest precision of the three |
+| Function precision (of what each tool claimed, how much corroborates) | **100%** (1730/1730)\* | 95.7% (1713/1790)\* | 99.4% (1723/1733)\* | all three numbers include verified credit/debit — see note below |
 | Class recall/precision | **100%** (61/61) | 100% (61/61) | 100% (61/61) | fully reconciled after this pass's fixes — see below |
 | Args exact-match | **100%** (1710/1710) | 99.9% (1709/1710) | 100% (1710/1710) | tied for best |
+
+\* All three function-precision numbers now reflect `tri_comparison_ledger.py`'s verified
+credit/debit mechanism (added 2026-08-20 for GitGalaxy's credit, extended the same day for
+ctags/tree-sitter's debit) rather than raw tool agreement alone — a raw agreement percentage can't
+distinguish "uncorroborated because wrong" from "uncorroborated because more correct than the
+other two tools," or "corroborated" from "two tools independently made the same mistake." Both
+directions apply here, both motivated by real, confirmed cases in this same corpus:
+- **GitGalaxy, credited:** raw agreement-based precision was 99.77% (1726/1730) — the remaining 4
+  are `slot_tp_hash`/`slot_mp_ass_subscript`/`slot_tp_repr`/`slot_nb_inplace_power`, described
+  below, confirmed real by directly reading the source, not just uncorroborated.
+- **ctags and tree-sitter, debited:** raw agreement-based precision was 99.6% (1726/1733) and
+  95.9% (1716/1790) respectively — 3 of those "corroborated" occurrences
+  (`c/function/existence/agree[ctags,tree_sitter]_vs[gitgalaxy]`, see below) are
+  `EXPORT_FUN`/`MICROPY_WRAP_MP_EXECUTE_BYTECODE`, both already-known macro hallucinations that
+  ctags and tree-sitter each independently mis-tag the same way — their mutual "agreement" was
+  never real corroboration, just two different engines fooled by the same macro-definition text.
+
+Both directions are deliberately narrow: set only when a validated verdict cleanly resolves to
+"this specific tool is confirmed right" or "these specific tools' agreement is a confirmed shared
+mistake," never inferred from a verdict's prose. Most validated shapes don't resolve that cleanly
+and get neither adjustment — that's the correct, common outcome, not a gap to fill in later.
 
 ### Where GitGalaxy wins outright
 
@@ -348,15 +373,36 @@ fine:
    scoped-vs-unscoped `enum class` distinction needs its own verification before assuming the same
    fix shape applies).
 
-### Confirmed GitGalaxy engine bugs found for C: zero
+### Confirmed GitGalaxy engine bugs found *via this sweep's ledger discrepancies*: zero
 
 Contrast with `rust`, where the same sweep methodology found and filed two real GitGalaxy
 `detector.py` bugs
 ([#1872](https://github.com/squid-protocol/gitgalaxy/issues/1872) — a lifetime-tick handling
 defect in argument counting). For C, every one of the 766 investigated occurrences resolved
-without implicating GitGalaxy's own regex engine — the closest thing to a caveat is the tab-
-splitting and ctags-kind-mapping bugs above, both in this repo's *test tooling*, not the shipped
-`gitgalaxy` package.
+without implicating GitGalaxy's own regex engine — the closest thing to a caveat *from this
+methodology* is the tab-splitting and ctags-kind-mapping bugs above, both in this repo's *test
+tooling*, not the shipped `gitgalaxy` package.
+
+**Important scope caveat, not a contradiction of the above:** "zero defects found via 3-way ledger
+discrepancies" is not the same claim as "zero known C/C++ args-counting defects exist." A 3-way
+disagreement can only surface a bug if the three tools happen to land on genuinely different
+answers on a file that's actually in the pinned `language-crucible` corpus sample — it can't catch
+a bug all three tools independently fail to disagree about, or one outside this specific corpus.
+Four real, independently-filed C/C++ `_count_top_level_args`/`_slice_by_braces` issues exist and
+predate this sweep, none surfaced by it:
+[#1836](https://github.com/squid-protocol/gitgalaxy/issues/1836) (unbounded C++ signature search
+hallucinates args from function-body calls),
+[#1837](https://github.com/squid-protocol/gitgalaxy/issues/1837) (no preprocessor model —
+`#if`/`#else`-duplicated signatures behave undefined, not deterministic; this is the SAME
+`gc_mark_subtree` function the tri-comparison ledger's own 1-occurrence
+`c/function/args/agree[ctags,gitgalaxy]_vs[tree_sitter]` entry investigated, whose verdict was
+corrected after cross-referencing this issue — see that entry's `investigated_by` note),
+[#1853](https://github.com/squid-protocol/gitgalaxy/issues/1853) (angle brackets as math/shift
+operators corrupt generic-bracket depth tracking),
+[#1854](https://github.com/squid-protocol/gitgalaxy/issues/1854) (C-family function-pointer
+return types misalign the parameter block). All four are real, all four are already filed and
+labeled — read them before citing this section's headline number as "GitGalaxy's C args-counting
+has no known bugs."
 
 **Full investigation record:** `docs/self_scan/tri_comparison_ledger.json` (filter to
 `"language": "c"`), rendered human-readable at
