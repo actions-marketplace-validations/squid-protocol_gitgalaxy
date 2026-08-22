@@ -40,13 +40,13 @@ for the same metrics tracked over time across pushes to main.
 | Csharp | 100.0% | 100.0% | 100.0% | 100.0% |
 | Css | 100.0% | 100.0% | N/A | N/A |
 | Dart | 99.0% | 97.9% | 100.0% | 100.0% |
-| Fortran | 95.8% | 100.0% | 100.0% | 100.0% |
+| Fortran | 98.6% | 100.0% | 100.0% | 100.0% |
 | Go | 100.0% | 100.0% | 100.0% | 100.0% |
 | Groovy | N/A | N/A | N/A | N/A |
 | Haskell | 100.0% | 98.6% | 100.0% | 100.0% |
 | Html | N/A | N/A | N/A | N/A |
 | Java | 99.1% | 100.0% | 100.0% | 100.0% |
-| Javascript | 99.8% | 98.4% | 100.0% | 100.0% |
+| Javascript | 100.0% | 98.4% | 100.0% | 100.0% |
 | Kotlin | 100.0% | 100.0% | 100.0% | 100.0% |
 | Lua | N/A | N/A | N/A | N/A |
 | Makefile | 100.0% | 100.0% | N/A | N/A |
@@ -6724,7 +6724,7 @@ LANGUAGE_DEFINITIONS: dict[str, Any] = {
                 # (0.01s here vs. ~13s with the lookahead) on a payload of thousands of repeated
                 # type-declaration lines with one distant END, a real ReDoS regression on a
                 # non-pathological, plausible shape. A numeric bound has none of that risk.
-                r"[A-Za-z0-9_ \t\n&*,()=:]{0,40}?"
+                r"(?:[A-Za-z0-9_ \t&*,()=:]|&\s*\n){0,40}?"
                 r")?"
                 # 4. THE EXECUTION BLOCK KEYWORD
                 # Supports multi-line continuation `&` inside the spaces
