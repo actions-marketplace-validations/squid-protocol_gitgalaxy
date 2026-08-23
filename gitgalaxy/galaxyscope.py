@@ -621,8 +621,8 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
             "coding_loc": refraction["coding_loc"],
             "doc_loc": refraction["doc_loc"],
             "mitigations": refraction.get("mitigations", []),  # <--- THE FIX: Route the suppressions
-            "raw_imports": list(raw_imports),
-            "named_tokens": list(named_tokens),
+            "raw_imports": sorted(raw_imports),
+            "named_tokens": sorted(named_tokens),
             "popularity_hits": popularity_hits,
             "regex_telemetry": (logic_data.pop("regex_telemetry", {}) if is_profiling else {}),
         }
@@ -1061,7 +1061,7 @@ class Orchestrator:
                 if isinstance(ts, dict) and isinstance(eqs, dict):
                     keys_to_delete_ts = [
                         k
-                        for k in ts.keys()
+                        for k in ts.keys()  # noqa: SIM118
                         if k in mitigs
                         or f"sec_{k}" in mitigs
                         or k.replace("sec_", "") in mitigs
@@ -1072,7 +1072,7 @@ class Orchestrator:
                     ]
                     keys_to_delete_eqs = [
                         k
-                        for k in eqs.keys()
+                        for k in eqs.keys()  # noqa: SIM118
                         if k in mitigs
                         or k.replace("sec_", "") in mitigs
                         or k in ignored_rules
@@ -1089,11 +1089,11 @@ class Orchestrator:
                         if k in eqs:
                             del eqs[k]
 
-                if "GG-AGENT-VULNERABILITY" in ignored_rules or "ai_appsec" in mitigs:
+                if "GG-AGENT-VULNERABILITY" in ignored_rules or "ai_appsec" in mitigs:  # noqa: SIM102
                     if "ai_appsec" in file_data.get("telemetry", {}):
                         del file_data["telemetry"]["ai_appsec"]
 
-                if "GG-AGENT-GUARDRAIL" in ignored_rules or "ai_guardrails" in mitigs:
+                if "GG-AGENT-GUARDRAIL" in ignored_rules or "ai_guardrails" in mitigs:  # noqa: SIM102
                     if "ai_guardrails" in file_data.get("telemetry", {}):
                         del file_data["telemetry"]["ai_guardrails"]
 
@@ -1146,7 +1146,7 @@ class Orchestrator:
 
                             # THE FIX: Bulletproof Truthiness Check
                             ts = file_data.get("telemetry", {}).get("threat_snippets", {})
-                            if isinstance(ts, dict):
+                            if isinstance(ts, dict):  # noqa: SIM102
                                 if ts.get("hardcoded_secrets") or ts.get("sec_hardcoded_secrets"):
                                     has_secrets = True
 
@@ -1679,6 +1679,9 @@ class Orchestrator:
         # the pipeline sees a deterministic sequence regardless of thread
         # scheduling.
         self.ram_cache = dict(sorted(self.ram_cache.items()))
+        self.file_speed_telemetry["phase_totals"] = dict(sorted(self.file_speed_telemetry["phase_totals"].items()))
+        self.splicing_telemetry["regex_totals"] = dict(sorted(self.splicing_telemetry["regex_totals"].items()))
+        self.splicing_telemetry["top_slowest"].sort(key=lambda x: (x["time"], x["path"]), reverse=True)
 
         # unparsable_files is appended to from the same as_completed() loop
         # (the "parser_bypass" branch above) as well as from the earlier
@@ -1704,8 +1707,8 @@ class Orchestrator:
         """
         logger.info("PASS_1.5: Resolving import graphs via O(1) Pre-computed Suffix Hash Maps...")
 
-        self.popularity_scores = dict.fromkeys(self.stem_map.values(), 0)
-        repo_file_paths = set(self.stem_map.values())
+        self.popularity_scores = dict.fromkeys(sorted(self.stem_map.values()), 0)
+        repo_file_paths = sorted(set(self.stem_map.values()))
 
         # --- O(1) SUFFIX MAP ---
         suffix_map = {}
@@ -1798,7 +1801,7 @@ class Orchestrator:
         external_imports_tally = {}  # <--- NEW: Track external dependencies
 
         for rel_path, meta in self.ram_cache.items():
-            raw_imports = meta.get("raw_imports", set())
+            raw_imports = sorted(meta.get("raw_imports", set()))
             for raw_import in raw_imports:
                 clean_path = import_cleaner.sub("", raw_import.strip())
                 if "from" in clean_path:
@@ -2572,7 +2575,7 @@ class Orchestrator:
             self.ext_tally = {}
             self.stem_map = {}
 
-            for rel_path in self.ram_cache.keys():
+            for rel_path in self.ram_cache.keys():  # noqa: SIM118
                 stem = Path(rel_path).stem.lower()
                 ext = Path(rel_path).suffix.lower()
                 name = Path(rel_path).name.lower()
@@ -2595,7 +2598,7 @@ class Orchestrator:
             self._extract_features_parallel()
 
             # 5. The Ripple Effect (Recalculate Downstream Exposure for ALL files)
-            self.stem_map = {f: f for f in self.ram_cache.keys()}
+            self.stem_map = {f: f for f in self.ram_cache.keys()}  # noqa: SIM118
             self._resolve_dependency_graph()
             self._calculate_risk_exposures()
 
