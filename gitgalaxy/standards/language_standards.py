@@ -46,7 +46,7 @@ for the same metrics tracked over time across pushes to main.
 | Haskell | 100.0% | 99.3% | 100.0% | 100.0% |
 | Html | N/A | N/A | N/A | N/A |
 | Java | 100.0% | 100.0% | 100.0% | 100.0% |
-| Javascript | 100.0% | 98.4% | 100.0% | 100.0% |
+| Javascript | 100.0% | 98.0% | 100.0% | 100.0% |
 | Kotlin | 100.0% | 100.0% | 100.0% | 100.0% |
 | Lua | N/A | N/A | N/A | N/A |
 | Makefile | 100.0% | 100.0% | N/A | N/A |
@@ -752,8 +752,8 @@ LANGUAGE_DEFINITIONS: dict[str, Any] = {
                 # This allows the lookahead to safely cross vertical line breaks without
                 # resorting to an unbounded `\s*` which causes ReDoS.
                 # =====================================================================
-                r"(?:^|(?<=[^<>(,\s]))[ \t\n]*(?<!\.\.\.)\b[a-zA-Z_$][\w$]*(?=[ \t\n]*=[ \t\n]*(?:async\s*)?(?:function(?:\s*\*)?\b|\([^)]*\)[ \t\n]*(?::[^=;]+)?[ \t\n]*=>|[a-zA-Z_$][\w$]*[ \t\n]*=>))|"
-                r"^[ \t]*[a-zA-Z_$][\w$]*(?=[ \t\n]*:[ \t\n]*(?:async\s*)?(?:function(?:\s*\*)?\b|\([^)]*\)[ \t\n]*(?::[^=;]+)?[ \t\n]*=>|[a-zA-Z_$][\w$]*[ \t\n]*=>))|"
+                r"(?:^|(?<=[^<>(,\s]))[ \t\n]*(?<!\.\.\.)\b[a-zA-Z_$][\w$]*(?:\[[^\]\n]+\])?(?=[ \t\n]*=[ \t\n]*(?:async\s*)?(?:function(?:\s*\*)?\b|\([^)]*\)[ \t\n]*(?::[^=;]+)?[ \t\n]*=>|[a-zA-Z_$][\w$]*[ \t\n]*=>))|"
+                r"^[ \t]*(?:\[[^\]\n]+\]|[a-zA-Z_$][\w$]*)(?=[ \t\n]*:[ \t\n]*(?:async\s*)?(?:function(?:\s*\*)?\b|\([^)]*\)[ \t\n]*(?::[^=;]+)?[ \t\n]*=>|[a-zA-Z_$][\w$]*[ \t\n]*=>))|"
                 # GENERATOR METHOD FIX (epic #813/#814): class/object-literal generator
                 # methods (`*foo() {}`, `async *foo() {}`, `static *foo() {}`) were
                 # completely invisible -- this branch had no allowance for the leading
