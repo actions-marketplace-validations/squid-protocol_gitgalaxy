@@ -5448,7 +5448,9 @@ class StructuralExtractor:
         # BUG FIX: `[` and `]` (TypeScript's computed properties like `[Symbol.asyncIterator]`)
         # were missing, causing them to be extracted as `Symbol.asyncIterator`, misaligning
         # with AST engines.
-        words = [w for w in re.findall(r"[a-zA-Z0-9_./%$():~'\-\[\]]+", clean) if w.strip("_-:")]
+        is_swift = self.primary_lang_id == "swift"
+        pattern = r"[a-zA-Z0-9_./%$():~'\-\[\]=<>+!*&|^?]+" if is_swift else r"[a-zA-Z0-9_./%$():~'\-\[\]]+"
+        words = [w for w in re.findall(pattern, clean) if w.strip("_-:")]
 
         if not words:
             return "Unknown_Block"

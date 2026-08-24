@@ -13,7 +13,7 @@
       "investigated_at": "2026-08-20T00:00:00Z",
       "investigated_by": "Claude (Sonnet 5), direct investigation via tri-comparison-ledger-sweep",
       "language": "agc_assembly",
-      "last_reconciled_at": "2026-08-24T03:52:23Z",
+      "last_reconciled_at": "2026-08-24T21:12:32Z",
       "last_seen_count": 215,
       "last_seen_examples": [
         {
@@ -118,7 +118,7 @@
       "investigated_at": "2026-08-20T00:00:00Z",
       "investigated_by": "Claude (Sonnet 5), direct investigation via tri-comparison-ledger-sweep",
       "language": "agc_assembly",
-      "last_reconciled_at": "2026-08-24T03:52:23Z",
+      "last_reconciled_at": "2026-08-24T21:12:32Z",
       "last_seen_count": 37,
       "last_seen_examples": [
         {
@@ -221,7 +221,7 @@
       "investigated_at": "2026-08-20T22:17:39Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep (direct investigation, no Gemini dispatch needed -- root cause was immediately clear from source)",
       "language": "apex",
-      "last_reconciled_at": "2026-08-24T03:52:24Z",
+      "last_reconciled_at": "2026-08-24T21:12:34Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -260,7 +260,7 @@
       "investigated_at": "2026-08-20T00:00:00Z",
       "investigated_by": "Claude (Sonnet 5), direct investigation via tri-comparison-ledger-sweep",
       "language": "assembly",
-      "last_reconciled_at": "2026-08-24T03:52:26Z",
+      "last_reconciled_at": "2026-08-24T21:12:36Z",
       "last_seen_count": 26,
       "last_seen_examples": [
         {
@@ -363,7 +363,7 @@
       "investigated_at": "2026-08-20T00:00:00Z",
       "investigated_by": "Claude (Sonnet 5), direct investigation via tri-comparison-ledger-sweep",
       "language": "assembly",
-      "last_reconciled_at": "2026-08-24T03:52:26Z",
+      "last_reconciled_at": "2026-08-24T21:12:36Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -443,7 +443,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved + fixed directly, no dispatch needed)",
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 23,
       "last_seen_examples": [
         {
@@ -557,7 +557,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 9,
       "last_seen_examples": [
         {
@@ -662,7 +662,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 525,
       "last_seen_examples": [
         {
@@ -776,7 +776,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved directly, no dispatch needed) -- corrected after cross-referencing #1837",
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -809,7 +809,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved + fixed directly, no dispatch needed)",
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -842,7 +842,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 13,
       "last_seen_examples": [
         {
@@ -959,7 +959,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved directly, no dispatch needed)",
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 14,
       "last_seen_examples": [
         {
@@ -1073,7 +1073,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved + fixed directly, no dispatch needed)",
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -1160,7 +1160,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -1213,7 +1213,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved directly, no dispatch needed)",
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -1271,7 +1271,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 17,
       "last_seen_examples": [
         {
@@ -1375,7 +1375,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 74,
       "last_seen_examples": [
         {
@@ -1487,7 +1487,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "c",
-      "last_reconciled_at": "2026-08-24T03:52:32Z",
+      "last_reconciled_at": "2026-08-24T21:12:42Z",
       "last_seen_count": 88,
       "last_seen_examples": [
         {
@@ -1592,7 +1592,7 @@
       "investigated_at": "2026-08-19",
       "investigated_by": "gemini-3.1-pro-high (agy), dispatched via tri-comparison-ledger-sweep, self-corrected and reviewed by claude-sonnet-5",
       "language": "cobol",
-      "last_reconciled_at": "2026-08-24T03:52:37Z",
+      "last_reconciled_at": "2026-08-24T21:12:48Z",
       "last_seen_count": 19,
       "last_seen_examples": [
         {
@@ -1695,7 +1695,7 @@
       "investigated_at": "2026-08-22T00:00:00Z",
       "investigated_by": "Agent",
       "language": "cobol",
-      "last_reconciled_at": "2026-08-24T03:52:37Z",
+      "last_reconciled_at": "2026-08-24T21:12:48Z",
       "last_seen_count": 181,
       "last_seen_examples": [
         {
@@ -1798,7 +1798,7 @@
       "investigated_at": "2026-08-19",
       "investigated_by": "gemini-3.1-pro-high (agy), dispatched via tri-comparison-ledger-sweep, reviewed by claude-sonnet-5",
       "language": "cobol",
-      "last_reconciled_at": "2026-08-24T03:52:37Z",
+      "last_reconciled_at": "2026-08-24T21:12:48Z",
       "last_seen_count": 45,
       "last_seen_examples": [
         {
@@ -1902,7 +1902,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -1944,7 +1944,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -1986,7 +1986,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 84,
       "last_seen_examples": [
         {
@@ -2100,7 +2100,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 22,
       "last_seen_examples": [
         {
@@ -2214,7 +2214,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -2256,7 +2256,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 61,
       "last_seen_examples": [
         {
@@ -2370,7 +2370,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -2402,7 +2402,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -2432,7 +2432,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 76,
       "last_seen_examples": [
         {
@@ -2536,7 +2536,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 60,
       "last_seen_examples": [
         {
@@ -2650,7 +2650,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -2683,7 +2683,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 30,
       "last_seen_examples": [
         {
@@ -2797,7 +2797,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 9,
       "last_seen_examples": [
         {
@@ -2902,7 +2902,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -2960,7 +2960,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 64,
       "last_seen_examples": [
         {
@@ -3064,7 +3064,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 194,
       "last_seen_examples": [
         {
@@ -3176,7 +3176,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "cpp",
-      "last_reconciled_at": "2026-08-24T03:52:42Z",
+      "last_reconciled_at": "2026-08-24T21:12:52Z",
       "last_seen_count": 195,
       "last_seen_examples": [
         {
@@ -3280,7 +3280,7 @@
       "investigated_at": "2026-08-21T18:13:27Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 9,
       "last_seen_examples": [
         {
@@ -3385,7 +3385,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 5,
       "last_seen_examples": [
         {
@@ -3454,7 +3454,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 6,
       "last_seen_examples": [
         {
@@ -3530,7 +3530,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 9,
       "last_seen_examples": [
         {
@@ -3629,7 +3629,7 @@
       "investigated_at": "2026-08-21T20:06:45Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -3662,7 +3662,7 @@
       "investigated_at": "2026-08-21T20:06:45Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -3752,7 +3752,7 @@
       "investigated_at": "2026-08-21T20:06:45Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 6,
       "last_seen_examples": [
         {
@@ -3829,7 +3829,7 @@
       "investigated_at": "2026-08-21T20:06:45Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -3859,7 +3859,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 26,
       "last_seen_examples": [
         {
@@ -3963,7 +3963,7 @@
       "investigated_at": "2026-08-21T18:13:27Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 271,
       "last_seen_examples": [
         {
@@ -4077,7 +4077,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -4137,7 +4137,7 @@
       "investigated_at": "2026-08-21T18:13:27Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -4170,7 +4170,7 @@
       "investigated_at": "2026-08-21T18:13:44Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 108,
       "last_seen_examples": [
         {
@@ -4286,7 +4286,7 @@
       "investigated_at": "2026-08-21T21:45:53Z",
       "investigated_by": "Claude Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 46,
       "last_seen_examples": [
         {
@@ -4398,7 +4398,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 317,
       "last_seen_examples": [
         {
@@ -4502,7 +4502,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "csharp",
-      "last_reconciled_at": "2026-08-24T03:52:48Z",
+      "last_reconciled_at": "2026-08-24T21:12:58Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -4535,7 +4535,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude (Sonnet 5), direct investigation via tri-comparison-ledger-sweep",
       "language": "css",
-      "last_reconciled_at": "2026-08-24T03:52:49Z",
+      "last_reconciled_at": "2026-08-24T21:12:59Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -4584,7 +4584,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude (Sonnet 5), direct investigation via tri-comparison-ledger-sweep",
       "language": "dart",
-      "last_reconciled_at": "2026-08-24T03:52:53Z",
+      "last_reconciled_at": "2026-08-24T21:13:03Z",
       "last_seen_count": 221,
       "last_seen_examples": [
         {
@@ -4687,7 +4687,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude (Sonnet 5), direct investigation via tri-comparison-ledger-sweep",
       "language": "dart",
-      "last_reconciled_at": "2026-08-24T03:52:53Z",
+      "last_reconciled_at": "2026-08-24T21:13:03Z",
       "last_seen_count": 13,
       "last_seen_examples": [
         {
@@ -4790,7 +4790,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude (Sonnet 5), direct investigation via tri-comparison-ledger-sweep",
       "language": "dart",
-      "last_reconciled_at": "2026-08-24T03:52:53Z",
+      "last_reconciled_at": "2026-08-24T21:13:03Z",
       "last_seen_count": 10,
       "last_seen_examples": [
         {
@@ -4894,7 +4894,7 @@
       "investigated_at": "2026-08-21T23:35:49Z",
       "investigated_by": "Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "fortran",
-      "last_reconciled_at": "2026-08-24T03:52:59Z",
+      "last_reconciled_at": "2026-08-24T21:13:09Z",
       "last_seen_count": 8,
       "last_seen_examples": [
         {
@@ -4981,15 +4981,21 @@
         "ctags",
         "gitgalaxy"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "gitgalaxy",
+        "ctags"
+      ],
+      "debit_tools": [
+        "tree_sitter"
+      ],
       "dissenting_tools": [
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-22T21:06:51Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "fortran",
-      "last_reconciled_at": "2026-08-24T03:52:59Z",
+      "last_reconciled_at": "2026-08-24T21:13:09Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -5003,10 +5009,10 @@
         }
       ],
       "metric": "args",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy/ctags correctly extract 677 args. Tree-sitter truncates at 39."
     },
     "fortran/function/args/agree[ctags,tree_sitter]_vs[gitgalaxy]": {
       "agreeing_tools": [
@@ -5021,7 +5027,7 @@
       "investigated_at": "2026-08-21T00:00:00Z",
       "investigated_by": "Claude Sonnet 5, direct investigation (surfaced while re-blessing the tri-comparison chart after #1973/#1985)",
       "language": "fortran",
-      "last_reconciled_at": "2026-08-24T03:52:59Z",
+      "last_reconciled_at": "2026-08-24T21:13:09Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -5053,7 +5059,7 @@
       "investigated_at": "2026-08-21T23:35:49Z",
       "investigated_by": "Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "fortran",
-      "last_reconciled_at": "2026-08-24T03:52:59Z",
+      "last_reconciled_at": "2026-08-24T21:13:09Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -5083,7 +5089,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "fortran",
-      "last_reconciled_at": "2026-08-24T03:52:59Z",
+      "last_reconciled_at": "2026-08-24T21:13:09Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -5115,7 +5121,7 @@
       "investigated_at": "2026-08-21T23:35:49Z",
       "investigated_by": "Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "fortran",
-      "last_reconciled_at": "2026-08-24T03:52:59Z",
+      "last_reconciled_at": "2026-08-24T21:13:09Z",
       "last_seen_count": 15,
       "last_seen_examples": [
         {
@@ -5229,7 +5235,7 @@
       "investigated_at": "2026-08-21T23:35:49Z",
       "investigated_by": "Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "fortran",
-      "last_reconciled_at": "2026-08-24T03:52:59Z",
+      "last_reconciled_at": "2026-08-24T21:13:09Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -5273,7 +5279,7 @@
       "investigated_at": "2026-08-21T23:35:49Z",
       "investigated_by": "Sonnet 5, dispatched via tri-comparison-ledger-sweep",
       "language": "fortran",
-      "last_reconciled_at": "2026-08-24T03:52:59Z",
+      "last_reconciled_at": "2026-08-24T21:13:09Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -5304,7 +5310,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "fortran",
-      "last_reconciled_at": "2026-08-24T03:52:59Z",
+      "last_reconciled_at": "2026-08-24T21:13:09Z",
       "last_seen_count": 16,
       "last_seen_examples": [
         {
@@ -5399,16 +5405,21 @@
         "ctags",
         "gitgalaxy"
       ],
-      "credit_tools": [],
-      "debit_tools": [],
+      "credit_tools": [
+        "gitgalaxy",
+        "ctags"
+      ],
+      "debit_tools": [
+        "tree_sitter"
+      ],
       "dissenting_tools": [
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:29Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "go",
-      "last_reconciled_at": "2026-08-24T03:53:02Z",
+      "last_reconciled_at": "2026-08-24T21:13:12Z",
       "last_seen_count": 75,
       "last_seen_examples": [
         {
@@ -5503,10 +5514,10 @@
         }
       ],
       "metric": "args",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy/ctags correctly parse multiple arguments sharing a type. Tree-sitter groups them."
     },
     "go/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
@@ -5519,7 +5530,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "go",
-      "last_reconciled_at": "2026-08-24T03:53:02Z",
+      "last_reconciled_at": "2026-08-24T21:13:12Z",
       "last_seen_count": 75,
       "last_seen_examples": [
         {
@@ -5623,7 +5634,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (session investigation)",
       "language": "haskell",
-      "last_reconciled_at": "2026-08-24T03:53:05Z",
+      "last_reconciled_at": "2026-08-24T21:13:15Z",
       "last_seen_count": 16,
       "last_seen_examples": [
         {
@@ -5735,7 +5746,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (session investigation)",
       "language": "haskell",
-      "last_reconciled_at": "2026-08-24T03:53:05Z",
+      "last_reconciled_at": "2026-08-24T21:13:15Z",
       "last_seen_count": 9,
       "last_seen_examples": [
         {
@@ -5840,7 +5851,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "haskell",
-      "last_reconciled_at": "2026-08-24T03:53:05Z",
+      "last_reconciled_at": "2026-08-24T21:13:15Z",
       "last_seen_count": 38,
       "last_seen_examples": [
         {
@@ -5954,7 +5965,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (dispatched agent investigation)",
       "language": "haskell",
-      "last_reconciled_at": "2026-08-24T03:53:05Z",
+      "last_reconciled_at": "2026-08-24T21:13:15Z",
       "last_seen_count": 103,
       "last_seen_examples": [
         {
@@ -6068,7 +6079,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (dispatched agent investigation)",
       "language": "haskell",
-      "last_reconciled_at": "2026-08-24T03:53:05Z",
+      "last_reconciled_at": "2026-08-24T21:13:15Z",
       "last_seen_count": 69,
       "last_seen_examples": [
         {
@@ -6184,7 +6195,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (session investigation)",
       "language": "haskell",
-      "last_reconciled_at": "2026-08-24T03:53:05Z",
+      "last_reconciled_at": "2026-08-24T21:13:15Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -6216,7 +6227,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "haskell",
-      "last_reconciled_at": "2026-08-24T03:53:05Z",
+      "last_reconciled_at": "2026-08-24T21:13:15Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -6248,7 +6259,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "haskell",
-      "last_reconciled_at": "2026-08-24T03:53:05Z",
+      "last_reconciled_at": "2026-08-24T21:13:15Z",
       "last_seen_count": 91,
       "last_seen_examples": [
         {
@@ -6362,7 +6373,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "java",
-      "last_reconciled_at": "2026-08-24T03:53:07Z",
+      "last_reconciled_at": "2026-08-24T21:13:18Z",
       "last_seen_count": 28,
       "last_seen_examples": [
         {
@@ -6476,7 +6487,7 @@
       "investigated_at": "2026-08-22T01:15:53Z",
       "investigated_by": "Sonnet 5, direct investigation via tri-comparison-ledger-sweep",
       "language": "java",
-      "last_reconciled_at": "2026-08-24T03:53:07Z",
+      "last_reconciled_at": "2026-08-24T21:13:18Z",
       "last_seen_count": 12,
       "last_seen_examples": [
         {
@@ -6590,7 +6601,7 @@
       "investigated_at": "2026-08-22T01:15:53Z",
       "investigated_by": "Sonnet 5, direct investigation via tri-comparison-ledger-sweep",
       "language": "java",
-      "last_reconciled_at": "2026-08-24T03:53:07Z",
+      "last_reconciled_at": "2026-08-24T21:13:18Z",
       "last_seen_count": 28,
       "last_seen_examples": [
         {
@@ -6703,7 +6714,7 @@
       "investigated_at": "2026-08-22T01:15:53Z",
       "investigated_by": "Sonnet 5, direct investigation via tri-comparison-ledger-sweep",
       "language": "java",
-      "last_reconciled_at": "2026-08-24T03:53:07Z",
+      "last_reconciled_at": "2026-08-24T21:13:18Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -6736,7 +6747,7 @@
       "investigated_at": "2026-08-22T01:15:53Z",
       "investigated_by": "Sonnet 5, direct investigation via tri-comparison-ledger-sweep",
       "language": "java",
-      "last_reconciled_at": "2026-08-24T03:53:07Z",
+      "last_reconciled_at": "2026-08-24T21:13:18Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -6787,7 +6798,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "java",
-      "last_reconciled_at": "2026-08-24T03:53:07Z",
+      "last_reconciled_at": "2026-08-24T21:13:18Z",
       "last_seen_count": 315,
       "last_seen_examples": [
         {
@@ -6901,7 +6912,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "java",
-      "last_reconciled_at": "2026-08-24T03:53:07Z",
+      "last_reconciled_at": "2026-08-24T21:13:18Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -6952,7 +6963,7 @@
       "investigated_at": "2026-08-21",
       "investigated_by": "Claude (Sonnet 5), dispatched via tri-comparison-ledger-sweep",
       "language": "javascript",
-      "last_reconciled_at": "2026-08-24T03:53:10Z",
+      "last_reconciled_at": "2026-08-24T21:13:20Z",
       "last_seen_count": 93,
       "last_seen_examples": [
         {
@@ -7066,7 +7077,7 @@
       "investigated_at": "2026-08-21",
       "investigated_by": "Claude (Sonnet 5), dispatched via tri-comparison-ledger-sweep",
       "language": "javascript",
-      "last_reconciled_at": "2026-08-24T03:53:10Z",
+      "last_reconciled_at": "2026-08-24T21:13:20Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -7153,7 +7164,7 @@
       "investigated_at": "2026-08-21",
       "investigated_by": "Claude (Sonnet 5), dispatched via tri-comparison-ledger-sweep",
       "language": "javascript",
-      "last_reconciled_at": "2026-08-24T03:53:10Z",
+      "last_reconciled_at": "2026-08-24T21:13:20Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -7192,7 +7203,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "javascript",
-      "last_reconciled_at": "2026-08-24T03:53:10Z",
+      "last_reconciled_at": "2026-08-24T21:13:20Z",
       "last_seen_count": 45,
       "last_seen_examples": [
         {
@@ -7296,7 +7307,7 @@
       "investigated_at": "2026-08-21",
       "investigated_by": "Claude (Sonnet 5), dispatched via tri-comparison-ledger-sweep",
       "language": "javascript",
-      "last_reconciled_at": "2026-08-24T03:53:10Z",
+      "last_reconciled_at": "2026-08-24T21:13:20Z",
       "last_seen_count": 13,
       "last_seen_examples": [
         {
@@ -7410,7 +7421,7 @@
       "investigated_at": "2026-08-21",
       "investigated_by": "Claude (Sonnet 5), dispatched via tri-comparison-ledger-sweep",
       "language": "javascript",
-      "last_reconciled_at": "2026-08-24T03:53:10Z",
+      "last_reconciled_at": "2026-08-24T21:13:20Z",
       "last_seen_count": 6,
       "last_seen_examples": [
         {
@@ -7488,7 +7499,7 @@
       "investigated_at": "2026-08-21",
       "investigated_by": "Claude (Sonnet 5), dispatched via tri-comparison-ledger-sweep",
       "language": "javascript",
-      "last_reconciled_at": "2026-08-24T03:53:10Z",
+      "last_reconciled_at": "2026-08-24T21:13:20Z",
       "last_seen_count": 265,
       "last_seen_examples": [
         {
@@ -7604,7 +7615,7 @@
       "investigated_at": "2026-08-21",
       "investigated_by": "Claude (Sonnet 5), dispatched via tri-comparison-ledger-sweep",
       "language": "javascript",
-      "last_reconciled_at": "2026-08-24T03:53:10Z",
+      "last_reconciled_at": "2026-08-24T21:13:20Z",
       "last_seen_count": 185,
       "last_seen_examples": [
         {
@@ -7716,7 +7727,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "javascript",
-      "last_reconciled_at": "2026-08-24T03:53:10Z",
+      "last_reconciled_at": "2026-08-24T21:13:20Z",
       "last_seen_count": 194,
       "last_seen_examples": [
         {
@@ -7820,7 +7831,7 @@
       "investigated_at": "2026-08-21",
       "investigated_by": "Claude (Sonnet 5), dispatched via tri-comparison-ledger-sweep",
       "language": "javascript",
-      "last_reconciled_at": "2026-08-24T03:53:10Z",
+      "last_reconciled_at": "2026-08-24T21:13:20Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -7853,7 +7864,7 @@
       "investigated_at": "2026-08-22T11:40:48Z",
       "investigated_by": "claude-sonnet-5, dispatched via tri-comparison-ledger-sweep (direct investigation, no Gemini dispatch -- small occurrence counts, answer was directly checkable)",
       "language": "kotlin",
-      "last_reconciled_at": "2026-08-24T03:53:13Z",
+      "last_reconciled_at": "2026-08-24T21:13:23Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -7906,7 +7917,7 @@
       "investigated_at": "2026-08-22T11:40:48Z",
       "investigated_by": "claude-sonnet-5, dispatched via tri-comparison-ledger-sweep (direct investigation, no Gemini dispatch -- small occurrence counts, answer was directly checkable)",
       "language": "kotlin",
-      "last_reconciled_at": "2026-08-24T03:53:13Z",
+      "last_reconciled_at": "2026-08-24T21:13:23Z",
       "last_seen_count": 15,
       "last_seen_examples": [
         {
@@ -8020,7 +8031,7 @@
       "investigated_at": "2026-08-22T11:45:48Z",
       "investigated_by": "claude-sonnet-5, dispatched via tri-comparison-ledger-sweep (direct investigation, no Gemini dispatch)",
       "language": "kotlin",
-      "last_reconciled_at": "2026-08-24T03:53:13Z",
+      "last_reconciled_at": "2026-08-24T21:13:23Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -8053,7 +8064,7 @@
       "investigated_at": "2026-08-22T11:40:48Z",
       "investigated_by": "claude-sonnet-5, dispatched via tri-comparison-ledger-sweep (direct investigation, no Gemini dispatch -- small occurrence counts, answer was directly checkable)",
       "language": "kotlin",
-      "last_reconciled_at": "2026-08-24T03:53:13Z",
+      "last_reconciled_at": "2026-08-24T21:13:23Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -8087,7 +8098,7 @@
       "investigated_at": "2026-08-24T03:52:19Z",
       "investigated_by": "Antigravity (direct source read)",
       "language": "m4",
-      "last_reconciled_at": "2026-08-24T03:53:19Z",
+      "last_reconciled_at": "2026-08-24T21:13:29Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -8144,7 +8155,7 @@
       "investigated_at": "2026-08-24T03:52:19Z",
       "investigated_by": "Antigravity (direct source read)",
       "language": "m4",
-      "last_reconciled_at": "2026-08-24T03:53:19Z",
+      "last_reconciled_at": "2026-08-24T21:13:29Z",
       "last_seen_count": 76,
       "last_seen_examples": [
         {
@@ -8249,7 +8260,7 @@
       "investigated_at": "2026-08-24T03:52:19Z",
       "investigated_by": "Antigravity (direct source read)",
       "language": "m4",
-      "last_reconciled_at": "2026-08-24T03:53:19Z",
+      "last_reconciled_at": "2026-08-24T21:13:29Z",
       "last_seen_count": 36,
       "last_seen_examples": [
         {
@@ -8350,10 +8361,10 @@
         "ctags"
       ],
       "first_seen_at": "2026-08-18T22:44:35Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "makefile",
-      "last_reconciled_at": "2026-08-24T03:53:20Z",
+      "last_reconciled_at": "2026-08-24T21:13:30Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -8367,24 +8378,28 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy/tree-sitter correctly extract makefile targets like .PATH"
     },
     "matlab/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
-      "credit_tools": [],
-      "debit_tools": [],
+      "credit_tools": [
+        "gitgalaxy"
+      ],
+      "debit_tools": [
+        "tree_sitter"
+      ],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:35Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "matlab",
-      "last_reconciled_at": "2026-08-24T03:53:22Z",
+      "last_reconciled_at": "2026-08-24T21:13:32Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -8398,6 +8413,47 @@
         }
       ],
       "metric": "args",
+      "status": "validated",
+      "still_reproduces": true,
+      "symbol_type": "function",
+      "verdict": "GitGalaxy regex splits args more robustly than tree-sitter on MATLAB edge cases."
+    },
+    "objective-c/function/existence/agree[ctags,gitgalaxy]_vs[tree_sitter]": {
+      "agreeing_tools": [
+        "ctags",
+        "gitgalaxy"
+      ],
+      "credit_tools": [],
+      "dissenting_tools": [
+        "tree_sitter"
+      ],
+      "first_seen_at": "2026-08-24T19:56:08Z",
+      "investigated_at": null,
+      "investigated_by": null,
+      "language": "objective-c",
+      "last_reconciled_at": "2026-08-24T21:13:33Z",
+      "last_seen_count": 2,
+      "last_seen_examples": [
+        {
+          "file_path": "worldwideweb/HyperText.m",
+          "name": "next_input_block",
+          "readings": {
+            "ctags": 1148,
+            "gitgalaxy": 1147,
+            "tree_sitter": null
+          }
+        },
+        {
+          "file_path": "worldwideweb/HyperText.m",
+          "name": "appendEndBlock",
+          "readings": {
+            "ctags": 1290,
+            "gitgalaxy": 1289,
+            "tree_sitter": null
+          }
+        }
+      ],
+      "metric": "existence",
       "status": "unvalidated",
       "still_reproduces": true,
       "symbol_type": "function",
@@ -8407,18 +8463,20 @@
       "agreeing_tools": [
         "ctags"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "ctags"
+      ],
       "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:35Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "objective-c",
-      "last_reconciled_at": "2026-08-24T03:53:24Z",
-      "last_seen_count": 91,
+      "last_reconciled_at": "2026-08-24T21:13:33Z",
+      "last_seen_count": 89,
       "last_seen_examples": [
         {
           "file_path": "worldwideweb/Anchor.m",
@@ -8512,10 +8570,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy misses methods with brace on the next line."
     },
     "objective-c/function/existence/agree[gitgalaxy,tree_sitter]_vs[ctags]": {
       "agreeing_tools": [
@@ -8528,10 +8586,10 @@
         "ctags"
       ],
       "first_seen_at": "2026-08-18T22:44:35Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "objective-c",
-      "last_reconciled_at": "2026-08-24T03:53:24Z",
+      "last_reconciled_at": "2026-08-24T21:13:33Z",
       "last_seen_count": 104,
       "last_seen_examples": [
         {
@@ -8626,26 +8684,28 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "Ctags incorrectly extracts brace instead of function name."
     },
     "objective-c/function/existence/agree[gitgalaxy]_vs[ctags,tree_sitter]": {
       "agreeing_tools": [
         "gitgalaxy"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "gitgalaxy"
+      ],
       "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:35Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "objective-c",
-      "last_reconciled_at": "2026-08-24T03:53:24Z",
+      "last_reconciled_at": "2026-08-24T21:13:33Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -8659,10 +8719,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts method."
     },
     "objective-c/function/existence/agree[gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
@@ -8676,7 +8736,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "objective-c",
-      "last_reconciled_at": "2026-08-24T03:53:24Z",
+      "last_reconciled_at": "2026-08-24T21:13:33Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -8698,17 +8758,19 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "tree_sitter"
+      ],
       "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
       ],
       "first_seen_at": "2026-08-18T22:44:35Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "objective-c",
-      "last_reconciled_at": "2026-08-24T03:53:24Z",
+      "last_reconciled_at": "2026-08-24T21:13:33Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -8731,10 +8793,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy misses method missing return type or brace next line."
     },
     "objective-c/function/existence/agree[tree_sitter]_vs[gitgalaxy]": {
       "agreeing_tools": [
@@ -8748,7 +8810,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "objective-c",
-      "last_reconciled_at": "2026-08-24T03:53:24Z",
+      "last_reconciled_at": "2026-08-24T21:13:33Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -8785,10 +8847,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-19T14:48:22Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "perl",
-      "last_reconciled_at": "2026-08-24T03:53:30Z",
+      "last_reconciled_at": "2026-08-24T21:13:40Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -8802,10 +8864,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "class",
-      "verdict": null
+      "verdict": "GitGalaxy/ctags correctly extract package declarations."
     },
     "perl/class/existence/agree[gitgalaxy]_vs[ctags,tree_sitter]": {
       "agreeing_tools": [
@@ -8821,7 +8883,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "perl",
-      "last_reconciled_at": "2026-08-24T03:53:30Z",
+      "last_reconciled_at": "2026-08-24T21:13:40Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -8852,7 +8914,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "perl",
-      "last_reconciled_at": "2026-08-24T03:53:30Z",
+      "last_reconciled_at": "2026-08-24T21:13:40Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -8879,10 +8941,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:39Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "perl",
-      "last_reconciled_at": "2026-08-24T03:53:30Z",
+      "last_reconciled_at": "2026-08-24T21:13:40Z",
       "last_seen_count": 64,
       "last_seen_examples": [
         {
@@ -8977,10 +9039,10 @@
         }
       ],
       "metric": "args",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy regex splits args appropriately."
     },
     "perl/function/existence/agree[ctags]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [
@@ -8993,10 +9055,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:39Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "perl",
-      "last_reconciled_at": "2026-08-24T03:53:30Z",
+      "last_reconciled_at": "2026-08-24T21:13:40Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -9064,10 +9126,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "Ctags incorrectly truncates subroutine names containing package separators (::)."
     },
     "perl/function/existence/agree[gitgalaxy,tree_sitter]_vs[ctags]": {
       "agreeing_tools": [
@@ -9080,10 +9142,10 @@
         "ctags"
       ],
       "first_seen_at": "2026-08-18T22:44:39Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "perl",
-      "last_reconciled_at": "2026-08-24T03:53:30Z",
+      "last_reconciled_at": "2026-08-24T21:13:40Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -9151,26 +9213,28 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy/tree-sitter correctly extract full subroutine names with package separators."
     },
     "perl/function/existence/agree[gitgalaxy]_vs[ctags,tree_sitter]": {
       "agreeing_tools": [
         "gitgalaxy"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "gitgalaxy"
+      ],
       "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:39Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "perl",
-      "last_reconciled_at": "2026-08-24T03:53:30Z",
+      "last_reconciled_at": "2026-08-24T21:13:40Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9184,10 +9248,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts subroutine."
     },
     "perl/function/existence/agree[gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
@@ -9201,7 +9265,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "perl",
-      "last_reconciled_at": "2026-08-24T03:53:30Z",
+      "last_reconciled_at": "2026-08-24T21:13:40Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9223,17 +9287,19 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "tree_sitter"
+      ],
       "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
       ],
       "first_seen_at": "2026-08-18T22:44:39Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "perl",
-      "last_reconciled_at": "2026-08-24T03:53:30Z",
+      "last_reconciled_at": "2026-08-24T21:13:40Z",
       "last_seen_count": 122,
       "last_seen_examples": [
         {
@@ -9328,10 +9394,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy misses subroutines with prototypes or signatures."
     },
     "perl/function/existence/agree[tree_sitter]_vs[gitgalaxy]": {
       "agreeing_tools": [
@@ -9345,7 +9411,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "perl",
-      "last_reconciled_at": "2026-08-24T03:53:30Z",
+      "last_reconciled_at": "2026-08-24T21:13:40Z",
       "last_seen_count": 122,
       "last_seen_examples": [
         {
@@ -9446,10 +9512,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:40Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "php",
-      "last_reconciled_at": "2026-08-24T03:53:35Z",
+      "last_reconciled_at": "2026-08-24T21:13:44Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9463,10 +9529,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "class",
-      "verdict": null
+      "verdict": "Ctags incorrectly extracts synthetic AnonymousClass artifacts as real named classes. GitGalaxy and tree-sitter are correct to ignore them."
     },
     "php/function/existence/agree[ctags,gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
@@ -9479,10 +9545,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:40Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "php",
-      "last_reconciled_at": "2026-08-24T03:53:35Z",
+      "last_reconciled_at": "2026-08-24T21:13:44Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9496,10 +9562,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy/ctags correctly extract function."
     },
     "php/function/existence/agree[gitgalaxy,tree_sitter]_vs[ctags]": {
       "agreeing_tools": [
@@ -9515,7 +9581,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "php",
-      "last_reconciled_at": "2026-08-24T03:53:35Z",
+      "last_reconciled_at": "2026-08-24T21:13:44Z",
       "last_seen_count": 68,
       "last_seen_examples": [
         {
@@ -9627,7 +9693,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "php",
-      "last_reconciled_at": "2026-08-24T03:53:35Z",
+      "last_reconciled_at": "2026-08-24T21:13:44Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9656,10 +9722,10 @@
         "ctags"
       ],
       "first_seen_at": "2026-08-18T22:44:41Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "powershell",
-      "last_reconciled_at": "2026-08-24T03:53:37Z",
+      "last_reconciled_at": "2026-08-24T21:13:46Z",
       "last_seen_count": 7,
       "last_seen_examples": [
         {
@@ -9727,10 +9793,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "class",
-      "verdict": null
+      "verdict": "GitGalaxy/tree-sitter correctly extract classes."
     },
     "powershell/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
@@ -9741,10 +9807,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:41Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "powershell",
-      "last_reconciled_at": "2026-08-24T03:53:37Z",
+      "last_reconciled_at": "2026-08-24T21:13:46Z",
       "last_seen_count": 5,
       "last_seen_examples": [
         {
@@ -9794,10 +9860,10 @@
         }
       ],
       "metric": "args",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy extracts args accurately."
     },
     "powershell/function/existence/agree[ctags,gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
@@ -9810,10 +9876,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:41Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "powershell",
-      "last_reconciled_at": "2026-08-24T03:53:37Z",
+      "last_reconciled_at": "2026-08-24T21:13:46Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9827,10 +9893,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts function."
     },
     "powershell/function/existence/agree[gitgalaxy,tree_sitter]_vs[ctags]": {
       "agreeing_tools": [
@@ -9843,10 +9909,10 @@
         "ctags"
       ],
       "first_seen_at": "2026-08-18T22:44:41Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "powershell",
-      "last_reconciled_at": "2026-08-24T03:53:37Z",
+      "last_reconciled_at": "2026-08-24T21:13:46Z",
       "last_seen_count": 16,
       "last_seen_examples": [
         {
@@ -9941,10 +10007,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts function."
     },
     "powershell/function/existence/agree[gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
@@ -9958,7 +10024,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "powershell",
-      "last_reconciled_at": "2026-08-24T03:53:37Z",
+      "last_reconciled_at": "2026-08-24T21:13:46Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -9990,7 +10056,7 @@
       "investigated_at": "2026-08-21T03:23:52Z",
       "investigated_by": "claude sonnet 5, tri-comparison-ledger-sweep (direct investigation, no dispatch needed)",
       "language": "python",
-      "last_reconciled_at": "2026-08-24T03:53:46Z",
+      "last_reconciled_at": "2026-08-24T21:13:56Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -10048,7 +10114,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "python",
-      "last_reconciled_at": "2026-08-24T03:53:46Z",
+      "last_reconciled_at": "2026-08-24T21:13:56Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -10104,7 +10170,7 @@
       "investigated_at": "2026-08-21T03:23:52Z",
       "investigated_by": "claude sonnet 5, tri-comparison-ledger-sweep (direct investigation, no dispatch needed)",
       "language": "python",
-      "last_reconciled_at": "2026-08-24T03:53:46Z",
+      "last_reconciled_at": "2026-08-24T21:13:56Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -10137,8 +10203,8 @@
       "investigated_at": "2026-08-21T12:03:03Z",
       "investigated_by": "claude sonnet 5, tri-comparison-ledger-sweep (direct investigation, no dispatch needed)",
       "language": "python",
-      "last_reconciled_at": "2026-08-24T03:53:46Z",
-      "last_seen_count": 100,
+      "last_reconciled_at": "2026-08-24T21:13:56Z",
+      "last_seen_count": 95,
       "last_seen_examples": [
         {
           "file_path": "cython/MemoryView.pxd",
@@ -10253,9 +10319,36 @@
       "investigated_at": "2026-08-21T12:03:03Z",
       "investigated_by": "claude sonnet 5, tri-comparison-ledger-sweep (direct investigation, no dispatch needed)",
       "language": "python",
-      "last_reconciled_at": "2026-08-24T03:53:46Z",
-      "last_seen_count": 1,
+      "last_reconciled_at": "2026-08-24T21:13:56Z",
+      "last_seen_count": 5,
       "last_seen_examples": [
+        {
+          "file_path": "cython/MemoryView.pxd",
+          "name": "get_item_pointer",
+          "readings": {
+            "ctags": 77,
+            "gitgalaxy": null,
+            "tree_sitter": null
+          }
+        },
+        {
+          "file_path": "cython/MemoryView.pyx",
+          "name": "copy_data_to_temp",
+          "readings": {
+            "ctags": 1191,
+            "gitgalaxy": null,
+            "tree_sitter": null
+          }
+        },
+        {
+          "file_path": "cython/MemoryView.pyx",
+          "name": "get_item_pointer",
+          "readings": {
+            "ctags": 411,
+            "gitgalaxy": null,
+            "tree_sitter": null
+          }
+        },
         {
           "file_path": "cython/MemoryView.pyx",
           "name": "get_slice_from_memview",
@@ -10264,13 +10357,90 @@
             "gitgalaxy": null,
             "tree_sitter": null
           }
+        },
+        {
+          "file_path": "cython/MemoryView.pyx",
+          "name": "pybuffer_index",
+          "readings": {
+            "ctags": 880,
+            "gitgalaxy": null,
+            "tree_sitter": null
+          }
         }
       ],
       "metric": "existence",
       "status": "validated",
-      "still_reproduces": false,
+      "still_reproduces": true,
       "symbol_type": "function",
       "verdict": "Confirmed real GitGalaxy engine defect, fixed in the same pass (issue #1999). ctags alone correctly found real Cython cdef/cpdef module-level function definitions in cython/MemoryView.pyx (52) and cython/MemoryView.pxd (16) -- 68/68 occurrences, confirmed via a direct gather_language() name-diff across the whole corpus, not just the ledger's capped 10-example sample. GitGalaxy's func_start regex only recognized the literal 'def' keyword, so every cdef/cpdef-prefixed function (no 'def' at all) was invisible. tree-sitter-python structurally can't recognize cdef-prefixed functions either (no grammar concept of Cython dialect syntax -- same mechanism as Claim 2 in docs/why_gitgalaxy_beats_ast_here.md). FIXED: language_standards.py's python func_start regex gained a second alternative matching cdef/cpdef signatures (excluding cdef class/struct/enum/union/extern/packed/fused, which are declarations not functions). FOLLOW-UP FIX (2026-08-21): the initial fix left one function, get_slice_from_memview, still missing --its return type is a Cython Tempita codegen placeholder (`{{memviewslice_name}}`). Closed in two steps: (1) widened func_start's return-type token to also accept a bounded `{{identifier}}` placeholder form; (2) discovered and fixed a SECOND, separate bug this exposed in the shared `_extract_name` name-normalizer (`detector.py`) -- its generic split('{') truncation step mistook the placeholder's own `{{`/`}}` for a C-style body-opening brace, cutting the match down to the bogus name 'cdef' instead of the real 'get_slice_from_memview'. Both fixes verified against the real scan pipeline (not just the isolated regex) and the full ~80-repo crucible corpus (both golden masters re-blessed twice, diffs each time scoped only to python/cython). GitGalaxy now finds all 84 real functions in this file (100% recall vs. ctags) -- this shape no longer reproduces."
+    },
+    "python/function/existence/agree[gitgalaxy]_vs[ctags,tree_sitter]": {
+      "agreeing_tools": [
+        "gitgalaxy"
+      ],
+      "credit_tools": [],
+      "dissenting_tools": [
+        "ctags",
+        "tree_sitter"
+      ],
+      "first_seen_at": "2026-08-24T19:56:31Z",
+      "investigated_at": null,
+      "investigated_by": null,
+      "language": "python",
+      "last_reconciled_at": "2026-08-24T21:13:56Z",
+      "last_seen_count": 5,
+      "last_seen_examples": [
+        {
+          "file_path": "cython/MemoryView.pxd",
+          "name": "*get_item_pointer",
+          "readings": {
+            "ctags": null,
+            "gitgalaxy": 77,
+            "tree_sitter": null
+          }
+        },
+        {
+          "file_path": "cython/MemoryView.pyx",
+          "name": "*pybuffer_index",
+          "readings": {
+            "ctags": null,
+            "gitgalaxy": 880,
+            "tree_sitter": null
+          }
+        },
+        {
+          "file_path": "cython/MemoryView.pyx",
+          "name": "*copy_data_to_temp",
+          "readings": {
+            "ctags": null,
+            "gitgalaxy": 1191,
+            "tree_sitter": null
+          }
+        },
+        {
+          "file_path": "cython/MemoryView.pyx",
+          "name": "*get_slice_from_memview",
+          "readings": {
+            "ctags": null,
+            "gitgalaxy": 1037,
+            "tree_sitter": null
+          }
+        },
+        {
+          "file_path": "cython/MemoryView.pyx",
+          "name": "*get_item_pointer",
+          "readings": {
+            "ctags": null,
+            "gitgalaxy": 411,
+            "tree_sitter": null
+          }
+        }
+      ],
+      "metric": "existence",
+      "status": "unvalidated",
+      "still_reproduces": true,
+      "symbol_type": "function",
+      "verdict": null
     },
     "python/function/existence/agree[gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
@@ -10284,7 +10454,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "python",
-      "last_reconciled_at": "2026-08-24T03:53:46Z",
+      "last_reconciled_at": "2026-08-24T21:13:56Z",
       "last_seen_count": 100,
       "last_seen_examples": [
         {
@@ -10378,17 +10548,19 @@
       "agreeing_tools": [
         "ctags"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "ctags"
+      ],
       "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:45Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "ruby",
-      "last_reconciled_at": "2026-08-24T03:53:47Z",
+      "last_reconciled_at": "2026-08-24T21:13:57Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -10411,10 +10583,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "class",
-      "verdict": null
+      "verdict": "GitGalaxy/tree-sitter miss classes containing module scope operators."
     },
     "ruby/class/existence/agree[gitgalaxy,tree_sitter]_vs[ctags]": {
       "agreeing_tools": [
@@ -10427,10 +10599,10 @@
         "ctags"
       ],
       "first_seen_at": "2026-08-18T22:44:45Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "ruby",
-      "last_reconciled_at": "2026-08-24T03:53:47Z",
+      "last_reconciled_at": "2026-08-24T21:13:57Z",
       "last_seen_count": 6,
       "last_seen_examples": [
         {
@@ -10489,10 +10661,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "class",
-      "verdict": null
+      "verdict": "GitGalaxy/tree-sitter correctly extract class << self."
     },
     "ruby/function/args/agree[ctags,gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
@@ -10505,10 +10677,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:45Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "ruby",
-      "last_reconciled_at": "2026-08-24T03:53:47Z",
+      "last_reconciled_at": "2026-08-24T21:13:57Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -10540,10 +10712,10 @@
         }
       ],
       "metric": "args",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy/ctags accurately split args."
     },
     "ruby/function/args/agree[ctags,tree_sitter]_vs[gitgalaxy]": {
       "agreeing_tools": [
@@ -10556,10 +10728,10 @@
         "gitgalaxy"
       ],
       "first_seen_at": "2026-08-18T22:44:45Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "ruby",
-      "last_reconciled_at": "2026-08-24T03:53:47Z",
+      "last_reconciled_at": "2026-08-24T21:13:57Z",
       "last_seen_count": 6,
       "last_seen_examples": [
         {
@@ -10618,10 +10790,10 @@
         }
       ],
       "metric": "args",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy regex misses some trailing args."
     },
     "ruby/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
@@ -10634,7 +10806,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "ruby",
-      "last_reconciled_at": "2026-08-24T03:53:47Z",
+      "last_reconciled_at": "2026-08-24T21:13:57Z",
       "last_seen_count": 9,
       "last_seen_examples": [
         {
@@ -10729,7 +10901,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 14,
       "last_seen_examples": [
         {
@@ -10843,7 +11015,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved directly via live ctags run, no dispatch)",
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -10896,7 +11068,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 25,
       "last_seen_examples": [
         {
@@ -11008,7 +11180,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 25,
       "last_seen_examples": [
         {
@@ -11111,7 +11283,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 3,
       "last_seen_examples": [
         {
@@ -11162,7 +11334,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep, 2 rounds with self-correction), confirmed by Claude Sonnet 5",
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 21,
       "last_seen_examples": [
         {
@@ -11274,7 +11446,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Gemini (dispatched via tri-comparison-ledger-sweep), confirmed by Claude Sonnet 5",
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 21,
       "last_seen_examples": [
         {
@@ -11387,7 +11559,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 83,
       "last_seen_examples": [
         {
@@ -11500,7 +11672,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -11533,7 +11705,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved directly via live ctags run, no dispatch)",
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -11568,7 +11740,7 @@
       "investigated_at": "2026-08-19T00:00:00Z",
       "investigated_by": "Claude Sonnet 5 (resolved from existing Claim 6 documentation, no dispatch)",
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 152,
       "last_seen_examples": [
         {
@@ -11680,7 +11852,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "rust",
-      "last_reconciled_at": "2026-08-24T03:53:52Z",
+      "last_reconciled_at": "2026-08-24T21:14:01Z",
       "last_seen_count": 152,
       "last_seen_examples": [
         {
@@ -11772,17 +11944,21 @@
     },
     "scala/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
-      "credit_tools": [],
-      "debit_tools": [],
+      "credit_tools": [
+        "gitgalaxy"
+      ],
+      "debit_tools": [
+        "tree_sitter"
+      ],
       "dissenting_tools": [
         "gitgalaxy",
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:47Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "scala",
-      "last_reconciled_at": "2026-08-24T03:53:54Z",
+      "last_reconciled_at": "2026-08-24T21:14:04Z",
       "last_seen_count": 16,
       "last_seen_examples": [
         {
@@ -11867,10 +12043,10 @@
         }
       ],
       "metric": "args",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy counts args accurately."
     },
     "scheme/function/existence/agree[ctags]_vs[gitgalaxy]": {
       "agreeing_tools": [
@@ -11885,7 +12061,7 @@
       "investigated_at": "2026-08-20",
       "investigated_by": "gemini-3.1-pro-high (agy), dispatched via tri-comparison-ledger-sweep, reviewed and fixed by claude-sonnet-5",
       "language": "scheme",
-      "last_reconciled_at": "2026-08-24T03:53:58Z",
+      "last_reconciled_at": "2026-08-24T21:14:08Z",
       "last_seen_count": 84,
       "last_seen_examples": [
         {
@@ -11979,15 +12155,20 @@
       "agreeing_tools": [
         "gitgalaxy"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "gitgalaxy"
+      ],
+      "debit_tools": [
+        "ctags"
+      ],
       "dissenting_tools": [
         "ctags"
       ],
       "first_seen_at": "2026-08-20T16:34:28Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "scheme",
-      "last_reconciled_at": "2026-08-24T03:53:58Z",
+      "last_reconciled_at": "2026-08-24T21:14:08Z",
       "last_seen_count": 50,
       "last_seen_examples": [
         {
@@ -12000,7 +12181,7 @@
         },
         {
           "file_path": "racket/cpnanopass.ss",
-          "name": "compatible-fv",
+          "name": "compatible-fv?",
           "readings": {
             "ctags": null,
             "gitgalaxy": 547
@@ -12048,7 +12229,7 @@
         },
         {
           "file_path": "racket/cpnanopass.ss",
-          "name": "fp-lvalue",
+          "name": "fp-lvalue?",
           "readings": {
             "ctags": null,
             "gitgalaxy": 3335
@@ -12056,7 +12237,7 @@
         },
         {
           "file_path": "racket/cpnanopass.ss",
-          "name": "fp-lvalue",
+          "name": "fp-lvalue?",
           "readings": {
             "ctags": null,
             "gitgalaxy": 3682
@@ -12072,10 +12253,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts nested define blocks."
     },
     "shell/function/existence/agree[ctags]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [
@@ -12088,10 +12269,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-19T14:48:52Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "shell",
-      "last_reconciled_at": "2026-08-24T03:53:59Z",
+      "last_reconciled_at": "2026-08-24T21:14:09Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -12105,25 +12286,29 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "Ctags falsely extracts array assignments as functions."
     },
     "solidity/function/existence/agree[gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
         "gitgalaxy"
       ],
-      "credit_tools": [],
-      "debit_tools": [],
+      "credit_tools": [
+        "gitgalaxy"
+      ],
+      "debit_tools": [
+        "tree_sitter"
+      ],
       "dissenting_tools": [
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:50Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "solidity",
-      "last_reconciled_at": "2026-08-24T03:54:01Z",
+      "last_reconciled_at": "2026-08-24T21:14:11Z",
       "last_seen_count": 6,
       "last_seen_examples": [
         {
@@ -12176,10 +12361,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts constructors."
     },
     "swift/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
@@ -12190,12 +12375,20 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:50Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "swift",
-      "last_reconciled_at": "2026-08-24T03:54:02Z",
-      "last_seen_count": 1,
+      "last_reconciled_at": "2026-08-24T21:14:12Z",
+      "last_seen_count": 2,
       "last_seen_examples": [
+        {
+          "file_path": "alamofire/Request.swift",
+          "name": "==",
+          "readings": {
+            "gitgalaxy": 0,
+            "tree_sitter": 2
+          }
+        },
         {
           "file_path": "alamofire/Session.swift",
           "name": "performSetupOperations",
@@ -12206,25 +12399,27 @@
         }
       ],
       "metric": "args",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy counts args accurately."
     },
     "swift/function/existence/agree[gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
         "gitgalaxy"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "gitgalaxy"
+      ],
       "debit_tools": [],
       "dissenting_tools": [
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:50Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "swift",
-      "last_reconciled_at": "2026-08-24T03:54:02Z",
+      "last_reconciled_at": "2026-08-24T21:14:12Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -12237,25 +12432,27 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts generic functions."
     },
     "swift/function/existence/agree[tree_sitter]_vs[gitgalaxy]": {
       "agreeing_tools": [
         "tree_sitter"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "tree_sitter"
+      ],
       "debit_tools": [],
       "dissenting_tools": [
         "gitgalaxy"
       ],
       "first_seen_at": "2026-08-18T22:44:50Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "swift",
-      "last_reconciled_at": "2026-08-24T03:54:02Z",
+      "last_reconciled_at": "2026-08-24T21:14:12Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -12268,10 +12465,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
-      "still_reproduces": true,
+      "status": "validated",
+      "still_reproduces": false,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy misses operator overloading functions."
     },
     "tcl/function/existence/agree[ctags,gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
@@ -12284,10 +12481,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:51Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "tcl",
-      "last_reconciled_at": "2026-08-24T03:54:04Z",
+      "last_reconciled_at": "2026-08-24T21:14:14Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -12301,10 +12498,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts proc."
     },
     "tcl/function/existence/agree[ctags,tree_sitter]_vs[gitgalaxy]": {
       "agreeing_tools": [
@@ -12317,10 +12514,10 @@
         "gitgalaxy"
       ],
       "first_seen_at": "2026-08-18T22:44:51Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "tcl",
-      "last_reconciled_at": "2026-08-24T03:54:04Z",
+      "last_reconciled_at": "2026-08-24T21:14:14Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -12343,10 +12540,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy misses proc with nested braces in args."
     },
     "tcl/function/existence/agree[gitgalaxy,tree_sitter]_vs[ctags]": {
       "agreeing_tools": [
@@ -12359,10 +12556,10 @@
         "ctags"
       ],
       "first_seen_at": "2026-08-18T22:44:51Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "tcl",
-      "last_reconciled_at": "2026-08-24T03:54:04Z",
+      "last_reconciled_at": "2026-08-24T21:14:14Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -12403,26 +12600,28 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts proc."
     },
     "tcl/function/existence/agree[gitgalaxy]_vs[ctags,tree_sitter]": {
       "agreeing_tools": [
         "gitgalaxy"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "gitgalaxy"
+      ],
       "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:44:51Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "tcl",
-      "last_reconciled_at": "2026-08-24T03:54:04Z",
+      "last_reconciled_at": "2026-08-24T21:14:14Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -12436,10 +12635,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts proc with double-quote body."
     },
     "tcl/function/existence/agree[gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
@@ -12453,7 +12652,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "tcl",
-      "last_reconciled_at": "2026-08-24T03:54:04Z",
+      "last_reconciled_at": "2026-08-24T21:14:14Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -12492,7 +12691,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "tcl",
-      "last_reconciled_at": "2026-08-24T03:54:04Z",
+      "last_reconciled_at": "2026-08-24T21:14:14Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -12532,7 +12731,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "tcl",
-      "last_reconciled_at": "2026-08-24T03:54:04Z",
+      "last_reconciled_at": "2026-08-24T21:14:14Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -12569,10 +12768,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-19T23:30:21Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "typescript",
-      "last_reconciled_at": "2026-08-24T03:54:10Z",
+      "last_reconciled_at": "2026-08-24T21:14:20Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -12595,10 +12794,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "class",
-      "verdict": null
+      "verdict": "Ctags incorrectly extracts implements/extends as classes."
     },
     "typescript/class/existence/agree[gitgalaxy,tree_sitter]_vs[ctags]": {
       "agreeing_tools": [
@@ -12611,10 +12810,10 @@
         "ctags"
       ],
       "first_seen_at": "2026-08-18T22:45:07Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "typescript",
-      "last_reconciled_at": "2026-08-24T03:54:10Z",
+      "last_reconciled_at": "2026-08-24T21:14:20Z",
       "last_seen_count": 501,
       "last_seen_examples": [
         {
@@ -12709,10 +12908,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "class",
-      "verdict": null
+      "verdict": "GitGalaxy/tree-sitter correctly extract enum as class."
     },
     "typescript/function/args/agree[none]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [],
@@ -12723,10 +12922,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-19T23:30:21Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "typescript",
-      "last_reconciled_at": "2026-08-24T03:54:10Z",
+      "last_reconciled_at": "2026-08-24T21:14:20Z",
       "last_seen_count": 4,
       "last_seen_examples": [
         {
@@ -12767,10 +12966,10 @@
         }
       ],
       "metric": "args",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy properly splits constructor args."
     },
     "typescript/function/existence/agree[ctags,gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
@@ -12785,7 +12984,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "typescript",
-      "last_reconciled_at": "2026-08-24T03:54:10Z",
+      "last_reconciled_at": "2026-08-24T21:14:20Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -12815,10 +13014,10 @@
         "gitgalaxy"
       ],
       "first_seen_at": "2026-08-18T22:45:07Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "typescript",
-      "last_reconciled_at": "2026-08-24T03:54:10Z",
+      "last_reconciled_at": "2026-08-24T21:14:20Z",
       "last_seen_count": 9,
       "last_seen_examples": [
         {
@@ -12904,10 +13103,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy misses generic functions."
     },
     "typescript/function/existence/agree[ctags]_vs[gitgalaxy,tree_sitter]": {
       "agreeing_tools": [
@@ -12920,10 +13119,10 @@
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:45:07Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "typescript",
-      "last_reconciled_at": "2026-08-24T03:54:10Z",
+      "last_reconciled_at": "2026-08-24T21:14:20Z",
       "last_seen_count": 61,
       "last_seen_examples": [
         {
@@ -13018,10 +13217,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "Ctags falsely extracts interface fields as functions."
     },
     "typescript/function/existence/agree[gitgalaxy,tree_sitter]_vs[ctags]": {
       "agreeing_tools": [
@@ -13034,11 +13233,11 @@
         "ctags"
       ],
       "first_seen_at": "2026-08-18T22:45:07Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "typescript",
-      "last_reconciled_at": "2026-08-24T03:54:10Z",
-      "last_seen_count": 1907,
+      "last_reconciled_at": "2026-08-24T21:14:20Z",
+      "last_seen_count": 1921,
       "last_seen_examples": [
         {
           "file_path": "assemblyscript/ast.ts",
@@ -13132,26 +13331,28 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts methods."
     },
     "typescript/function/existence/agree[gitgalaxy]_vs[ctags,tree_sitter]": {
       "agreeing_tools": [
         "gitgalaxy"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "gitgalaxy"
+      ],
       "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "tree_sitter"
       ],
       "first_seen_at": "2026-08-18T22:45:07Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "typescript",
-      "last_reconciled_at": "2026-08-24T03:54:10Z",
+      "last_reconciled_at": "2026-08-24T21:14:20Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -13174,10 +13375,10 @@
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy correctly extracts abstract methods."
     },
     "typescript/function/existence/agree[gitgalaxy]_vs[tree_sitter]": {
       "agreeing_tools": [
@@ -13191,7 +13392,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "typescript",
-      "last_reconciled_at": "2026-08-24T03:54:10Z",
+      "last_reconciled_at": "2026-08-24T21:14:20Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -13221,115 +13422,117 @@
       "agreeing_tools": [
         "tree_sitter"
       ],
-      "credit_tools": [],
+      "credit_tools": [
+        "tree_sitter"
+      ],
       "debit_tools": [],
       "dissenting_tools": [
         "ctags",
         "gitgalaxy"
       ],
       "first_seen_at": "2026-08-18T22:45:07Z",
-      "investigated_at": null,
-      "investigated_by": null,
+      "investigated_at": "2026-08-24T04:14:26Z",
+      "investigated_by": "Antigravity (direct sweep)",
       "language": "typescript",
-      "last_reconciled_at": "2026-08-24T03:54:10Z",
-      "last_seen_count": 174,
+      "last_reconciled_at": "2026-08-24T21:14:20Z",
+      "last_seen_count": 160,
       "last_seen_examples": [
         {
-          "file_path": "fp-ts/Either.ts",
-          "name": "_traverse",
+          "file_path": "playwright/frames.ts",
+          "name": "predicate",
           "readings": {
             "ctags": null,
             "gitgalaxy": null,
-            "tree_sitter": 181
+            "tree_sitter": 1526
           }
         },
         {
-          "file_path": "fp-ts/Either.ts",
-          "name": "tryCatchK",
+          "file_path": "playwright/frames.ts",
+          "name": "abort",
           "readings": {
             "ctags": null,
             "gitgalaxy": null,
-            "tree_sitter": 1408
+            "tree_sitter": 1570
           }
         },
         {
-          "file_path": "fp-ts/Either.ts",
-          "name": "fromNullableK",
+          "file_path": "vscode/async.ts",
+          "name": "constructor",
           "readings": {
             "ctags": null,
             "gitgalaxy": null,
-            "tree_sitter": 1421
+            "tree_sitter": 2528
           }
         },
         {
-          "file_path": "fp-ts/Either.ts",
-          "name": "chainNullableK",
+          "file_path": "vscode/async.ts",
+          "name": "constructor",
           "readings": {
             "ctags": null,
             "gitgalaxy": null,
-            "tree_sitter": 1436
+            "tree_sitter": 2551
           }
         },
         {
-          "file_path": "fp-ts/Either.ts",
-          "name": "traverseReadonlyArrayWithIndex",
+          "file_path": "vscode/async.ts",
+          "name": "cancel",
           "readings": {
             "ctags": null,
             "gitgalaxy": null,
-            "tree_sitter": 1605
+            "tree_sitter": 2535
           }
         },
         {
-          "file_path": "fp-ts/Either.ts",
-          "name": "traverseArray",
+          "file_path": "vscode/async.ts",
+          "name": "return",
           "readings": {
             "ctags": null,
             "gitgalaxy": null,
-            "tree_sitter": 1628
+            "tree_sitter": 2512
           }
         },
         {
-          "file_path": "fp-ts/TaskEither.ts",
-          "name": "tryCatchK",
+          "file_path": "vscode/async.ts",
+          "name": "catch",
           "readings": {
             "ctags": null,
             "gitgalaxy": null,
-            "tree_sitter": 266
+            "tree_sitter": 74
           }
         },
         {
-          "file_path": "fp-ts/TaskEither.ts",
-          "name": "fromTaskOptionK",
+          "file_path": "vscode/codeEditorWidget.ts",
+          "name": "cursorStateComputer",
           "readings": {
             "ctags": null,
             "gitgalaxy": null,
-            "tree_sitter": 393
+            "tree_sitter": 1295
           }
         },
         {
-          "file_path": "fp-ts/TaskEither.ts",
-          "name": "fromIOEitherK",
+          "file_path": "vscode/extHost.api.impl.ts",
+          "name": "dispose",
           "readings": {
             "ctags": null,
             "gitgalaxy": null,
-            "tree_sitter": 428
+            "tree_sitter": 1635
           }
         },
         {
-          "file_path": "fp-ts/TaskEither.ts",
-          "name": "traverseReadonlyNonEmptyArrayWithIndex",
+          "file_path": "vscode/extHost.api.impl.ts",
+          "name": "report",
           "readings": {
             "ctags": null,
             "gitgalaxy": null,
-            "tree_sitter": 1600
+            "tree_sitter": 927
           }
         }
       ],
       "metric": "existence",
-      "status": "unvalidated",
+      "status": "validated",
       "still_reproduces": true,
       "symbol_type": "function",
-      "verdict": null
+      "verdict": "GitGalaxy misses arrow functions."
     },
     "typescript/function/existence/agree[tree_sitter]_vs[gitgalaxy]": {
       "agreeing_tools": [
@@ -13343,7 +13546,7 @@
       "investigated_at": null,
       "investigated_by": null,
       "language": "typescript",
-      "last_reconciled_at": "2026-08-24T03:54:10Z",
+      "last_reconciled_at": "2026-08-24T21:14:20Z",
       "last_seen_count": 183,
       "last_seen_examples": [
         {
@@ -13450,7 +13653,7 @@
       "investigated_at": "2026-08-23T18:02:16Z",
       "investigated_by": "Antigravity",
       "language": "zig",
-      "last_reconciled_at": "2026-08-24T03:54:19Z",
+      "last_reconciled_at": "2026-08-24T21:14:29Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
@@ -13485,7 +13688,7 @@
       "investigated_at": "2026-08-23T18:02:16Z",
       "investigated_by": "Antigravity",
       "language": "zig",
-      "last_reconciled_at": "2026-08-24T03:54:19Z",
+      "last_reconciled_at": "2026-08-24T21:14:29Z",
       "last_seen_count": 2,
       "last_seen_examples": [
         {
@@ -13528,7 +13731,7 @@
       "investigated_at": "2026-08-23T18:02:16Z",
       "investigated_by": "Antigravity",
       "language": "zig",
-      "last_reconciled_at": "2026-08-24T03:54:19Z",
+      "last_reconciled_at": "2026-08-24T21:14:29Z",
       "last_seen_count": 1,
       "last_seen_examples": [
         {
