@@ -63,7 +63,7 @@ for the same metrics tracked over time across pushes to main.
 | Solidity | 100.0% | 94.3% | 100.0% | 100.0% |
 | Swift | 100.0% | 99.2% | 100.0% | 100.0% |
 | Tcl | 98.6% | 99.3% | N/A | N/A |
-| Typescript | 99.5% | 99.5% | 100.0% | 100.0% |
+| Typescript | 99.6% | 99.6% | 100.0% | 100.0% |
 | Zig | 100.0% | 100.0% | 100.0% | 100.0% |
 <!-- TREE_SITTER_ACCURACY_TABLE:END -->
 """
@@ -1197,7 +1197,7 @@ LANGUAGE_DEFINITIONS: dict[str, Any] = {
                 # with the function-TYPE-signature case the rest of this
                 # alternation is busy disambiguating against.
                 r"(?=[ \t\n]*=[ \t\n]*(?:async\s*)?(?:<(?:[^<>]|<[^<>]*>)*>\s*)?(?:function(?:\s*\*)?\b|\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)(?:[^=;{()]|\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))*=>[ \t\n]*(?:[{<]|\(|!|$|[a-zA-Z_$][\w$]*(?=[ \t\n]*\()|(?!(?:void|string|number|boolean|any|unknown|never|object|symbol|bigint|undefined|null)\b)[a-z_][\w$]*)|[a-zA-Z_$][\w$]*[ \t\n]*=>[ \t\n]*(?:[{<]|\(|!|$|[a-zA-Z_$][\w$]*(?=[ \t\n]*\()|(?!(?:void|string|number|boolean|any|unknown|never|object|symbol|bigint|undefined|null)\b)[a-z_][\w$]*)))|"
-                r"^[ \t]*(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?=[ \t\n]*:[ \t\n]*(?:async\s*)?(?:<(?:[^<>]|<[^<>]*>)*>\s*)?(?:function(?:\s*\*)?\b|\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)(?:[^=;{()]|\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))*=>[ \t\n]*(?:[{<]|\(|!|$|[a-zA-Z_$][\w$]*(?=[ \t\n]*\()|(?!(?:void|string|number|boolean|any|unknown|never|object|symbol|bigint|undefined|null)\b)[a-z_][\w$]*)|[a-zA-Z_$][\w$]*[ \t\n]*=>[ \t\n]*(?:[{<]|\(|!|$|[a-zA-Z_$][\w$]*(?=[ \t\n]*\()|(?!(?:void|string|number|boolean|any|unknown|never|object|symbol|bigint|undefined|null)\b)[a-z_][\w$]*)))|"
+                r"(?:^[ \t]*|(?<=[,{])[ \t\n]*)(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?=[ \t\n]*:[ \t\n]*(?:async\s*)?(?:<(?:[^<>]|<[^<>]*>)*>\s*)?(?:function(?:\s*\*)?\b|\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)(?:[^=;{()]|\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))*=>[ \t\n]*(?:[{<]|\(|!|$|[a-zA-Z_$][\w$]*(?=[ \t\n]*\()|(?!(?:void|string|number|boolean|any|unknown|never|object|symbol|bigint|undefined|null)\b)[a-z_][\w$]*)|[a-zA-Z_$][\w$]*[ \t\n]*=>[ \t\n]*(?:[{<]|\(|!|$|[a-zA-Z_$][\w$]*(?=[ \t\n]*\()|(?!(?:void|string|number|boolean|any|unknown|never|object|symbol|bigint|undefined|null)\b)[a-z_][\w$]*)))|"
                 # #1221: the trailing lookahead used to be just
                 # `(?=[ \t\n]{0,50}(?:<...>)?[ \t\n]{0,50}\()` -- proof a
                 # `(` follows, nothing more -- so any bare call statement
@@ -1355,8 +1355,11 @@ LANGUAGE_DEFINITIONS: dict[str, Any] = {
                 # BUG FIX (issue #2276): same conditional-exclusion fix as
                 # Branch A above, mirrored here since this branch carries
                 # its own copy of the same reserved-keyword shield -- see
-                # that branch's comment for the full rationale.
-                r"^[ \t]*(?!(?:class|interface|enum|if|for|while|switch|new|typeof|jQuery|function|yield|await|void)\b|type\b(?![ \t\n]*\()|\$|(?:catch|return|throw)\b[ \t\n]+(?:\(|<))(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?=\??[ \t\n]{0,50}(?:<(?:[^<>]|<[^<>]*>)*>)?[ \t\n]{0,50}\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)[ \t\n]{0,50}(?:(?::[^{;]{0,200})?[ \t\n]{0,50}(?:=>[ \t\n]{0,50})?\{|:[^{;]{0,200}[ \t\n]{0,50};))"
+                # that branch's comment for the full rationale. Combined
+                # with #2277's widened anchor (below) during that PR's
+                # merge conflict with #2276 -- both changes apply to the
+                # same branch, independently of each other.
+                r"(?:^[ \t]*|(?<=[,{])[ \t\n]*)(?!(?:class|interface|enum|if|for|while|switch|new|typeof|jQuery|function|yield|await|void)\b|type\b(?![ \t\n]*\()|\$|(?:catch|return|throw)\b[ \t\n]+(?:\(|<))(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?=\??[ \t\n]{0,50}(?:<(?:[^<>]|<[^<>]*>)*>)?[ \t\n]{0,50}\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)[ \t\n]{0,50}(?:(?::[^{;]{0,200})?[ \t\n]{0,50}(?:=>[ \t\n]{0,50})?\{|:[^{;]{0,200}[ \t\n]{0,50};))"
                 r")",
                 re.M,
             ),
