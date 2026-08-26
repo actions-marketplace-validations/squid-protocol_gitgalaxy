@@ -63,7 +63,7 @@ for the same metrics tracked over time across pushes to main.
 | Solidity | 100.0% | 94.3% | 100.0% | 100.0% |
 | Swift | 100.0% | 99.2% | 100.0% | 100.0% |
 | Tcl | 98.6% | 99.3% | N/A | N/A |
-| Typescript | 99.6% | 99.5% | 100.0% | 100.0% |
+| Typescript | 99.6% | 99.9% | 100.0% | 100.0% |
 | Zig | 100.0% | 100.0% | 100.0% | 100.0% |
 <!-- TREE_SITTER_ACCURACY_TABLE:END -->
 """
@@ -1352,14 +1352,26 @@ LANGUAGE_DEFINITIONS: dict[str, Any] = {
                 # public/private/etc. modifier to route them through Branch A
                 # instead. Same zero-whitespace-before-`?` placement, same
                 # ternary-collision reasoning.
+                # BUG FIX (issue #2279): Split the zero-prefix branch to safely
+                # allow bodyless constructors. If we make the return type
+                # optional for ALL identifiers here, it falsely matches bare
+                # function calls (like `next();`) because they also end in
+                # `;`. By strictly requiring `constructor` for the
+                # optional-return-type case, we match ambient
+                # `constructor(x: number);` without breaking function calls.
+                r"(?:^[ \t]*|(?<=[,{])[ \t\n]*)(\bconstructor\b)(?=\??[ \t\n]{0,50}(?:<(?:[^<>]|<[^<>]*>)*>)?[ \t\n]{0,50}\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)[ \t\n]{0,50}(?:(?::[^{;]{0,200})?[ \t\n]{0,50}(?:=>[ \t\n]{0,50})?\{|[ \t\n]{0,50};))"
+                r"|"
                 # BUG FIX (issue #2276): same conditional-exclusion fix as
                 # Branch A above, mirrored here since this branch carries
                 # its own copy of the same reserved-keyword shield -- see
                 # that branch's comment for the full rationale. Combined
-                # with #2277's widened anchor (below) during that PR's
-                # merge conflict with #2276 -- both changes apply to the
-                # same branch, independently of each other.
-                r"(?:^[ \t]*|(?<=[,{])[ \t\n]*)(?!(?:class|interface|enum|if|for|while|switch|new|typeof|jQuery|function|yield|await|void)\b|type\b(?![ \t\n]*\()|\$|(?:catch|return|throw)\b[ \t\n]+(?:\(|<))(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?=\??[ \t\n]{0,50}(?:<(?:[^<>]|<[^<>]*>)*>)?[ \t\n]{0,50}\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)[ \t\n]{0,50}(?:(?::[^{;]{0,200})?[ \t\n]{0,50}(?:=>[ \t\n]{0,50})?\{|:[^{;]{0,200}[ \t\n]{0,50};))"
+                # with #2277's widened anchor and #2279's `constructor`
+                # split (above) during merge conflicts between all three --
+                # every change applies to the same branch, independently of
+                # the others, so `constructor` is added to this branch's own
+                # exclusion list (it's handled by its own alternative above)
+                # alongside the catch/return/throw conditional exclusion.
+                r"(?:^[ \t]*|(?<=[,{])[ \t\n]*)(?!(?:class|interface|enum|if|for|while|switch|new|typeof|jQuery|function|yield|await|void|constructor)\b|type\b(?![ \t\n]*\()|\$|(?:catch|return|throw)\b[ \t\n]+(?:\(|<))(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?=\??[ \t\n]{0,50}(?:<(?:[^<>]|<[^<>]*>)*>)?[ \t\n]{0,50}\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)[ \t\n]{0,50}(?:(?::[^{;]{0,200})?[ \t\n]{0,50}(?:=>[ \t\n]{0,50})?\{|:[^{;]{0,200}[ \t\n]{0,50};))"
                 r")",
                 re.M,
             ),
