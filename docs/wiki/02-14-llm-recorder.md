@@ -1,65 +1,58 @@
-# The LLM Recorder (AI Translation Layer)
+# LLM Recorder
 
-> **The Bridge to Autonomous Agents**
->
-> The LLM Recorder (`llm_recorder.py`) bridges the gap between GitGalaxy's raw mathematical physics and autonomous AI agents. Rather than forcing a Large Language Model to hallucinate meaning from thousands of lines of raw JSON, this phase translates the pipeline's telemetry into highly optimized, token-dense artifacts designed specifically for LLM context windows and Retrieval-Augmented Generation (RAG) systems.
+> **File Reference:** [`gitgalaxy/recorders/llm_recorder.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/recorders/llm_recorder.py)
 
-## Reverse Dependency Resolution
+## Engineering Summary
+This subsystem formats static analysis telemetry into token-dense artifacts optimized for AI context windows, Retrieval-Augmented Generation (RAG) pipelines, and autonomous coding agents. Instead of requiring Large Language Models to parse raw, verbose JSON structures, it generates structured markdown briefs and a relational SQLite database. It solves the problem of inefficient context utilization by AI models when reasoning over large codebases. It exists to bridge the gap between static analysis and agentic tooling. Within the system, this module is known as the GitGalaxy LLM Recorder.
 
-Before generating outputs, the recorder performs a unified reverse-dependency map across the entire galaxy. It traces every `raw_import` back to its origin file to establish a bi-directional graph:
+## Purpose
+The primary purpose is to compress codebase telemetry into an LLM-friendly markdown brief (`_galaxy_llm.md`) and a relational knowledge graph (`_galaxy_graph.sqlite`) for SQL-based agents.
 
-* **Structural Pillars (Blast Radius):** Files with the highest inbound connections ("Imported By"). Tells the AI that modifying this file carries a massive risk of cascading breakages.
-* **Orchestrators (Fragility Index):** Files with the highest outbound connections ("Imports"). Tells the AI that this file is highly coupled and fragile to external API changes.
+## Problem Being Solved
+Raw structural telemetry JSON is often too large for LLM context windows and lacks the narrative framing needed for effective prompt engineering. This component extracts key metrics, dependency graph insights, and security vulnerabilities, presenting them in a token-efficient format that prioritizes actionable intelligence over raw data.
 
-## The Token-Optimized Markdown Brief
+## Design
+### Current Behavior
+- **Bi-Directional Dependency Graphing:** Builds a reverse-dependency map to identify load-bearing modules (blast radius) and orchestrator modules (fragility index).
+- **Token-Dense Markdown Brief:** Produces `_galaxy_llm.md`, featuring:
+  - Security & Malware Summary (XGBoost findings)
+  - Analysis Framing & Guidelines (prompt instructions)
+  - Repository Architecture & AI Topology
+  - Code Anomalies & Architectural Drift
+  - Priority Refactoring Targets (volatility hotspots, bottlenecks)
+  - AI Application Security Vulnerabilities
+- **Relational Knowledge Graph:** Produces `_galaxy_graph.sqlite` with relational tables (`stars`, `constellations`, `satellites`, `dna_hits`, dependency edges) for agents to execute SQL queries.
 
-The primary output is a dense, pre-engineered Markdown prompt (`_galaxy_llm.md`) that fits cleanly into standard context windows (like Claude 3.5 or GPT-4o). It structurally guides the AI's analysis using advanced contextual headers:
+### Planned Improvements
+- Filter the SQLite output intelligently to only include actionable subsets for extremely massive codebases.
 
-### 1. AI Threat Audit Billboard
-Right at the top of the brief, the recorder injects the results from the XGBoost ML model. If the Structural Signatures match known malware, it explicitly flags the hostile files and their AI Confidence scores so the LLM agent knows it is operating in a compromised environment.
+## Pipeline Integration
+- **Inputs Received:** Raw static analysis telemetry, file metrics, security findings, and dependency structures.
+- **Outputs Produced:** A markdown brief (`_galaxy_llm.md`) and a relational SQLite database (`_galaxy_graph.sqlite`).
+- **Dependencies:** Relies on AI AppSec findings, network topology metrics, and XGBoost threat intelligence.
 
-### 2. Hardcoded System Instructions & Lexicon
-The brief injects strict Prompt Engineering. It explicitly commands the AI to "Measure Risk, Not Quality," enforcing a blameless, objective tone based on structural heuristics rather than subjective coding styles. It provides the LLM with the exact equations for the 18-point risk vector so it understands *how* the scores were calculated.
+```mermaid
+graph LR
+    A[Raw Telemetry & Findings] --> B[LLM Recorder]
+    B --> C[_galaxy_llm.md]
+    B --> D[_galaxy_graph.sqlite]
+```
 
-### 3. Macro-State & AI Topology
-To give the LLM a 10,000-foot view of the repository, the recorder injects:
-* **Network Topology:** Metrics like Modularity, Assortativity, and Cyclic Density.
-* **Architectural Clusters:** The assigned Architectural Z-Scores to show how much the repository drifts from standard patterns.
-* **AI & Machine Learning Topology:** Classifies the repository's AI footprint (e.g., "RAG Pipeline", "Autonomous Agentic Fleet", or "Local Compute") based on the concentration of vector stores, tool-calling, and ML frameworks.
+## Tradeoffs
+- **Token Density vs. Completeness:** Excludes granular details of every single file in favor of summarizing high-priority refactoring targets and vulnerabilities to preserve context window limits.
+- **Pre-computed Brief vs. Dynamic Querying:** The markdown brief offers immediate context, but limits the AI to pre-selected metrics, whereas the SQLite graph offers dynamic querying at the cost of requiring the AI to write valid SQL.
 
-### 4. Biaxial Anomalies & Architectural Drift
-The recorder automatically calculates and flags "Trojan" files. It points the AI directly to files that blend in globally (low Global Drift) but heavily violate the standard conventions of their native programming language (high Local Drift), highlighting them as severe anti-patterns.
+## Limitations
+- **Context Window Scaling:** For extremely large repositories, even the summarized token-dense markdown may approach the context window limits of smaller models.
+- **SQL Hallucinations:** When querying the SQLite graph, agents may still hallucinate complex graph traversals if the schema is misunderstood.
 
-### 5. Strategic Refactoring Targets
-Instead of just listing bad files, the recorder cross-multiplies metrics to hand the AI actionable targets:
-* **The Hotspot Matrix:** Files with high Volatility (Churn) *and* high Risk.
-* **Key Person Dependencies:** Massive, load-bearing files written almost entirely by a single developer (High Impact + Siloed Knowledge).
-* **Systemic Network Bottlenecks:** Cross-multiplies Graph Theory with Risk (e.g., `Betweenness * State Flux` to find "Contagious Mutations").
+## Performance Notes
+- Fast token compression and relational table inserts ensure minimal overhead during the export phase. Relational graph generation scales efficiently using SQLite batched inserts.
 
-### 6. Autonomous AI Vulnerabilities
-Actively isolates the Security Lens metrics, specifically hunting for Agentic RCE (LLM logic flowing directly into OS execution) and Prompt Injection surfaces. If any file breaches these thresholds, the LLM is instructed to prioritize these vulnerabilities in its architectural review.
+## Future Work
+- Integrate dynamic embedding generation for RAG pipelines to selectively retrieve code chunks based on semantic similarity.
 
-## The Relational Knowledge Graph (SQLite)
-
-For advanced, autonomous agent workflows that utilize SQL generation (like LangChain or AutoGen), Markdown is insufficient. The recorder generates a fully relational SQLite database (`_galaxy_graph.sqlite`) from the live RAM data, specifically tuned for Agentic RAG.
-
-### Relational Schema
-Agents can write dynamic SQL queries against the following constructed tables:
-
-* **`stars`**: The core file telemetry, including pre-calculated columns for Risk Vectors, Mass, Volatility, AI Threat Confidence, and Network Centrality.
-* **`constellations`**: Folder-level aggregate metrics.
-* **`satellites`**: The extracted functions/classes tied back to their parent `star_id`, complete with their Big-O time complexity.
-* **`dna_hits` (The Regex Hit Ledger)**: A flattened, queryable list of every single regex pattern triggered by a file. *(Note: Table name preserved for schema compatibility).*
-* **`inbound_dependencies` & `outbound_dependencies`**: The bi-directional RAG graph, allowing an agent to recursively query the blast radius of any file.
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- Record Keeper
+- AI AppSec Sensor
+- Network Risk Sensor

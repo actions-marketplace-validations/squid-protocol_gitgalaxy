@@ -1,97 +1,111 @@
 # Concurrency Exposure
 
-> **Metric: Temporal Static and Signal-to-Noise Ratio**
->
-> **Summary:** Visualizes "Temporal Static" and the Signal-to-Noise Ratio within the knowledge graph. Concurrency is treated as "Information Static" because it fractures the linear execution timeline, increasing the cognitive load required to understand the file. The "Tiger in the Cage" rule applies here: We do not discount concurrency just because it lives in a "Worker" or "API" folder. A tiger in a cage is still dangerous. High concurrency is always high cognitive load and high risk, regardless of where it lives.
->
-> **Effect:** Maps directly to the GitGalaxy Universal Risk Spectrum.
-> * 🟦 **LOW (Score 0-19):** Linear. The code executes sequentially (1, then 2, then 3). The signal is clear and stable.
-> * 🟨 **MODERATE (Score 40-59):** Standard async operations. Minor temporal branching.
-> * 🟥 **VERY HIGH (Score 80-100):** Noisy. The code manages multiple parallel timelines (Promises, threads, channels). The signal is highly fractured, warning that execution timing is non-deterministic.
+> **File Reference:** [`gitgalaxy/metrics/signal_processor.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/metrics/signal_processor.py)
 
-## The Inputs (Temporal Markers)
+## Engineering Summary
+Evaluates the density of asynchronous execution primitives and multithreading logic within a source file. Concurrent programming increases non-deterministic execution paths, raising cognitive load and introducing risks such as race conditions, deadlocks, and resource contention. This subsystem evaluates the input signals to calculate a formalized risk score. In GitGalaxy, this subsystem is known as the Concurrency Exposure metric.
 
-We count the heuristics that "Fork" time.
+## Purpose
+The metric calculates a density-based risk score (0-100) to flag files containing high-risk logic patterns and architectural deviations.
 
-| Variable | Regex Key | Weight | Structural Definition |
+## Problem Being Solved
+Unmitigated anti-patterns and vulnerabilities often lead to hard-to-debug bugs and security flaws. By statically analyzing the codebase, this subsystem proactively identifies hazardous logic.
+
+## Design
+The static analysis engine extracts concurrency keywords and synchronization primitives across supported language standards:
+
+| Variable | Signal Category | Weight / Role | Description |
 | :--- | :--- | :--- | :--- |
-| `AsyncHits` | `concurrency` | **1.0x** | **The Fork.** Keywords that spawn or manage parallel execution: `async`, `await`, `Promise`, `thread`, `spawn`, `go`, `chan`, `synchronized`. |
-| `LOC` | `meaningful_loc` | **Denominator** | We measure density. A 1,000-line file with 1 `await` is linear. A 10-line file with 5 `await`s is a temporal knot. |
+| `raw_concurrency` | Keywords | **1.0x** | Asynchronous and threading constructs: `async`, `await`, `Promise`, `thread`, `spawn`, `go`, `chan`, `synchronized`. |
+| `sync_locks` | Mitigations | **-1.5x** | Synchronization primitives (mutexes, locks, semaphores). Each lock mitigates 1.5 thread spawns. |
+| `loc` | Denominator | **Base Density** | Meaningful lines of code, padded by `loc_padding` (default 150). |
+| `irc` | Language Modifier | **0.1x** | Implicit Risk Correction for dynamically typed or implicit concurrency models. |
+| `mp` | Path Modifier | **Threshold Modifier** | Context-specific modifier (e.g., `0.5` for UI components where race conditions trigger UI defects). |
 
-## Universal Framework Integration
+The calculation balances raw concurrency against synchronization locks and applies a sigmoid transformation.
 
-* **$Fc$ (Fidelity Coefficient):** **Not Applied.** Time is absolute.
-* **$Irc$ (Implicit Risk Correction):** **Applied to Numerator (Dampened).** Implicit languages (JS, Python) hide race conditions better than explicit ones (Rust, Go). We add a small "Ghost Load" to density, but we scale it down ($Irc \times 0.1$) so it acts as a "Tie Breaker" rather than a false positive generator.
-* **$Mp$ (Path Modifier):** **Applied to Threshold.**
-  * *UI/Views ($Mp = 0.5$):* **Low Tolerance (High Scream).** Async logic in UI code is a primary source of bugs (race conditions, jank). We lower the bar so even minor concurrency glows here.
-  * *Standard/Workers ($Mp = 1.0$):* **Standard Tolerance.** We do NOT discount workers. If a worker is complex, it should look complex.
+### 1. Net Concurrency Balance
+Subtract synchronization primitives from raw concurrency signals:
 
-## The Equation: The Tipping Point Sigmoid
+$$\text{net\_concurrency} = \max(0.0, \text{raw\_concurrency} - (\text{sync\_locks} \times 1.5))$$
 
-Concurrency complexity is non-linear. A single `await` is standard. Ten `await` calls in a small function is a "Logic Tangle." We use a Sigmoid to create a visual "Tipping Point."
+If $\text{net\_concurrency} = 0$, the metric immediately returns $0.0$.
 
-**Step A: Pre-Filter (The Zero Check)**
-If the file contains **Zero** async hits, the score is $0.0$. No amount of implicit risk can turn synchronous code into concurrent code.
+### 2. Density Calculation
+Density measures concurrent logic per line of code, factoring in implicit language risk ($\text{IRC} \times 0.1$):
 
-**Step B: Calculate Temporal Density**
-We determine what percentage of the code is dedicated to managing time. We add a fraction of $Irc$ ($0.1\times$) to penalize implicit safety gaps without creating noise.
+$$\text{Density} = \left( \frac{\text{net\_concurrency}}{\max(\text{LOC} + \text{loc\_padding}, 1)} \right) \times 100.0 + (\text{IRC} \times 0.1)$$
 
-$$WeightedHits = AsyncHits + (Irc \times 0.1)$$
-$$Density = \left( \frac{WeightedHits}{\max(LOC, 1)} \right) \times 100.0$$
+### 3. Sigmoid Transformation
+Maps density to a 0–100 score using a base threshold of $4.0$ and slope of $0.4$, scaled by the path modifier ($Mp$):
 
-**Step C: Determine The Threshold (The Breakdown)**
-This is the density required to "Fracture" the signal. We start with a Base of $4.0$ (4% density), which provides a safe buffer for standard async patterns before triggering warnings.
-
-$$Threshold = 4.0 \times Mp$$
-
-**Step D: The Sigmoid Map**
-We map density against the threshold using a moderately steep slope ($0.4$). Concurrency risk escalates quickly once it crosses the threshold.
-
-$$RawScore = \frac{100.0}{1 + e^{-0.4 \times (Density - Threshold)}}$$
-$$FinalScore = \min(RawScore, 100.0)$$
-
-## Implementation (Python Reference)
+$$\text{RawScore} = \frac{1.0}{1.0 + e^{-0.4 \times (\text{Density} - 4.0)}}$$
+$$\text{FinalScore} = \min(\text{RawScore} \times 100.0 \times Mp, 100.0)$$
 
 ```python
-import math
-
-def calculate_concurrency_exposure(self, hits_async, loc, irc, mp):
+def _calc_concurrency(
+    self,
+    loc: int,
+    raw_signals: dict[str, int],
+    irc: int,
+    mp: float,
+) -> float:
     """
-    Calculates Concurrency Exposure (Temporal Static).
-    Returns int 0-100.
+    RISK: Threads/Async execution.
+    MITIGATION: Mutex/Locks/Semaphores (sync_locks).
     """
-    # 1. Step A: Pre-Filter (Zero Check)
-    if hits_async == 0:
-        return 0
+    tuning = self.risk_tuning.get("concurrency", {})
+    loc_padding = tuning.get("loc_padding", 150)
 
-    # 2. Step B: Temporal Density
-    # Scaled Irc (0.1x) prevents false positives in small files
-    weighted_hits = hits_async + (irc * 0.1)
-    density = (weighted_hits / max(loc, 1)) * 100
+    raw_concurrency = float(raw_signals.get("concurrency", 0))
+    sync_locks = float(raw_signals.get("sync_locks", 0))
 
-    # 3. Step C: Dynamic Threshold
-    # Base = 4% density.
-    # UI (Mp 0.5) -> Threshold 2.0%.
-    # Workers/Standard (Mp 1.0) -> Threshold 4.0%.
-    path_mod = mp.get('Concurrency Exposure', 1.0)
-    threshold = 4.0 * path_mod
+    # Balance concurrency with synchronization locks
+    net_concurrency = max(0.0, raw_concurrency - (sync_locks * 1.5))
 
-    # 4. Step D: Sigmoid Map
-    try:
-        raw_score = 100 / (1 + math.exp(-0.4 * (density - threshold)))
-    except OverflowError:
-        raw_score = 100 if density > threshold else 0
+    if net_concurrency == 0:
+        return 0.0
 
-    return int(min(raw_score, 100))
+    density = (net_concurrency / max(loc + loc_padding, 1)) * 100.0
+    density += irc * tuning.get("irc_mult", 0.1)
 
-<br><br>
+    threshold = tuning.get("threshold_base", 4.0)
+    slope = tuning.get("sigmoid_slope", 0.4)
 
----
+    return min(self._sigmoid(density, threshold, slope) * 100.0 * mp, 100.0)
+```
 
-### 🌌 Powered by the blAST Engine
+**Risk Classification:**
+* 🟦 **LOW (Score 0–19):** Sequential execution. Logic runs deterministically with minimal or no asynchronous branching.
+* 🟨 **MODERATE (Score 40–59):** Standard asynchronous operations (e.g., standard `async`/`await` patterns or thread management) with bounded execution.
+* 🟥 **VERY HIGH (Score 80–100):** High-density multithreading or unmitigated concurrency channels.
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Pipeline Integration
+Inputs received include raw static analysis signals from the AST parser and contextual multipliers. Outputs produced are a normalized risk score (0-100). The subsystem depends on upstream token parsers that feed AST information into the signal processor.
+```mermaid
+flowchart LR
+    A[AST Parser] --> B[Signal Processor]
+    B --> C[Concurrency Exposure Metric]
+    C --> D[Risk Score Output]
+```
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Tradeoffs
+* Chose static keyword counting and heuristic multipliers over dynamic symbolic execution to prioritize speed across large codebases.
+* Specific weights are fixed heuristics that balance safety against over-penalization, sacrificing precise dynamic validation for constant-time calculation.
 
+## Limitations
+* Detection is strictly reliant on recognized keywords and standard patterns.
+* Cannot dynamically confirm actual vulnerabilities or trace deep runtime dataflows.
+* May produce false positives in non-standard or heavily abstracted codebases.
+
+## Performance Notes
+The calculation operates in $O(1)$ time leveraging pre-computed token counts, making it suitable for real-time risk profiling on massive codebases.
+
+## Future Work
+* Planned improvements include integrating static dataflow tracing to verify execution paths and reduce false positives.
+* Expand language support and framework-specific annotations.
+
+## Related Components
+* **[Signal Processor Module](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/metrics/signal_processor.py)**
+* **[GitGalaxy Platform](https://gitgalaxy.io/)**
+* **[⬅️ Back to Master Index](index.md)**

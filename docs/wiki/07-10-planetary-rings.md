@@ -1,51 +1,44 @@
-# 2.1.I. Planetary Rings 
+# External Dependency Rings
 
-> **Metric: External Library Import Count**
->
-> **Purpose:** See which files import external libraries.
->
-> **Why:** Determine which files have dependencies that you don't fully control.
->
-> **Effect:** Spawns rings around the file to visually represent its external dependency weight.
+> **File Reference:** [`gitgalaxy/core/detector.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/core/detector.py)
 
-## 2.1.I.1. The Philosophy: The Gravity Well
+## Engineering Summary
+This visualization module generates dependency indicators around file nodes based on external import volumes. It solves the problem of identifying heavy integration modules and dependency coupling risks. It exists to separate self-contained utilities from orchestration layers visually. Within GitGalaxy, this subsystem renders translucent dependency rings in 3D space.
 
-A clean file is a sphere. It floats freely. A file with dependencies is tethered. The more it imports, the heavier it gets. We set a **High Threshold** for rings. We don't want visual noise for a single utility import. Rings are reserved strictly for "Heavy Lifters" and "Glue Code."
+## Purpose
+To highlight modules with high external dependency counts by rendering surround rings whose opacity and thickness scale with import volume.
 
-## 2.1.I.2. The Inputs: Measuring Dependencies
+## Problem Being Solved
+Integration points and heavy controllers often pull in numerous external packages, creating hidden coupling risks. Visualizing dependency load as surround rings allows developers to spot these heavy integration points instantly.
 
-* **ImportHits:** The count of `import`, `require`, or `include` statements found by the scanner.
-* **Threshold:** **> 5 Imports**. Anything less is considered "Standard Weight" and renders with **No Rings**.
-
-## 2.1.I.3. The Equation: Growth and Density
-
-Instead of complex accretion disks, we use a single, evolving ring system that grows in **Density (Opacity)** and **Mass (Width)** as the gravity increases.
-
-**1. Opacity (Visibility)**
-Ranges from $0.0$ to $0.6$ over the first 26 imports. Rare imports create a barely visible "Ghost Ring." As dependencies hit the critical mass (26), the ring becomes a distinct, semi-solid band.
-
+## Design
+A threshold of >5 imports activates the rings.
+Opacity and tube radius scale dynamically:
 $$\text{Opacity} = \min\left( \left(\frac{\text{ImportHits}}{26}\right) \times 0.6,\ 0.6 \right)$$
-
-**2. Width (Tube Thickness)**
-Grows continuously as imports increase. The ring gets physically thicker and wider, consuming more visual space around the planet as the gravity well deepens.
-
 $$\text{TubeRadius} = \text{BaseWidth} + (\text{ImportHits} \times 0.1)$$
+Rings use `TorusGeometry` and are tilted across randomized Euler axes to avoid coplanar clipping.
 
-## 2.1.I.4. The Visual Output
+## Pipeline Integration
+- **Inputs:** `ImportHits` from the static analysis engine.
+- **Outputs:** Torus geometry parameters (radius, opacity, rotation).
+- **Dependencies:** Relies on import detection and feeds into the WebGPU render loop.
 
-* **Geometry:** `TorusGeometry`.
-* **Tube Radius:** Scaled linearly by `ImportHits`.
-* **Material:** Transparent with `opacity` capped at $0.6$.
-* **Tilt:** Rings are tilted at randomized axes (Euler angles) to ensure they don't look like flat plates, but dynamic, gyroscope-like orbital paths.
+Static Analyzer -> Ring Geometry Subsystem -> WebGPU Renderer
 
-<br><br>
+## Tradeoffs
+The arbitrary >5 threshold prevents visual noise but sacrifices visibility for files with 3-4 heavy dependencies. Capping opacity at 0.6 prevents overlapping rings from becoming visually opaque solids, preserving depth perception at the cost of true linear scaling.
 
----
+## Limitations
+- Does not distinguish between standard library imports and heavy third-party framework imports.
+- Dynamic require statements inside execution blocks may not be captured.
 
-### 🌌 Powered by the blAST Engine
+## Performance Notes
+Instanced rendering is used for the torus meshes, scaling efficiently on the GPU. Mathematical parameter derivation is $O(1)$ per file.
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Future Work
+- Integration with package manager lockfiles to weight imports by transitive dependency size.
+- Color coding rings based on external vs. internal mono-repo imports.
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- [Spatial Layout](07-11-sequence-affinity.md)
+- [Node Size Scaling](07-09-node-size.md)

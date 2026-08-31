@@ -1,34 +1,48 @@
 # API & Service Contracts
 
-> **Architecture: Dual-Paradigm Execution & Dependency Injection**
->
-> **Summary:** The API and Service Forges translate the legacy Directed Acyclic Graph (DAG) intent into modern Spring Boot REST Controllers and `@Service` layers. It automatically detects the execution paradigm (Batch vs. Transactional) and auto-wires cross-service dependencies.
+> **File Reference:** [`gitgalaxy/tools/cobol_to_java/cobol_to_java_api_contract_forge.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/cobol_to_java/cobol_to_java_api_contract_forge.py)
 
-## Dual-Paradigm Execution Detection
+## Engineering Summary
+This subsystem constructs the network interfaces and dependency injection scaffolding for modernized microservices. It solves the problem of exposing legacy procedural entry points over modern HTTP protocols and wiring inter-module dependencies. It exists to provide the structural skeleton required before business logic can be injected. In GitGalaxy, this layer connects the web controllers to the underlying business services.
 
-Legacy COBOL operates in two primary modes: CICS (Transactional) and JCL (Batch). The API Contract Forge analyzes the DAG lineage to detect the original intent and scaffolds the corresponding REST interface.
+## Purpose
+To translate structural static analysis into Spring Boot `@RestController` endpoints and `@Service` components.
 
-* **The Transactional Paradigm:** If the module relies on structured data inputs/outputs without physical file requests, the forge generates a standard JSON POST endpoint (`/api/v1/{module}/execute`). It automatically injects the required Data Transfer Objects (`@RequestBody DTO`) based on the input schemas.
-* **The Batch Paradigm:** If the DAG indicates the module expects physical file bindings (`DD` names), the forge switches to a Batch paradigm. It generates a specialized multipart endpoint (`/api/v1/{module}/execute-batch`) mapped to `@RequestParam MultipartFile` inputs, securely piping the data streams directly into the Service layer.
+## Problem Being Solved
+Legacy applications run as CICS transactional modules or JCL batch jobs. These paradigms must be mapped to appropriate REST interface patterns and Spring dependency injection graphs to function in a cloud-native environment.
 
-## Auto-Wiring the Service Layer
+## Design
+- **Execution Paradigm Detection**: 
+  - **Transactional**: If processing in-memory data without file allocations, generates a JSON POST endpoint (`/api/v1/{module}/execute`) accepting `@RequestBody` DTOs.
+  - **Batch**: If dataset file bindings (`DD` allocations) exist, generates a multipart POST endpoint (`/api/v1/{module}/execute-batch`) accepting `@RequestParam MultipartFile` arguments.
+- **Service Layer Auto-Wiring**: Constructs `{ModuleName}Service.java`. External COBOL subroutines are injected via Lombok `@RequiredArgsConstructor`.
+- **Mock Service Generation**: For unresolved external module calls, generates inline interface stubs (`TODO: IMPLEMENT SUBROUTINE CALL`) and mock `@Service` classes that intercept calls, log warnings, and return execution to prevent context initialization failure on startup.
 
-The Service Forge generates the `@Service` skeleton where the actual business logic will reside. It utilizes the DAG to map the architectural lineage and inject cross-service dependencies:
-* **Known Dependencies:** Fully resolved module calls are injected into the class constructor for standard Spring Dependency Injection (`@RequiredArgsConstructor`).
-* **Unresolved Dependencies:** If the legacy code dynamically calls a module that was not found in the repository scan, the forge injects a `TODO: AI AGENT` comment with the required interface signature. It intentionally comments out the dependency to ensure the generated Spring Boot application remains fully compilable out of the box.
+## Pipeline Integration
+**Inputs received:** Execution paradigms and inter-module dependency graphs from the IR.
+**Outputs produced:** `@RestController` and `@Service` Java source files, Mock services.
+**Dependencies:** Upstream static analysis IR; downstream business logic insertion and compilation.
 
-## The Mock Service Shield
+```mermaid
+graph TD
+    A[IR Dependency Graph] --> B[API Contract Generator]
+    B --> C[@RestController]
+    B --> D[@Service Skeletons]
+    B --> E[Mock Services]
+```
 
-To prevent missing external subroutines from crashing the Spring Application Context upon booting, the orchestrator generates Mock Services for any unresolved calls. These mock services intercept the legacy call, log a standard warning (`"Mock Service invoked. Implementation missing."`), and safely return execution to the main thread.
+## Tradeoffs
+- Emitting mock services for unresolved dependencies rather than halting generation. Chosen to guarantee a compilable scaffolding state for the developer, sacrificing immediate runtime correctness for a smoother developer experience.
 
-<br><br>
+## Limitations
+- Detection between batch and transactional paradigms relies on heuristic inspection of CICS indicators and dataset definitions, which may misclassify hybrid modules.
 
----
+## Performance Notes
+Analyzes the pre-computed dependency graph from the IR in $O(E)$ time, where $E$ is the number of module edges, ensuring fast generation regardless of codebase size.
 
-### 🌌 Powered by the blAST Engine
+## Future Work
+- Integration with OpenAPI/Swagger generation for the emitted `@RestController` endpoints.
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- `cobol_to_java_service_forge.py`
+- `cobol_to_java_controller.py`

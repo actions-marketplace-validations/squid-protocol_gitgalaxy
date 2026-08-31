@@ -1,54 +1,48 @@
-# Transforming Noisy Regex Counts Into Something Meaningful
+# Transforming Regex Counts (Universal Exposure Framework)
 
-> **The Universal Exposure Framework**
->
-> We recognize that raw heuristic counts are inherently fragile; they are easily fooled by "safety theater" (like empty catch blocks) and lack the deep contextual awareness of a compiler. To transform this fuzzy, easily manipulated data into actionable intelligence for the **knowledge graph**, we implemented a Universal Exposure Framework that treats code metrics not as absolute truths, but as weighted signals within a deterministic "Physics Engine."
+> **File Reference:** [`gitgalaxy/metrics/signal_processor.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/metrics/signal_processor.py)
 
-## The Four Stabilizing Forces
+## Engineering Summary
+This metric normalization subsystem, known as the Universal Exposure Framework (UEF), recalibrates raw static regex counts into stable architectural indicators. It solves the problem of raw hit counts being noisy, misleading, or skewed by codebase size. It exists to provide deterministic, language-aware filtering of heuristic signals. Within GitGalaxy, the UEF calculates final, tiered risk outputs from raw data variables.
 
-To counteract the noise of static analysis, the engine applies four specific stabilizing forces to the raw data:
+## Purpose
+To process raw occurrence counts through deterministic normalization transformations, stabilizing signals and eliminating false positives across different language paradigms.
 
-* **Weighted Asymmetry (The Entropy Check):** A simple counter treats a vulnerability and a safeguard as equal opposites ($1 - 1 = 0$). In reality, it is significantly harder to secure a system than to break it. We apply a **2.5x multiplier** to all detected risks, forcing the code to demonstrate disproportionate defensive density before it can achieve a "Safe" rating. This prevents minor cosmetic fixes from masking structural brittleness.
-* **The Breach Cap (Zero-Trust Logic):** To prevent large files with high test coverage from masking critical flaws, we enforce a hard limit: if the raw count of **Risk Hits** exceeds **Guardrail Hits**, the module is capped at a "Fragile" rating regardless of its other qualities. This overrides the math with a reality check—no amount of unit testing can neutralize a fundamentally insecure architecture.
-* **The Sigmoid Clamp (Noise Gating):** Linear counting penalizes large files for having trace amounts of technical debt. We utilize a logistic function to act as a noise gate, suppressing trivial findings (0-5% density) while aggressively highlighting clusters of debt once they cross a critical threshold (~20%). This ensures the visualization focuses on systemic patterns rather than isolated infractions.
-* **Quantized Final Tiering (Removing False Precision):** Presenting a "Safety Score" of 87.4% implies a level of precision that regex cannot provide. By binning complex scores into five distinct **Qualitative Tiers** (Unshielded, Fragile, Stable, Defended, Fortified), we remove false precision and deliver a binary truth: the module is either sufficiently defended for its context, or it is not.
+## Problem Being Solved
+Uncalibrated static regex counts penalize large files for minor issues and treat structural risk and defensive logic as a flawed 1:1 offset. The UEF stabilizes these signals into actionable, normalized intelligence.
 
-## The Physics of Risk
+## Design
+Applies four stabilizing principles:
+1. **Weighted Asymmetry:** Defensive hits receive a 2.5x multiplier to demand strong defensive density.
+2. **The Breach Cap:** If raw risk hits exceed guardrail hits, the safety rating is severely capped, bypassing averages.
+3. **Sigmoid Gating:** Uses a logistic sigmoid function to filter low-density noise (0-5%) and scale exponentially as risk crosses thresholds.
+4. **Quantized Tiering:** Scores are binned into qualitative tiers (Unshielded to Fortified).
 
-Instead of a single "Master Equation" for all Risk Exposures, we employ a Universal Framework that is instantiated and calibrated for each specific Risk Domain. 
-
-While each domain has a unique formula, they all adhere to the exact same physics: we weigh risk heavier than defenses, we add an "Opacity Tax" to the risk for dynamic languages, and we dampen the defenses based on our trust in the language's explicit syntax.
-
-### The Language Confidence Tiers
-
-Every coding language is assigned to a tier that dictates its mathematical dampeners.
-
-| Confidence Tier | Classification | Example Languages | Mathematical Treatment |
-| :--- | :--- | :--- | :--- |
-| **Tier 1** | Explicit Languages (High Trust) | Rust, Go, C++ | Standard baseline calculations. |
-| **Tier 2** | Structured Languages (Minor Doubt) | Java, TypeScript | Minor risk dampening applied. |
-| **Tier 3** | Implicit Languages (Fog of War) | Shell, Python, JS | High "Opacity Tax" added; Defensive hits are dampened. |
-
-### The Universal Variables
-
-* **$Fc$ (Fidelity Coefficient):** A dampener used to reduce our trust in the defensive keywords of ambiguous languages.
-* **$Irc$ (Implicit Risk Correction):** A flat penalty added to ambiguous languages (The "Opacity Tax").
-* **$Mp$ (Multiplier / Path Modifier):** Scales risk based on the file's physical location in the repository (e.g., Core vs. Lab vs. Tests). This mathematically rewards teams for good folder architecture.
-
-### The General Risk Equation
-
-All risk domains follow this fundamental structural pattern:
-
+Language Confidence Tiers (1 to 3) apply Fidelity Coefficients ($Fc$) and Implicit Risk Corrections ($Irc$) based on language strictness.
+General Risk Equation:
 $$RiskExposure = \left( \frac{((RiskHits + Irc) \times Weight) - (DefenseHits \times Fc)}{LOC} \right) \times Mp$$
 
-<br><br>
+## Pipeline Integration
+- **Inputs:** Raw regex counts, LOC, language metadata.
+- **Outputs:** Normalized, quantized risk tiers (1-5).
+- **Dependencies:** Receives input from the scanner extraction module and feeds into the knowledge graph and visual mapping layers.
 
----
+Scanner Extraction -> Universal Exposure Framework -> Quantized Tier Output
 
-### 🌌 Powered by the blAST Engine
+## Tradeoffs
+The sigmoid gating principle aggressively suppresses minor risks in large files, intentionally sacrificing micro-level visibility to prevent "alert fatigue" on the macro level. Language confidence tiers generalize thousands of languages into three buckets, reducing precision for niche languages.
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Limitations
+- The 2.5x defensive multiplier is empirically derived and may not perfectly align with specific internal security postures.
+- Path Multipliers ($Mp$) rely on standard directory naming conventions (`src/`, `test/`) which may fail in non-standard repositories.
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Performance Notes
+Processing utilizes constant-time floating-point math per file component, resulting in $O(1)$ metric transformation time per unit post-extraction.
 
+## Future Work
+- Machine learning parameter tuning for Fidelity Coefficients based on historical vulnerability tracking.
+- Configurable Breach Cap thresholds per repository.
+
+## Related Components
+- [Overview of Methodology](08-01-methodology.md)
+- [Sub-Equations](08-02-sub-equations.md)

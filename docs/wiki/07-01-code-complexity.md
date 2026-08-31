@@ -1,28 +1,46 @@
-# 2.1. How We Represent Complexity as Physical Structure
+# Visual Code Complexity Mapping Specifications
 
-Code complexity is mapped directly to physical structure, creating organic, distinct shapes for different complexity patterns. This representation of complexity does not depend on color; it relies purely on geometry and spatial arrangement.
+> **File Reference:** [`gitgalaxy/recorders/gpu_recorder.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/recorders/gpu_recorder.py)
 
-| Physical Attribute | Code Metric (Heuristic) | Visual Result (The "Look") |
-| :--- | :--- | :--- |
-| **Star's Size** | Lines of Code (LOC) per File | **Mass.** Logarithmic scaling ensures that 10k+ LOC files appear as massive suns, while 10 LOC scripts remain small asteroids. |
-| **Star's Pulse Rate** | Inbound References (Popularity) | **Bioluminescence.** Core utilities pulse with a white-hot "heartbeat." Unreferenced files remain dim and static. |
-| **Star's Shape** | Control Flow Ratio (File Level) | **Geometry.** Morphs from a smooth **Sphere** (Declarative/Data) to a sharp **Tetrahedron** (Pure Algorithmic Logic). |
-| **Satellite Unit** | Function Declaration | **Moons.** Every discrete function is materialized as a satellite orbiting its parent star. |
-| **Satellite Distance** | Lines of Code (LOC) per Function | **Orbital Reach.** Long functions reach further into the void; small stubs orbit tightly near the star's surface. |
-| **Number of Satellites** | Cyclomatic Complexity | **Fractal Density.** Highly complex functions spawn sub-clusters or dense swarms of satellites, creating a "thorny" silhouette. |
-| **Satellite Position** | Control Flow Ratio (Function Level) | **Branching Angle.** Sharp, jagged angles (<45°) indicate complex control flow; 90° "Circuit Board" patterns indicate linear flow. |
-| **Satellite Size** | Argument Count | **Volume.** Large moons represent "Heavy" functions with many inputs; small dots represent lightweight utilities. |
-| **Star's Rings** | External Library Imports | **Accretion Disks.** Files tethered to many external dependencies manifest glowing rings, symbolizing a large "Gravity Well." |
-| **Star's Position** | Semantic Affinity (Directory/Path) | **Neighborhoods.** Files are grouped into sectoral clusters based on folder structure, creating distinct "Auth," "UI," and "API" continents. |
+## Engineering Summary
+A rendering configuration translates static analysis metrics into 3D geometric attributes. It solves the challenge of interpreting complex codebase structures by converting multidimensional data (size, dependencies, complexity) into spatial and physical properties. This subsystem acts as the translation layer between calculated numerical metrics and WebGL rendering buffers, operating as the visual code complexity mapping system in GitGalaxy.
 
-<br><br>
+## Purpose
+To provide a structured specification for how code metrics are visually represented through shape, scale, position, and intensity.
 
----
+## Problem Being Solved
+Standard 2D code dashboards fail to represent the interconnected nature of large repositories. By mapping metrics to 3D geometry, this system allows engineers to visually identify structural patterns and architectural bottlenecks without parsing numerical tables.
 
-### 🌌 Powered by the blAST Engine
+## Design
+The mapping system converts distinct metrics to visual attributes:
+- File Node Scale: Uses Logarithmic scaling of Lines of Code (LOC) and Structural Mass.
+- Emissive Intensity: Maps to Inbound Reference Count to highlight highly-imported modules.
+- Node Mesh Geometry: Changes from smooth spheres to polyhedrons based on the File Control Flow Ratio.
+- Orbital Elements: Maps function count to sub-node quantity, function length to orbital distance, and parameter count to sub-node scale.
+- Spatial Clustering: Groups nodes into 3D sectors based on directory paths.
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Pipeline Integration
+- **Inputs**: Processed signal vectors, risk schemas, and dependency graphs.
+- **Outputs**: Instanced rendering properties (position, scale, geometry type) for the WebGL pipeline.
+- **Dependencies**: Depends on metrics from the `SignalProcessor`; consumed by the frontend 3D rendering engine.
+```text
+Normalized Risk Vectors -> Visual Code Complexity Mapping -> WebGL Rendering Buffers
+```
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Tradeoffs
+Using geometric complexity and bloom intensity to represent code metrics can introduce visual clutter in repositories with extreme coupling. This approach sacrifices precise, table-based readability for high-density spatial pattern recognition.
 
+## Limitations
+- Visual encoding is constrained by WebGL rendering limits; extremely dense repositories may overwhelm the visual field.
+- Users with visual impairments may struggle to differentiate subtle changes in emissive intensity or mesh facets.
+
+## Performance Notes
+Mapping metrics directly to shader properties avoids expensive CPU-side geometry generation, offloading visual updates to the GPU.
+
+## Future Work
+- Implement variable Level-of-Detail (LOD) mappings to dynamically reduce geometric complexity at far camera distances.
+- Allow user-configurable mappings to adapt visual attributes to different analysis priorities.
+
+## Related Components
+- [File Node Scaling & Structural Mass](07-02-stars-size.md)
+- [Node Emissive Intensity](07-03-stars-pulse-rate.md)

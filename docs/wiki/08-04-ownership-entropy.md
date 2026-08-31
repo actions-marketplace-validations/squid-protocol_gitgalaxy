@@ -1,68 +1,48 @@
-# Authorship (Ownership Entropy)
+# Authorship Distribution (Ownership Entropy)
 
-> **Metric: Shannon Entropy of Git Blame Data**
->
-> **Purpose:** Visualizes the distribution of authorship within a file to identify where knowledge is siloed versus where it is shared. 
->
-> **Why:** Ownership isn't about blaming a single author; it's about visualizing the Collective Mind. Rather than a linear author count, this system utilizes Shannon Entropy to determine the concentration or dispersion of contributions. This entropy score is mapped directly to the Universal Risk Spectrum, allowing you to instantly spot heavily siloed knowledge ("Bus Factor" risks) versus highly distributed community code.
+> **File Reference:** [`gitgalaxy/metrics/signal_processor.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/metrics/signal_processor.py)
 
-## The Philosophy: Knowledge Concentration
+## Engineering Summary
+This statistical analysis component calculates the Shannon Entropy of Git blame data to measure contribution dispersion across modules. It solves the problem of identifying knowledge silos and bus-factor risks hidden behind simple contributor headcounts. It exists to map authorship concentration to the Universal Risk Spectrum. Within GitGalaxy, it highlights whether a module is a single-author bottleneck or a highly distributed community effort.
 
-Authorship is analyzed as a variable of structural clarity versus architectural diffusion:
+## Purpose
+To measure the distribution of commit contributions across authors within a module using Shannon Entropy, highlighting knowledge siloing versus shared maintenance.
 
-* **Low Entropy (Individual Ownership):** Contributions are highly concentrated within a single primary author. This represents a unified mental model, but also a potential "Silo Risk" if that developer is unavailable.
-* **High Entropy (Community Diffusion):** Contributions are distributed across multiple authors. As more developers influence the file, the architectural intent becomes shared, indicating a high-traffic module maintained by the collective.
+## Problem Being Solved
+Simple contributor headcounts fail to capture distribution. A file with 1 primary author (90%) and 10 minor contributors (1% each) has 11 authors but remains a knowledge silo. Shannon entropy correctly identifies this imbalance and penalizes high operational noise.
 
-## The Inputs: Contribution Share
+## Design
+Evaluates authorship structure:
+- **Low Entropy:** High concentration, individual ownership, high bus factor.
+- **High Entropy:** Shared maintenance, high diffusion.
 
-* **Authors:** A data map of author identifiers to their specific commit frequencies for the file.
-* **TotalCommits:** The aggregate sum of all commits recorded for the file.
-* **GlobalAuthorCount:** The total number of unique contributors across the entire repository.
+Calculation:
+$$p_i = \frac{\text{Commits}_i}{\text{TotalCommits}}$$
+$$H = -\sum \left( p_i \times \log_2(p_i) \right)$$
+$$\text{OwnershipScore} = \min(H \times 32.0, 100.0)$$
 
-## The Equation: Shannon Entropy
+Scores map to tiers: 0-20 (Single Owner), 21-60 (Team Collaboration), 61-100 (High Diffusion).
 
-First, we calculate the proportion of total commits ($p_i$) made by author $i$. (e.g., if Author A made 20 out of 100 commits, $p_i=0.2$).
+## Pipeline Integration
+- **Inputs:** Git blame contribution maps and commit counts.
+- **Outputs:** A normalized scalar entropy score (0-100) and color classification.
+- **Dependencies:** Relies on upstream Git history extraction and feeds directly into the visualization shaders.
 
-We then apply the Shannon Entropy formula to calculate the total diffusion ($H$):
+Git Blame Extractor -> Entropy Calculation Engine -> Visual Render Attributes
 
-$$H=-\sum \left( p_i \times \log_2(p_i) \right)$$
+## Tradeoffs
+Using commit counts as the basis for entropy assumes all commits have equal weight. A massive refactoring commit is weighed identically to a one-line typo fix, sacrificing granular impact analysis for fast, aggregate historical processing.
 
-Finally, we scale the entropy into a normalized $0$ to $100$ score for the rendering engine:
+## Limitations
+- Git author email aliases (e.g., user@local vs user@company) will skew entropy unless deduplicated prior to analysis.
+- Extremely old legacy code may have high entropy from long-gone contributors, artificially inflating the diffusion score for the current active team.
 
-$$\text{OwnershipScore}=\min(H \times 32, 100)$$
+## Performance Notes
+Normalizing authorship into a scalar score ensures constant WebGPU rendering efficiency regardless of the number of unique contributors, guaranteeing 60 FPS performance on massive enterprise codebases.
 
-## Why This Model is Superior
+## Future Work
+- Time-decayed entropy weighting, prioritizing recent commit distribution over historical legacy authors.
+- Commit size weighting (lines changed) integrated into the probability $p_i$ variable.
 
-It solves the "Long Tail" problem. 
-* A file with 1 Major Author (90%) and 1 Minor Author (10%) is relatively stable. 
-* A file with 1 Major Author (90%) and 10 Minor Authors (1% each) is chaotic. 
-
-A linear model scores these identically by just counting heads. The Entropy model correctly identifies the second file as significantly more "active" or "noisy" because it accounts for the sheer number of distinct voices in the mix. While the linear model asks, *"Who is the biggest author?"*, the entropy model asks, *"How much **uncertainty** exists in the authorship?"*
-
-## Visual Interpretation: Ownership vs. Collective Diffusion
-
-GitGalaxy utilizes the standard 5-stop Universal Risk Spectrum to visualize the entropy score, scaling from cool, isolated development to hot, multi-author environments.
-
-| Score Range | Classification | Visual Target | Definition |
-| :--- | :--- | :--- | :--- |
-| **0 - 20** | **Individual** | 🟦 **Deep Blue** | Pure Ownership. The logic represents a single individual's architectural intent. |
-| **21 - 60** | **Small Team / Squad** | 🩵 **Cyan** $\rightarrow$ 🟨 **Yellow** | Core Collaboration. Responsibility is shared among a tight-knit group of contributors. |
-| **61 - 100** | **Dept / Community** | 🟧 **Orange** $\rightarrow$ 🟥 **Red** | Collective Maintenance. The module experiences constant, multi-author input and has reached complete architectural diffusion. |
-
-## Architectural Stability: Scaling Logic & Visual Overload
-
-By unifying Ownership under the Universal Risk Spectrum, GitGalaxy eliminates the need for expensive, multi-pass chromatic aberration shaders and per-author deterministic hashing.
-
-Because the Shannon Entropy calculation condenses infinite author complexity into a clean $0.0 - 100.0$ exposure vector in the backend (`signal_processor.py`), the frontend renderer inherently scales. Whether a file has 2 authors or 2,000, the WebGPU engine simply translates the float into the static linear gradient. This guarantees smooth 60 FPS performance even when mapping planetary-scale megastructures like Linux or Kubernetes, without requiring visual fallbacks or macroscopic LOD (Level of Detail) toggles.
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- [Overview of Methodology](08-01-methodology.md)

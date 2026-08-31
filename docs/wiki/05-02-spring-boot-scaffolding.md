@@ -1,36 +1,49 @@
-# Spring Boot Scaffolding (The Cloud Escape Hatch)
+# Spring Boot Scaffolding Architecture
 
-> **Architecture: Automated Build Systems & Legacy Decoders**
->
-> **Summary:** The Java Translation Controller acts as the "Cloud Escape Hatch." It ingests the JSON IR dumps from the clean room and generates a fully compilable Spring Boot microservice scaffolding. This completely automates the bridge between legacy procedural execution and modern Object-Oriented/REST paradigms.
+> **File Reference:** [`gitgalaxy/cobol_to_java_controller.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/cobol_to_java_controller.py)
 
-## The Build System Forge
+## Engineering Summary
+This subsystem automatically generates a complete Java project structure from parsed legacy application state. It solves the problem of manually translating procedural environments into modern, compilable application frameworks. It exists to eliminate boilerplate setup and ensure consistency across migrated microservices. This orchestrator functions as the bridge between static analysis outputs and target application architectures within GitGalaxy.
 
-The orchestrator automatically generates the foundational configuration required to boot the application, ensuring a zero-friction handoff to the engineering team or autonomous agents.
+## Purpose
+To ingest JSON Intermediate Representation (IR) dumps and generate a compilable Spring Boot microservice project structure.
 
-* **`pom.xml`**: Injects strict dependency trees for Spring Web, Spring Data JPA, Spring Batch, and PostgreSQL, locked to Java 17 standards.
-* **`application.yml`**: Auto-configures the database connections, Hibernate DDL settings, and disables auto-running batch jobs to prevent accidental execution loops on startup.
-* **Application Entry Point**: Generates the primary `@SpringBootApplication` main class.
-* **Compliance Injection**: Automatically scans for a `corporate_header.txt` file and wraps it into a standardized Java block comment, injecting it at the top of every generated file to maintain legal compliance.
+## Problem Being Solved
+Migrating from procedural execution to Object-Oriented and RESTful paradigms involves substantial boilerplate, such as configuring build systems, application properties, and standard utility classes for legacy data decoding.
 
-## The EBCDIC & COMP-3 Decoder Utility
+## Design
+The controller scaffolds the foundational project:
+- **`pom.xml`**: Configures Maven dependencies (Spring Boot Starter Web, Spring Data JPA, Spring Batch, Lombok, PostgreSQL) for Java 17.
+- **`application.yml`**: Configures database connections, Hibernate DDL properties, and logging.
+- **Application Entry Point**: Generates the `@SpringBootApplication` main class.
+- **Header Injection**: Scans for `header.txt` and wraps contents into Java block comments at the top of generated files.
+- **EBCDIC & COMP-3 Data Decoder Utility (`EbcdicDecoderUtil.java`)**: Generated to unpack binary legacy payloads into UTF-8 and `BigDecimal`. It validates the high nibble (0-9) and sign nibble (A-F). On encountering corrupt data, it logs a hex-dump and returns `BigDecimal.ZERO`.
 
-Modern cloud infrastructure operates on ASCII/UTF-8 and standard floating-point math, while legacy mainframes operate on EBCDIC character sets and Packed Decimal (COMP-3) byte arrays. To prevent catastrophic runtime crashes when the new Java system attempts to process dirty legacy data, the controller forges a strict `EbcdicDecoderUtil.java` class.
+## Pipeline Integration
+**Inputs received:** JSON Intermediate Representation (IR) dumps.
+**Outputs produced:** Compilable Maven Spring Boot project directory (Java source, pom.xml, application.yml).
+**Dependencies:** Upstream COBOL Refactoring Controller; downstream Maven compiler and Java Forge tools.
 
-**Strict Hex-Boundary Validation:**
-The decoder unpacks COMP-3 byte arrays into Java `BigDecimal` objects. Because legacy databases frequently contain shifted or corrupt bytes, the generated utility includes strict validation:
-* It verifies that the high nibble of every byte is a valid integer (0-9).
-* It enforces that the final low nibble is a valid sign identifier (A-F).
-* If a dirty byte is detected, the utility safely intercepts the error, logs a hex-dump warning, and defaults to `BigDecimal.ZERO` to prevent the entire Spring Boot application from crashing.
+```mermaid
+graph TD
+    A[JSON IR] --> B[Java Translation Controller]
+    B --> C[Spring Boot Project Structure]
+    B --> D[EbcdicDecoderUtil.java]
+```
 
-<br><br>
+## Tradeoffs
+- Returning `BigDecimal.ZERO` on corrupt COMP-3 data rather than throwing an exception. Chosen to prevent application crashes during batch processing, sacrificing strict data integrity for system resilience.
 
----
+## Limitations
+- Scaffolding assumes a Spring Boot + JPA + PostgreSQL stack, with limited flexibility for other Java frameworks or databases without modifying the template generator.
 
-### 🌌 Powered by the blAST Engine
+## Performance Notes
+File generation operations are linear $O(N)$ with respect to the number of configured endpoints and modules, relying on basic file I/O operations with minimal memory overhead.
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Future Work
+- Support for generating Gradle build scripts alongside Maven.
+- Configurable error handling strategies for corrupt EBCDIC data.
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- `cobol_refractor_controller.py`
+- `cobol_to_java_spring_forge.py`

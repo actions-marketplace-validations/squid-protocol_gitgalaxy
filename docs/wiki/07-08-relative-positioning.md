@@ -1,45 +1,45 @@
-# 2.1.G. Satellite's Relative Positioning in a Unit
+# Angular Positioning of Child Nodes
 
-> **Metric: Control Flow Ratio ($R_L$)**
->
-> **Purpose:** Give every function (satellite cluster) a distinctive spatial arrangement based on its ratio of logical statements to declarative statements.
->
-> **Why:** A uniform galaxy is not only boring and repetitive to look at, but it also wastes a dimension of data communication. By altering the layout, we allow the user to instantly recognize the behavioral pattern of a function based purely on the geometric shape of its satellite cluster.
->
-> **Effect:** Alters the angular arrangement of satellites in 3D space.
+> **File Reference:** [`gitgalaxy/core/spatial_mapper.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/core/spatial_mapper.py)
 
-## 2.1.G.1. The Philosophy: Thinking vs. Speaking
+## Engineering Summary
+This spatial configuration subsystem distributes sub-nodes within a function unit based on its control flow ratio. It solves the problem of visual uniformity obscuring code behavior differences. It exists to differentiate algorithmic routing logic from declarative structures through physical divergence angles. Within GitGalaxy, this process scales visual node spreading dynamically.
 
-Code does two things: it either **computes** (makes decisions) or it **declares** (defines structures). We visualize this tension physically in how the satellites arrange themselves around the parent.
+## Purpose
+To configure the spatial angular distribution of sub-nodes within a function unit based on its ratio of control flow to declarative statements.
 
-* **Computing (Logic):** "If X happens, do Y." This represents the thinking brain. Functions that "think" a lot (heavy algorithms) arrange their satellites in jagged, non-linear, and energetic patterns.
-* **Defining (Structure):** "Let X equal 5." This represents the memory of the system. Functions that "remember" a lot (configs, interfaces) arrange their satellites in flat, linear, and stable patterns.
+## Problem Being Solved
+Providing uniform visual spacing across all code blocks obscures structural behavioral differences. By modulating layout angles, developers can quickly distinguish algorithmic logic from static configuration data.
 
-## 2.1.G.2. The Visual Translation (The Lerp)
+## Design
+Statements are divided into Algorithmic Logic (branches, loops) and Declarative Structure (data, imports).
+The Control Flow Ratio ($R_L$) is calculated as:
+$$R_L = \frac{\text{BranchHits}}{\text{BranchHits} + \text{LinearHits}}$$
 
-We map the abstract Control Flow Ratio ($R_L$) to physical 3D angles using **Linear Interpolation (Lerp)**. 
+The layout angle is mapped via linear interpolation between $22.5^\circ$ (high logic) and $90.0^\circ$ (high structure):
+$$\text{Angle} = 22.5^\circ + \left( (1.0 - R_L) \times (90.0^\circ - 22.5^\circ) \right)$$
 
-To calculate the divergence angle between satellites, we interpolate between a minimum sharp angle ($22.5^\circ$) and a maximum right angle ($90^\circ$), driven by the inverse of the logic ratio.
+## Pipeline Integration
+- **Inputs:** `BranchHits` and `LinearHits` extracted by the static analyzer.
+- **Outputs:** An angular divergence value in degrees/radians.
+- **Dependencies:** Relies on upstream metric extraction and feeds into the 3D scene graph generator.
 
-$$\text{Angle} = 22.5^\circ + \left( (1.0 - R_L) \times (90^\circ - 22.5^\circ) \right)$$
+Metrics Engine -> Angular Positioning -> Scene Graph Generator
 
-## 2.1.G.3. The Structural Archetypes
+## Tradeoffs
+Interpolating between fixed $22.5^\circ$ and $90.0^\circ$ limits the visualization space but ensures rendering stability. Rejecting force-directed algorithms in favor of deterministic linear interpolation sacrifices organic aesthetics for rendering speed and predictability.
 
-These calculated angles are then used to build the final 3D position of the satellites, resulting in two distinct visual extremes:
+## Limitations
+- Does not account for multiline string blocks that may skew declarative statement counts.
+- The fixed angle bounds may cause overlap in exceptionally dense code clusters.
 
-| Control Flow ($R_L$) | Divergence Angle | Visual Style | Spatial Arrangement |
-| :--- | :--- | :--- | :--- |
-| **High Logic** ($R_L \approx 1.0$) | $\approx 22.5^\circ$ | **"The Lightning Bolt"** | Branches diverge sharply. The satellites cluster in aggressive, jagged, tight formations indicating heavy algorithmic routing. |
-| **High Structure** ($R_L \approx 0.0$) | $\approx 90.0^\circ$ | **"The Circuit Board"** | Branches diverge at perfect right angles. The satellites form a clean, highly organized grid indicating stable, declarative data. |
+## Performance Notes
+The linear interpolation step operates in $O(1)$ time per node, ensuring zero physics simulation overhead during layout generation.
 
-<br><br>
+## Future Work
+- Adjustable angle boundaries based on parent node density.
+- Collision detection integration to prevent overlapping acute branches.
 
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- [Function Node Scaling](07-09-node-size.md)
+- [Child Component Density](07-07-number-of-satellites.md)

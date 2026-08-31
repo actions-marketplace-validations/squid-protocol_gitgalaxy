@@ -1,0 +1,69 @@
+name: GitGalaxy Zero-Trust Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  vault-sentinel:
+    name: Vault Sentinel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: squid-protocol/gitgalaxy@v2.4.0
+        with:
+          tool: 'vault-sentinel'
+          target: '.'
+
+  xray-inspector:
+    name: X-Ray Inspector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: squid-protocol/gitgalaxy@v2.4.0
+        with:
+          tool: 'xray-inspector'
+          target: '.'
+
+  supply-chain-firewall:
+    name: Supply Chain Firewall
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: squid-protocol/gitgalaxy@v2.4.0
+        with:
+          tool: 'supply-chain-firewall'
+          target: '.'
+
+  galaxyscope-report:
+    name: GalaxyScope Reporting (SARIF + ML Malware Gate)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # required to upload SARIF to the Security tab
+    env:
+      GITGALAXY_LICENSE_KEY: 'COMMUNITY_FREE_TIER'
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install GitGalaxy & Full Precision Engines
+        run: |
+          python -m pip install --upgrade pip
+          pip install "gitgalaxy[yaml]" networkx tiktoken xgboost pandas numpy
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Execute Zero-Trust Spectral Audit
+        run: |
+          galaxyscope . --config .galaxyscope.yaml --fail-on-malware --sarif-only --output gitgalaxy-results.json
+
+      - name: Upload SARIF to GitHub Security Tab
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: gitgalaxy-results_sarif.json

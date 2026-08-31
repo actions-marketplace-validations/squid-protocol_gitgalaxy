@@ -1,66 +1,47 @@
-# 2.1.F. Number of Satellites in a Unit
+# Child Component Density & Function Complexity
 
-> **Metric: Extended Cyclomatic Complexity**
->
-> **Purpose:** Visualizes the "Knotty" nature of logic. High cognitive load manifests as dense, recursive fractals or clusters of satellites.
-> 
-> **Input:** $C$ (Composite Complexity Score).
-> 
-> **Effect:** Modulates the number of satellites (moons) within a specific function unit in 3D space.
+> **File Reference:** [`gitgalaxy/core/detector.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/core/detector.py)
 
-## 2.1.F.1. The Philosophy: Cognitive Friction
+## Engineering Summary
+This subsystem measures and visualizes logic complexity within individual functions by calculating a composite complexity score. It solves the problem of developers needing to quickly assess the cognitive load of code modules during codebase exploration. It exists to map textual code complexity into physical object density within a 3D visualization. Within GitGalaxy, this subsystem defines the child satellite node count for function components.
 
-Computers don't care about `try/catch` blocks or nested `if` statements; they execute them in nanoseconds. Humans, however, have limited working memory. Every time a developer reads an `if`, a loop, or an error handler, they have to "fork" their mental model of what the code is doing. We call this Cognitive Friction.
+## Purpose
+To calculate the structural and defensive overhead of function logic and determine the number of child satellite nodes rendered in the 3D plane.
 
-In GitGalaxy, we visualize this friction physically. A simple, linear script grows like a straight bamboo shoot. A complex, defensive, branching function grows like a dense, thorny thicket.
+## Problem Being Solved
+Developers struggle to identify high-friction, deeply nested functions in large codebases. While compilers handle branches easily, humans face cognitive limits. This component maps the cognitive friction of conditional branching and error handling directly to visual density.
 
-## 2.1.F.2. The Inputs: Anatomy of Complexity
+## Design
+Function complexity is computed from two code patterns:
+1. **Structural Complexity:** Decision points (`BranchHits` from `if`, `for`, `switch`).
+2. **Defensive Overhead:** Guard logic (`SafetyHits` from `try`, `catch`, `assert`).
 
-To calculate this, we look at two distinct types of code patterns found by the scanner:
+**Composite Complexity Score ($C$):**
+$$C = \text{BranchHits} + (\text{SafetyHits} \times 0.5)$$
+Defensive logic is weighted at 0.5 since guard conditions consume roughly half the cognitive overhead of full control flow forks. 
+Score tiers determine the node count: $\le 2$ (0-1 nodes), $> 2$ (1-2 nodes), $> 8$ (3-4 nodes), $> 15$ (dense cluster), $> 25$ (heavy cluster).
 
-**A. Structural Complexity (The Skeleton)**
-* **What it is:** The actual decision points in the logic. Each of these represents a split in reality ("If X is true, go left; otherwise, go right."). Too many splits make the path impossible to follow.
-* **Variables Used:** `BranchHits` (from scanner).
-* **Triggers:** `if`, `else`, `for`, `while`, `switch`, logical operators (`&&`, `||`), and ternaries (`?`).
+## Pipeline Integration
+- **Inputs:** `BranchHits` and `SafetyHits` from the static analyzer.
+- **Outputs:** An integer child node count.
+- **Dependencies:** Relies on upstream static analysis counts and drives downstream 3D layout rendering.
 
-**B. Defensive Overhead (The Armor)**
-* **What it is:** Code written to protect against failure, not to perform the primary task. While safety is good, it creates visual noise. A function wrapped in three layers of error handling is structurally denser than one that just does the math.
-* **Variables Used:** `SafetyHits`.
-* **Triggers:** `try`, `catch`, `finally`, `assert`, `guard`, `validate`.
+Static Analyzer -> Density Subsystem -> 3D Layout Engine
 
-## 2.1.F.3. The Equation: Calculating the Composite Score (C)
+## Tradeoffs
+Regex-based heuristics are chosen over full AST parsing for processing speed, sacrificing exact scope awareness. The 0.5 weight for defensive hits is a subjective heuristic that balances risk visibility without penalizing safe coding practices.
 
-We calculate the **Composite Complexity Score ($C$)** using a weighted sum. We weight defensive overhead at 50% because two safety checks consume about as much "mental space" as one actual logic branch. This prevents well-protected code from looking unfairly spaghetti-like while acknowledging it is still denser than unsafe code.
+## Limitations
+- Unsupported languages or non-standard macros will not trigger branch counters.
+- Large switch statements can artificially inflate structural complexity scores.
 
-**Step 1: Count the Branches (The Skeleton)**
-$$\text{Structural} = \text{BranchHits}$$
+## Performance Notes
+The composite calculation is $O(1)$ per function since it performs basic arithmetic on pre-computed heuristic variables.
 
-**Step 2: Weigh the Armor (The Defense)**
-$$\text{Defensive} = \text{SafetyHits} \times 0.5$$
+## Future Work
+- Context-aware weighting to differentiate deep nesting from linear conditional branches.
+- Dynamic adjustments for language-specific idioms.
 
-**Step 3: Summation**
-$$C = \text{Structural} + \text{Defensive}$$
-
-## 2.1.F.4. The Visual Thresholds (Fractal Depth)
-
-We map the abstract number $C$ to a physical **Fractal Depth**. This determines how many times the geometry splits or how many moons orbit the planet.
-
-| Complexity ($C$) | Fractal Depth | Classification | Visual Mapping | Code Characteristic |
-| :--- | :--- | :--- | :--- | :--- |
-| **$\le 2$** | **0** | **The Bamboo** | A single planet with 0-1 moons (A line). | A simple list of instructions. Do A, then B, then C. |
-| **> 2** | **1** | **The Fork** | The unit splits once. | A basic function with one or two checks. |
-| **> 8** | **2** | **The Tree** | Distinct branching structure (3-4 moons). | Standard business logic. Loops inside conditions. |
-| **> 15** | **3** | **The Thicket** | Dense, aggressive branching (A swarm of moons). | Complex algorithms, state machines, or legacy parsers. |
-| **> 25** | **4** | **The Jungle** | Chaotic fractal explosion (Solid with branches). | "God Objects," massive switch statements, or deep recursion. |
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- [Relative Positioning](07-08-relative-positioning.md)
+- [Node Size Scaling](07-09-node-size.md)

@@ -1,68 +1,45 @@
-# 2.1.B. Star's Pulse Rate
+# Node Emissive Intensity & Pulse Rate Mapping
 
-> **Metric: Inbound Reference Count (Popularity)**
->
-> **Purpose:** See how popular or highly referenced a file is, which is a fundamental measure of its importance in the system.
-> 
-> **Effect:** Modulates the Emissive Intensity (Bloom Strength) and Pulse Floor. Pulses should feel powerful and stately, never blinky and annoying. Instead of deadening the colors with opacity fades, we use Bioluminescence. A "God Class" file that is imported by many other files shouldn't just blink faster; it should burn hotter and overwhelm the surrounding atmosphere.
+> **File Reference:** [`gitgalaxy/recorders/gpu_recorder.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/recorders/gpu_recorder.py)
 
-## 2.1.B.1. The Philosophy: Bioluminescence
+## Engineering Summary
+A mapping system converts a file's dependency in-degree into shader animation parameters. It solves the challenge of identifying structural bottlenecks in large systems by translating inbound reference counts into visual brightness and pulse frequencies. This subsystem allows architects to instantly locate core dependencies and popular modules, operating as the node emissive intensity mapping within GitGalaxy.
 
-We treat the codebase as a living, deep-sea organism:
+## Purpose
+To visually encode the architectural centrality of a module using dynamic shader effects rather than static geometry.
 
-* **Hot (High Gravity):** Core utilities or "God Objects." These are the nuclear reactors of the system. They burn with a high-intensity, white-hot core that never fully dims.
-* **Cold (Low Gravity):** Leaf nodes or standalone configs. They emit a gentle, shallow phosphorescence.
+## Problem Being Solved
+In dense dependency graphs, drawing hundreds of edge lines between nodes creates unreadable visual fields. Modulating emissive intensity removes the need for explicit edge rendering while clearly conveying node centrality.
 
-## 2.1.B.2. The Inputs: Measuring Gravity
+## Design
+The mapping converts inbound reference counts into normalized popularity ($P$), which then drives shader uniforms:
+- Pulse Frequency: Ranges from 0.5 Hz to 1.5 Hz.
+- Emissive Floor: Sets the minimum intensity ($0.2 + P \times 0.8$).
+- Emissive Ceiling: Sets the peak intensity ($1.5 + P \times 2.5$).
+A sinusoidal function in the shader uses these bounds to evaluate the final per-frame intensity.
 
-* **Ref (Inbound References):** The count of *other* files that import this specific file.
-* **MaxRef:** The highest reference count found in the entire repository. This sets the global "Ceiling" for the simulation.
+## Pipeline Integration
+- **Inputs**: Calculated in-degree dependency counts for each file.
+- **Outputs**: Shader uniform values (frequency, min/max intensity).
+- **Dependencies**: Requires dependency graph resolution; outputs consumed directly by the WebGL fragment shader.
+```text
+Dependency Graph In-Degree -> Emissive Mapping Formulas -> WebGL Shader Uniforms
+```
 
-## 2.1.B.3. The Equation: Intensity Mapping
+## Tradeoffs
+Representing dependencies via emissive pulsing obscures the exact source of the inbound references. We chose this to maintain a clean visual field, sacrificing explicit point-to-point traceability for high-level systemic comprehension.
 
-We don't just change the speed of the pulse; we change the **Dynamic Range** of the glow.
+## Limitations
+- Emissive bloom can wash out adjacent nodes in densely packed spatial clusters.
+- The normalization ceiling can skew results if a single outlier module is imported thousands of times.
 
-* **Frequency (Speed):** Capped between 0.5Hz and 1.5Hz. We keep the pulse "Stately" and "Breathing" to avoid rapid, fatiguing strobing.
-* **Amplitude (Intensity):** Mapped directly to popularity.
-* **Floor:** The minimum brightness. Popular files *never* go completely dark.
-* **Ceiling:** The maximum brightness. Popular files bloom into pure white at their peak.
+## Performance Notes
+Offloading the sinusoidal pulse calculation to the GPU fragment shader ensures zero CPU overhead during animation cycles, maintaining consistent 60 FPS rendering.
 
-## 2.1.B.4. The Math: Calculating Emissive Intensity
+## Future Work
+- Implement local neighborhood normalization to prevent global outliers from compressing the emissive range.
+- Introduce pulse phase offsetting to prevent synchronized flashing when multiple central hubs are viewed.
 
-First, we normalize the popularity ($P$) into a clean scale from $0.0$ to $1.0$.
-
-$$P = \min\left(\frac{\text{Ref}}{\text{MaxRef}}, 1.0\right)$$
-
-Next, we establish the boundaries for speed, the bloom floor, and the bloom ceiling based on that popularity.
-
-**1. Stately Speed:** Prevents the "Hazard Strobe" effect.
-$$\text{Speed} = 0.5 + (P \times 1.0)$$
-
-**2. The Bloom Floor:** Important files never fade below $1.0$ (Full Brightness).
-$$\text{MinIntensity} = 0.2 + (P \times 0.8)$$
-
-**3. The Bloom Ceiling:** Important files burst into blinding white ($4.0$) at the peak.
-$$\text{MaxIntensity} = 1.5 + (P \times 2.5)$$
-
-Finally, we apply a sine wave over time to calculate the exact shader value for the current frame.
-
-$$\text{EmissiveIntensity} = \text{MinIntensity} + \left( \sin(\text{Time} \times \text{Speed}) \times (\text{MaxIntensity} - \text{MinIntensity}) \right)$$
-
-## 2.1.B.5. The Visual Thresholds (The Resonance)
-
-| Classification | Pulse Frequency | Dynamic Range | Visual Effect |
-| :--- | :--- | :--- | :--- |
-| **The Firefly** (Low Refs) | 0.5 Hz *(Slow)* | 0.2 $\rightarrow$ 1.5 | A gentle, rhythmic shimmer. The object retains its rich theme color (e.g., Deep Cyan) and occasionally brightens. |
-| **The Reactor** (High Refs) | 1.5 Hz *(Stately)* | 1.0 $\rightarrow$ 4.0 | A powerful, "Core Saturation" effect. The center burns white-hot due to Bloom overload while the edges retain the theme color. It feels "heavy" and anchors the scene. |
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- [Visual Code Complexity Mapping](07-01-code-complexity.md)
+- [Node Geometry & Control Flow](07-04-stars-shape.md)

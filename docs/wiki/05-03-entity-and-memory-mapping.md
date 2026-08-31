@@ -1,40 +1,49 @@
 # Entity & Memory Mapping
 
-> **Architecture: Strict Memory Boundary Enforcement**
->
-> **Summary:** The Java Spring Entity Forge translates the generated JSON schemas into standard Spring Boot JPA Entities (`@Entity`). Because COBOL utilizes highly specific memory layouts that do not naturally exist in Java, the forge applies advanced annotation strategies to recreate the legacy memory constraints in the cloud.
+> **File Reference:** [`gitgalaxy/tools/cobol_to_java/cobol_to_java_spring_forge.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/cobol_to_java/cobol_to_java_spring_forge.py)
 
-## Memory Overlay Resolution (REDEFINES)
+## Engineering Summary
+This subsystem translates procedural memory layouts into relational database entity mappings. It solves the problem of converting byte-level memory overlays, fixed-length arrays, and specialized numeric constraints into object-relational mapping (ORM) structures. It exists to bridge the gap between contiguous memory segments and normalized SQL tables. Within the GitGalaxy pipeline, it generates the data access layer for target microservices.
 
-In COBOL, the `REDEFINES` clause allows two variables to occupy the exact same physical memory address. Relational databases do not support this concept natively. 
+## Purpose
+To translate extracted JSON schemas of legacy data structures into standard Spring Boot JPA Entities (`@Entity`).
 
-When the Entity Forge detects a `redefines` constraint in the JSON schema, it maps the primary variable to the database column, but maps the redefined alias as a `@Transient` variable. This ensures the alias is accessible to the Java business logic at runtime without attempting to create duplicate, conflicting columns in the PostgreSQL schema.
+## Problem Being Solved
+Legacy languages like COBOL use explicit byte-level memory layouts (like `REDEFINES` and `OCCURS`) and specific numeric representations (`PIC` clauses) that do not map 1:1 to modern Java types or relational database columns.
 
-## Array Generation (OCCURS)
+## Design
+The generator maps specific legacy constructs to JPA annotations:
+- **Memory Overlay Resolution (`REDEFINES`)**: Maps the primary variable to a persistent database column. The redefined alias is mapped with `@Transient`, making it available in business logic without creating redundant SQL columns.
+- **Array Generation (`OCCURS`)**: Translates fixed-length arrays into Java `List<T>` fields, annotated with `@ElementCollection` and `@CollectionTable`. Uses foreign key join columns to the parent's primary key (`sys_id`).
+- **Financial Precision (`PIC` Clauses)**: 
+  - Strings (`PIC X` / `PIC A`) map to `@Column(length = N)`.
+  - Decimals (`PIC S9(7)V99` / `PIC Z`) map to `BigDecimal` with `@Column(precision = P, scale = S)`.
+- **Sanitization**: Converts hyphens to camelCase, prefixes numeric variables (e.g., `1099-FORM` to `v1099Form`), and shields reserved keywords by appending `Val` (e.g., `classVal`).
 
-Legacy `OCCURS` clauses define fixed-length arrays within records. The Entity Forge translates these into Java `List<T>` structures, automatically annotating them with `@ElementCollection` and `@CollectionTable`. It strictly wires the join columns to ensure the normalized array data maps perfectly back to the parent entity's `sys_id`.
+## Pipeline Integration
+**Inputs received:** JSON data schemas from the IR state.
+**Outputs produced:** Java `@Entity` source files with JPA annotations.
+**Dependencies:** Upstream COBOL Refactoring Controller; downstream Maven compiler and Hibernate schema generators.
 
-## Financial Precision (PIC Clauses)
+```mermaid
+graph TD
+    A[JSON Data Schemas] --> B[Entity Generator]
+    B --> C[Java JPA Entities]
+```
 
-The forge parses legacy `PIC` (Picture) clauses to enforce strict structural boundaries on the generated JPA columns:
-* **Strings (`PIC X` / `PIC A`):** Extracts the exact byte length and maps it directly to the `@Column(length = N)` annotation.
-* **Decimals (`PIC S9V99` / `PIC Z`):** Calculates the exact number of integers and fractional digits, mapping them to `BigDecimal` types with strict `@Column(precision = P, scale = S)` boundaries.
+## Tradeoffs
+- Using `@Transient` for `REDEFINES` fields instead of splitting into normalized tables. Chosen to maintain memory equivalence and ease of business logic translation, sacrificing full relational query capability on the redefined fields.
 
-## Lexical Sanitization
+## Limitations
+- Complex nested `REDEFINES` with misaligned byte boundaries may require manual intervention.
+- The use of `@ElementCollection` for `OCCURS` clauses can lead to $O(N)$ query patterns (N+1 selects) if not fetched eagerly or joined correctly.
 
-To ensure the generated Java code compiles instantly, the Entity Forge applies a multi-pass sanitization protocol to all legacy variable names:
-1. **CamelCase Conversion:** Legacy hyphens (`CUSTOMER-NAME`) are converted to standard Java camelCase (`customerName`).
-2. **Numeric Prefixing:** Java variables cannot begin with a number. Legacy variables like `1099-FORM` are automatically prefixed (`v1099Form`).
-3. **Reserved Keyword Shielding:** If a legacy variable directly collides with a Java reserved keyword (e.g., `class`, `public`, `return`, `int`), the forge automatically appends a `Val` suffix (e.g., `classVal`) to guarantee successful Maven compilation.
+## Performance Notes
+Entity generation relies on string manipulation and template rendering, executing in $O(1)$ time per field definition, scaling linearly with the size of the legacy data structures.
 
-<br><br>
+## Future Work
+- Implementation of custom Hibernate user types for more complex byte-aligned memory representations.
 
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- `cobol_to_java_controller.py`
+- `cobol_to_java_api_contract_forge.py`

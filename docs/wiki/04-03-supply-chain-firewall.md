@@ -1,58 +1,59 @@
-# The Supply Chain Firewall (Zero-Trust Verification)
+# Supply Chain Firewall (Zero-Trust Dependency Gate)
 
-> **Guarding the Gates**
->
-> Third-party dependencies are the most vulnerable entry point in any modern application. An attacker doesn't need to hack your servers; they just need to compromise a single NPM or PyPI package you rely on.
->
-> The Supply Chain Firewall (`supply_chain_firewall.py`) acts as a strict, high-speed quarantine zone. It scans the massive `node_modules` or `venv` directories, enforcing a Zero-Trust architecture to catch malicious packages, Unicode homoglyph attacks, steganography, and hostile I/O execution before the code is ever built or deployed.
+> **File Reference:** [gitgalaxy/tools/supply_chain_security/supply_chain_firewall.py](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/supply_chain_security/supply_chain_firewall.py)
 
-## Zero-Trust Import Verification
+## Engineering Summary
+Modern applications heavily rely on third-party dependencies, which can introduce severe supply chain risks such as malicious updates, namespace hijacking, or embedded malware. Relying solely on asynchronous vulnerability scans allows bad code to enter the environment during the build phase. To proactively block threats, an in-memory logic gate evaluates package imports, resolves aliases, and enforces risk thresholds before third-party code reaches production build environments. This subsystem is the GitGalaxy Supply Chain Firewall.
 
-The firewall utilizes a Universal Import Slicer (regex) to rip through source files (`.js`, `.py`, `.ts`, `.php`, `.go`, `.rs`) and extract exactly what external packages the dependencies are trying to load. 
+## Purpose
+To provide zero-trust dependency verification and behavioral policy enforcement during CI/CD execution, acting as an active gate to block malicious or unauthorized dependencies from executing.
 
-It evaluates every single `import` or `require` statement against a strict policy matrix:
+## Problem Being Solved
+Vulnerability scanners often rely on post-build static analysis or asynchronous cloud alerts. By the time a malicious package is flagged, it may have already compromised the build environment via build scripts or hidden logic. The firewall evaluates dependencies deterministically at runtime.
 
-* **Banned Packages:** Checks against a `BLACKLISTED_IMPORTS` list. If a known malicious package is found, it immediately triggers a `[BLACKLISTED IMPORT]` alert and fails the build.
-* **Strict Import Mode:** The firewall can operate in a true Zero-Trust state. If `STRICT_IMPORT_MODE` is enabled, any package that is not explicitly defined in the `APPROVED_IMPORTS` registry is flagged as an "Unknown Package" and blocked.
+## Design
+### In-Memory Graph Processing
+The firewall operates directly on the pre-tokenized artifact graph (`parsed_files`), eliminating redundant file reads from disk. It evaluates raw package import declarations against configured allowlists, denylists, and policy flags from `.galaxyscope.yaml`.
 
-## High-Speed Security Physics
+### Import Verification & Alias Resolution
+The firewall normalizes packages (e.g., stripping relative imports, collapsing deep module paths to root package names). It actively dereferences manifest aliases to verify true package origins, preventing **Dependency Confusion** attacks. 
 
-Scanning tens of thousands of dependency files requires massive computational velocity. To achieve this, the Orchestrator instantiates a `SecurityLens` using the "paranoid" `ThreatPolicy`, but applies a critical **Speed Fix**. 
+### Behavioral Policy Enforcement
+Rather than recomputing static analysis, the firewall reads risk vectors computed during metrics evaluation (`SignalProcessor.RISK_SCHEMA`). Risk categories (Hidden Malware, Data Injection, Secrets Leak) are evaluated against a sigmoid block threshold (`_FIREWALL_BLOCK_THRESHOLD = 50.0`). 
 
-The firewall explicitly neuters the Security Lens, restricting its regular expression sensors to hunt *only* for supply-chain-specific indicators of compromise:
-* `homoglyphs` (Typo-squatting or visual spoofing in the code)
-* `shadow_imports` (Attempting to import modules dynamically to bypass static analysis)
-* `io` (Unexpected filesystem or network access inside a utility library)
-* `danger` (Direct `eval` or remote code execution triggers)
-* `flux` (State mutation)
+### Contextual Risk Multipliers
+1. **Build-Time Execution Multiplier ($10.0\times$):** Risk scores for build scripts (`setup.py`, `postinstall.js`) are heavily multiplied because they execute automatically and can compromise host systems immediately.
+2. **Network Centrality Multiplier:** High downstream blast radius files receive dynamic risk score multipliers.
 
-### The Inert Data Shield
-To prevent false positives and save CPU cycles, the firewall employs an Inert Data Shield. If a file is a static data format (e.g., `.json`, `.md`, `.csv`, `.yaml`), the engine forcefully zeroes out its threat counts, ensuring the physics engine only evaluates active, executable logic.
+## Pipeline Integration
+Inputs received include tokenized artifact graph data (`parsed_files`), alias maps, and configuration rules. Outputs produced are risk alerts, policy violation metrics, and a build pass/fail signal. Downstream CI/CD stages depend on this gate successfully passing.
 
-## Density Thresholds & Steganography
+```mermaid
+graph LR
+    A[Tokenized Artifact Graph] --> B[Import Normalizer & Alias Resolver]
+    C[.galaxyscope.yaml Config] --> B
+    B --> D[Policy & Risk Evaluator]
+    D --> E{Block Threshold Reached?}
+    E -- Yes --> F[Fail CI/CD Pipeline]
+    E -- No --> G[Proceed to Build]
+```
 
-Sophisticated malware often hides its payload deep within legitimate utility functions (steganography). A single suspicious string might just be a false positive, but a dense cluster of them is a threat.
+## Tradeoffs
+* **Strict Policy vs. Developer Velocity:** Enforcing `STRICT_IMPORT_MODE` (where only pre-approved imports are allowed) provides the highest security but increases friction for developers adding new legitimate dependencies.
+* **Behavioral Multipliers vs. False Positives:** The aggressive $10.0\times$ multiplier on build scripts may block legitimate complex installations, requiring explicit exceptions in `ALLOWLIST_PATHS`.
 
-The firewall calculates the structural density of the threats against the physical lines of code. If the exposure density breaches the "paranoid" policy thresholds, it explicitly flags:
-* **Hidden Malware Risk:** Too many obfuscation techniques or shadow imports detected in a small physical area.
-* **Data Injection Risk:** High concentrations of dangerous `eval` or untainted I/O operations.
+## Limitations
+* The firewall only analyzes static imports. Dynamic runtime imports (e.g., heavily obfuscated string evaluations of dependency paths) may bypass initial analysis.
+* Dependent on the accuracy of the upstream tokenized artifact graph.
 
-When these thresholds are breached, the firewall dumps the exact code snippets (evidence) to the console so security engineers can see exactly what triggered the alarm.
+## Performance Notes
+Because the firewall consumes pre-tokenized in-memory graph data and applies vectorized block thresholds, it performs zero disk I/O and executes sub-second policy enforcement across massive dependency trees.
 
-## The CI/CD Build Breaker
+## Future Work
+* **Current Behavior:** Exits with status code `1` upon detecting threats, failing the pipeline securely.
+* **Planned Improvements:** Provide interactive dry-run modes that log warnings without halting builds during initial deployment phases.
 
-The Supply Chain Firewall is designed to run as a blocking step in a CI/CD pipeline. 
-
-Upon completion, it prints a highly readable Mission Report detailing its scan velocity, the number of approved/banned packages, and the total number of Active Threats. If even a single threat or policy violation is found, the script exits with a status code of `1`, violently failing the build and preventing the infected dependency from reaching production.
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Related Components
+* [GitGalaxy Platform](https://gitgalaxy.io/)
+* [⬅️ Back to Master Index](index.md)
 

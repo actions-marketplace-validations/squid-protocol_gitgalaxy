@@ -1,32 +1,47 @@
-# Autonomous Agent Tickets
+# Autonomous Agent Task Tickets
 
-> **Architecture: Deterministic LLM Task Orchestration**
->
-> **Summary:** To complete the modernization loop, the generated Java code must be populated with the extracted COBOL business rules. Instead of feeding raw COBOL directly into an LLM (which guarantees hallucinations), GitGalaxy packages the isolated logic slices into strict, structured JSON Task Tickets designed for autonomous agents.
+> **File Reference:** [`gitgalaxy/tools/cobol_to_java/cobol_to_java_agent_forge.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/cobol_to_java/cobol_to_java_agent_forge.py)
 
-## The JSON Ticket Payload
+## Engineering Summary
+This subsystem formats isolated segments of legacy code into bounded task payloads for large language models. It solves the problem of context window saturation and hallucination when translating large source files. It exists to enforce strict constraints on AI code generation by limiting the provided context to exact business logic paths. Within GitGalaxy, it bridges the deterministic static analysis pipeline with probabilistic AI generation.
 
-The Agent Forge generates a strict JSON contract (`{prog_id}_java_service_job.json`) that bounds the AI agent to a highly specific, restricted context.
+## Purpose
+To package pre-sliced business logic into structured JSON Task Tickets (`{prog_id}_java_service_job.json`) for autonomous code generation agents.
 
-* **Isolated Business Rules:** The ticket contains only the localized logic slice extracted by the Microservice Slicer. The LLM cannot see the whole COBOL monolith; it only sees the exact paragraphs required for the target variable.
-* **External Dependencies:** The ticket explicitly lists the unresolved `CALL` statements discovered by the DAG. 
-* **Architectural Warnings:** The ticket injects the "Honesty Protocol" flags (e.g., system limit overrides, dynamic jumps) directly into the context window, forcing the AI to account for legacy edge cases.
+## Problem Being Solved
+Feeding entire legacy source files to an LLM causes hallucinated dependencies, forgotten state, and context window limits. Agents need explicitly bounded contexts to generate accurate implementations.
 
-## The Anti-Hallucination Constraints
+## Design
+- **JSON Task Ticket Schema**: Generates a ticket containing only localized logic statements required for a target variable, explicit enumerations of unresolved subroutine calls, and injected architectural warnings (e.g., dynamic GOTOs).
+- **Prompt Bounding**: Uses a `system_prompt` to enforce strict generation rules:
+  1. No creation of unlisted external systems or tables.
+  2. Interface calls must target Spring-managed dependencies for unresolved external calls.
+  3. Structured response format (JSON payload with `diagnosis` and `java_code`) for automated insertion.
 
-The ticket includes a strict System Prompt engineered to suppress generative hallucinations:
-1. **No External Systems:** The agent is explicitly forbidden from inventing external systems or databases not defined in the JSON context.
-2. **Interface Forcing:** The agent is instructed to write standard interface calls to the provided `external_dependencies`, rather than attempting to guess and write the external logic itself.
-3. **Deterministic Output:** The agent is required to return a valid JSON object containing a `diagnosis` string and the isolated `java_code`, ensuring the pipeline can programmatically insert the result into the forged `@Service` class.
+## Pipeline Integration
+**Inputs received:** Sliced business logic blocks and dependency data from static analysis.
+**Outputs produced:** JSON Task Tickets containing prompts and bounded context.
+**Dependencies:** Upstream microservice business logic slicer; downstream LLM agent execution and AST insertion.
 
-<br><br>
+```mermaid
+graph TD
+    A[Sliced Business Logic] --> B[Agent Forge]
+    B --> C[JSON Task Ticket]
+    C --> D[LLM Execution]
+```
 
----
+## Tradeoffs
+- Restricting context to sliced business logic instead of providing the full file. Chosen to increase deterministic output and reduce hallucinations, sacrificing the model's ability to infer global, unmapped context.
 
-### 🌌 Powered by the blAST Engine
+## Limitations
+- Highly coupled business rules that span multiple files may not be fully resolved if the slicer heuristics fail to capture the entire slice.
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Performance Notes
+Ticket generation is an $O(1)$ string formatting operation per target variable slice, adding negligible overhead to the pipeline.
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Future Work
+- Integration of continuous feedback loops where the agent can request additional context if the provided slice is insufficient.
 
+## Related Components
+- `cobol_refractor_controller.py`
+- `cobol_to_java_service_forge.py`

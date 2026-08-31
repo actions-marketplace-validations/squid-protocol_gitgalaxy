@@ -1,58 +1,103 @@
-# Contributing to GitGalaxy
+# 🤝 Contributing to GitGalaxy
 
-First off, thank you for considering contributing to GitGalaxy! The blAST engine is essentially a tunable scientific instrument, and calibrating it across the vast ecosystem of open-source software requires a community effort.
+First off, thank you for considering contributing to GitGalaxy! The blAST engine is a highly calibrated, deterministic mathematical instrument. Calibrating it across the vast ecosystem of open-source software requires a dedicated community of systems engineers.
 
-Whether you are reporting a taxonomic discrepancy, refining the parsing engine, or expanding the documentation, your input helps map the structural DNA of software more accurately.
-
-## 🧬 The blAST Philosophy
-
-Before diving in, please remember that GitGalaxy treats code as a living organism. The blAST engine evaluates structural logic and behavioral genetic markers, not just rigid syntax. 
-
-Sometimes, what appears to be a traditional parsing error might actually be blAST intentionally flagging a structural anomaly or a dense risk exposure. Please keep this in mind when reporting issues or proposing changes to the sequencing algorithms.
+Whether you are reporting a taxonomic discrepancy, refining the parsing engine, or expanding the documentation, your input helps map the architectural physics of software more accurately.
 
 ---
 
-## 🔬 The Differential Scan (How We Review Pull Requests)
+## ⚙️ The blAST Philosophy (Physics over ASTs)
 
-We do not merge structural backend changes based solely on subjective code review. GitGalaxy operates at hyper-scale, and every change to the parsing logic has cascading effects.
+Before diving in, please remember that GitGalaxy treats code as a physical structure governed by thermodynamic laws. The blAST engine evaluates structural logic, algorithmic complexity, and calculated **risk exposures**—not just rigid syntax. 
+
+Sometimes, what appears to be a traditional parsing error might actually be the blAST engine intentionally flagging a structural anomaly or a dense risk exposure. Please keep this in mind when reporting issues or proposing changes to the extraction heuristics.
+
+---
+
+## 🌐 Expanding the blAST Engine (Adding Languages)
+
+GitGalaxy uses an AST-free, mathematical heuristics engine to build a comparative lexical taxonomical map across all programming languages. We do not write traditional parsers; we map thermodynamic language physics using bounded regular expressions. 
+
+If you want to add native support for a new language (e.g., Lua, Haskell, or a proprietary DSL), do not start writing regex from scratch. We use a strict LLM-driven calibration protocol to guarantee ReDoS immunity. 
+
+**Please read the strict engine calibration guide here:** **[Architecting a New Language (Extending the blAST Engine)](gitgalaxy/standards/how_to_add_a_language.md)**
+
+---
+
+## 🔬 The Differential Scan (Our PR Protocol)
+
+We do not merge structural backend changes based solely on subjective code review. GitGalaxy operates at planetary scale, and every change to the parsing logic has cascading effects.
 
 When you submit a Pull Request that alters the blAST engine, your candidate changes will be subjected to a **Full Differential Scan**. 
 
 * **The Control + Variable Test:** We run your branch against our calibrated baseline of ~80 massive open-source repositories, **plus** the specific repository your PR is designed to address.
-* **Before and After:** We perform a strict comparison of the engine's output before and after your rule update across this entire dataset (80 + 1). This ensures your addition resolves the target discrepancy without degrading the established baseline.
+* **Before and After:** We perform a strict mathematical comparison of the engine's output before and after your rule update across this entire dataset. This ensures your addition resolves the target discrepancy without degrading the established baseline or triggering Catastrophic Backtracking (ReDoS).
 * **The Metrics:** The output is assessed strictly on four vectors: **Accuracy, Speed, Utility, and Ethos.**
-* Only changes that are mathematically and practically *measurably better* across the broader ecosystem will be incorporated.
+* Only changes that are mathematically and practically *measurably better* across the broader ecosystem will be incorporated into the `main` branch.
+
+**Run both gates locally before opening the PR — they catch different things:**
+
+```
+python tests/tools/crucible_check.py                          # the ~80-repo Differential Scan above
+python tests/tools/tree_sitter_accuracy_audit.py --all --ci   # per-language recall/precision vs. tree-sitter ground truth
+```
+
+A passing Differential Scan does **not** mean the tree-sitter accuracy audit also passes — it's a separate corpus and a separate comparison (measured recall/precision against real parser output, not a before/after diff), so a change can pass one and quietly regress the other in a file neither the ~80-repo baseline nor your target repo happens to cover. Both are required for any change to `gitgalaxy/core/detector.py`, `prism.py`, or `language_standards.py`.
 
 ---
 
 ## 🛠️ Submitting Pull Requests
 
-To ensure your contribution integrates smoothly into the blAST ecosystem:
+To ensure your contribution integrates smoothly into the Zero-Trust ecosystem:
 
 1. **Fork and Branch:** Create a feature branch from `main` (`git checkout -b feature/your-feature-name`).
-2. **Maintain the Contract:** Ensure that any backend changes to the CLI do not break the universal JSON contract expected by the frontend Observatory. 
-3. **Test Visually:** Run your newly generated `_galaxy.json` through either **[GitGalaxy.io](https://gitgalaxy.io)** or your local **Airgap Observatory** to verify that visual rendering and flexbox constraints remain intact. Whichever is more convenient for you is fine.
-4. **Document:** If you are adding new language phenotypes or altering the parsing logic, please update the Taxonomical Equivalence Map in the wiki.
-5. **Submit:** Open a PR with a clear title. Explain the *why* behind your structural changes, not just the *what*. Be sure to include the link to the target repository so we can include it in the Differential Scan.
+2. **Maintain the Contract:** Ensure that any backend changes to the CLI do not break the universal JSON schema contract expected by the frontend Observatory. 
+3. **Test Visually:** Run your newly generated `_galaxy.json` through either **[GitGalaxy.io](https://gitgalaxy.io)** or your local **Airgap Observatory** to verify that 3D WebGPU rendering and visual physics constraints remain intact. 
+4. **Document:** If you are adding new language phenotypes or altering the parsing logic, please update the [Language Lens](docs/wiki/02-05-language-lens.md) documentation in the wiki.
+5. **Pass the CI Pipeline Locally:** Before pushing, always run `ruff check .` to check for linter errors (like the strict `flake8-bandit` rules which require you to append `# noqa: S101` to all `assert` statements in tests). You should also verify that all `pytest` checks pass. If your change touches parsing/engine logic, also run `crucible_check.py` **and** `tree_sitter_accuracy_audit.py --all --ci` (see the Differential Scan section above) — they check different things and both are required.
+6. **Submit:** Open a PR with a clear title. Explain the *why* behind your structural changes, not just the *what*. Be sure to include the link to the target repository so we can include it in the Differential Scan.
+
+---
+
+## 🔒 CI Pipeline & Baselines
+
+When you modify GitGalaxy's core engine, several CI workflows will rigorously test your changes against established baselines. If your changes intentionally improve parsing precision, you must regenerate the corresponding baselines.
+
+1. **Golden Crucible Baselines (`tests/golden_master_audit.json`)**
+   This validates exact extraction output.
+   - Run `python tests/tools/crucible_check.py` to view structural drift.
+   - To re-bless the new state: `python tests/tools/crucible_check.py --update --yes`
+
+2. **Tri-Comparison Ledger (`docs/self_scan/tri_comparison_ledger.json`)**
+   This compares GitGalaxy precision against ctags and tree-sitter.
+   - Run `python tests/tools/tri_comparison_chart.py --all --ci` to test.
+   - If you improved precision, lock it in: `python tests/tools/tri_comparison_chart.py --regenerate --languages <lang>`
+
+3. **Tree-Sitter Accuracy (`docs/self_scan/tree_sitter_accuracy_history.csv`)**
+   This audits AST accuracy against tree-sitter ground truth. 
+   - Run `python tests/tools/tree_sitter_accuracy_audit.py --ci --all`.
+   - If your regex fix legitimately drops false positives causing ground truth drift, regenerate the baseline: `python tests/tools/tree_sitter_accuracy_audit.py --regenerate --lang <lang>`
+
+If your PR touches any baseline fixtures, **explain why in the PR description** (e.g. "improved the Rust parser, now correctly detects async trait bounds"). A CI check flags any PR that modifies these files so it's never invisible in a large diff.
 
 ---
 
 ## 🐛 Reporting Discrepancies
 
-If the galaxyscope misidentifies a repository's structure or fails to parse a specific file phenotype, please use our **[Parsing Discrepancy Form](https://github.com/squid-protocol/gitgalaxy/issues/new/choose)**. 
+If the GalaxyScope CLI misidentifies a repository's structure or fails to parse a specific file phenotype, please use our **[Parsing Discrepancy Form](https://github.com/squid-protocol/gitgalaxy/issues/new/choose)**. 
 
 To help us reproduce the issue with quantitative precision, you will be asked to provide:
 * A direct link to the public repository being scanned.
-* The Observatory viewer you were using (GitGalaxy.io or Airgap Observatory).
+* The Observatory viewer you were using ([GitGalaxy.io](https://gitgalaxy.io) or Airgap Observatory).
 * A clear description of the expected vs. actual output.
-* The contents of your custom `standards.py` file (if applicable).
+* The contents of your custom `gitgalaxy_config.py` file (if applicable).
 * Contact information for follow-up questions.
 
 ---
 
 ## 🛡️ Security Vulnerabilities
 
-If you discover a vulnerability within GitGalaxy itself (e.g., a way to bypass the local sandbox or an issue in the Airgap Observatory), **do not open a public issue.** Please reach out directly via the contact portal at [GitGalaxy.io](https://gitgalaxy.io) so the vulnerability can be patched securely before public disclosure.
+If you discover a vulnerability within GitGalaxy itself (e.g., a way to bypass the local sandbox, a ReDoS vector, or an issue in the Airgap Observatory), **do not open a public issue.** Please reach out directly via the contact portal at [GitGalaxy.io](https://gitgalaxy.io) so the vulnerability can be patched securely before public disclosure.
 
 ---
 

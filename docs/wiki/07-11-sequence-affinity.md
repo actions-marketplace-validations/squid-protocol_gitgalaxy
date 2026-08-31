@@ -1,59 +1,43 @@
-# 2.1.J. Relative Positioning
+# Spatial Layout & Directory Sector Clustering
 
-> **Metric: Semantic Affinity (Folder + Type + Importance)**
->
-> **Purpose:** Group related files into "Constellations" or "Sectors" to create a navigable map, rather than a uniform noise field.
->
-> **Why:** A standard spiral is predictable but dumb—it places a `login.js` next to a `utils.js` just because they loaded sequentially. By sorting and offsetting based on metadata, we create "Neighborhoods." Auth files cluster together; Tests float above the plane; Configs sink to the bottom.
->
-> **Effect:** Determines the final 3D coordinates through a Tri-Phase procedural loop.
+> **File Reference:** [`gitgalaxy/core/spatial_mapper.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/core/spatial_mapper.py)
 
-## 2.1.J.1. The Philosophy: The Tri-Phase Displacement
+## Engineering Summary
+This spatial engine subsystem clusters related source files into 3D directory sectors using a deterministic sorting algorithm. It solves the problem of arbitrary file placement producing chaotic, unreadable topology maps. It exists to create clear spatial neighborhoods driven by directory metadata and architectural role. In GitGalaxy, it generates the final $X, Y, Z$ Cartesian coordinates for the entire repository.
 
-We don't use expensive physics simulations (like N-Body gravity). Instead, we use a predictable **3-Pass Sort & Offset** algorithm. This ensures that the same codebase always generates the exact same galaxy (deterministic) but still produces organic, organized clusters.
+## Purpose
+To calculate deterministic 3D layout coordinates for codebase components, grouping them by semantic affinity, directory hierarchy, and file type.
 
-## 2.1.J.2. Phase 1: The Gravity Sort (Chronology & Importance)
+## Problem Being Solved
+Iterative physics simulations for graph layout are computationally expensive and produce non-deterministic results. Ordering nodes purely by sequential discovery places unrelated modules arbitrarily. This subsystem guarantees reproducible topologies while explicitly separating directory sectors.
 
-Before positioning anything in 3D space, we re-index the file list to determine "Who sits at the Head of the Table?"
+## Design
+Uses a Tri-Phase Spatial Layout Pipeline:
+1. **Structural Priority Sorting:** Sorts by Inbound Reference Count (descending) placing core utilities at the origin, then by Directory Path to group files.
+2. **Radial Packing:** Places nodes along a Golden Angle spiral ($\text{Angle} \mathrel{+}= 0.5 \text{ rad}$). Injects a 150.0 radius clearance step for directory boundaries, or 12.0 for intra-directory nodes.
+3. **Vertical Stratification:** Offsets the $Y$-axis based on file type: Asset Plane ($+60$), Logic Plane ($0$), Configuration Plane ($-60$).
 
-1. **Primary Sort: Inbound Reference Count (Descending)**
-   * *Effect:* The "God Classes" and Core Utilities (High Gravity) naturally move to index $0$ (The Galactic Center).
-2. **Secondary Sort: Directory Path**
-   * *Effect:* Files in the same folder (e.g., `src/auth/`) end up adjacent in the list, ensuring they spiral out together in a dedicated "Sector."
+## Pipeline Integration
+- **Inputs:** Sorted file nodes, dependency reference counts, directory metadata.
+- **Outputs:** Absolute $X, Y, Z$ positions for all layout nodes.
+- **Dependencies:** Relies on the entire dependency graph resolution phase before execution.
 
-## 2.1.J.3. Phase 2: The Gap Spiral (Radial Positioning)
+Graph Resolver -> Spatial Engine -> Coordinate Matrix Buffer
 
-We apply the Golden Angle Spiral, but we strategically inject **"Void Gaps"** when the directory changes. As we iterate through the sorted list, we calculate the standard spiral step:
+## Tradeoffs
+Using a deterministic Golden Angle spiral instead of force-directed graphs sacrifices organic clustering capabilities for immense speed improvements and deterministic topology generation. The fixed 150.0 boundary clearance is an rigid heuristic that may look sparse for very small directories.
 
-$$\text{Angle} \mathrel{+}= 0.5$$
+## Limitations
+- Deeply nested directories may eventually spread too far along the radial axis, creating large empty voids.
+- Pseudo-random jitter used to prevent clipping makes exact coordinate tests difficult.
 
-**The Check:** If `CurrentFile.folder !== PreviousFile.folder`:
-* We add a massive buffer to the radius: $\text{Radius} \mathrel{+}= 150$
-* *Result:* This creates physical empty space between the "Auth Sector" and the "UI Sector," visibly grouping them into islands along the spiral arm.
+## Performance Notes
+The 3-pass sort and offset algorithm operates in $O(N \log N)$ time for sorting and $O(N)$ for layout assignment, making it significantly faster than $O(N^2)$ force-based physics models.
 
-**The Standard:** If the directory is the same:
-* We use tight packing for related files: $\text{Radius} \mathrel{+}= 12$
+## Future Work
+- Implementing hierarchical bounding volume hierarchies (BVH) for tighter cluster packing.
+- Dynamic clearance scaling based on the total mass of the directory.
 
-## 2.1.J.4. Phase 3: The Stratification (Z-Axis Type Layering)
-
-We use the vertical axis (the Y-Axis in WebGL) to separate concerns, preventing the galactic disk from looking like a flat pancake. Instead of random jitter, we map **File Type** to **Elevation**.
-
-| Stratification Layer | Y-Elevation | File Types | Visual Effect |
-| :--- | :--- | :--- | :--- |
-| **The Asset Atmosphere** | $+60$ units | `.css`, `.png`, `.svg` | Styles and assets float above the logic like clouds. |
-| **The Logic Plane** | $0$ units | `.js`, `.ts`, `.py`, `.rs` | Source code forms the active, dense middle layer. |
-| **The Bedrock** | $-60$ units | `.json`, `.yml`, `.dockerfile`, `.md` | Configs and data sink below the logic like a foundation. |
-
-*(Note: We add a small random jitter to all layers to maintain organic volume instead of rigid geometric planes).*
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- [Component Layout Clearance Formulas](07-12-misc-equations.md)
+- [Angular Positioning](07-08-relative-positioning.md)

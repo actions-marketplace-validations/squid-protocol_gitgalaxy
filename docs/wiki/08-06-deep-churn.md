@@ -1,97 +1,62 @@
-# Deep Churn
+# Deep Churn (Codebase Volatility)
 
-> **Metric: Relative Historical Volatility (Frequency of Interruption)**
+> **File Reference:** [`gitgalaxy/metrics/signal_processor.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/metrics/signal_processor.py)
 >
-> **Summary:** Churn measures how often a file is changed. However, "High Churn" is relative. In a startup, 10 commits/week is normal. In a legacy bank system, 1 commit/week is alarming. We use Auto-Scaling Normalization to make this metric useful for any project. The most volatile file in the repository always defines the "100" mark. All other files are measured relative to this local maximum.
+> **Metric:** Relative Commit Volatility & Change Frequency
 >
-> **Effect:** Maps directly to the GitGalaxy Universal Risk Spectrum, scaling from 🟦 **Deep Blue** (static, settled code) to 🟥 **Intense Red** (highly active, fluid code).
+> **Summary:** Measures how frequently a source file is modified over time relative to the rest of the repository. Churn is auto-scaled across the codebase so that the most volatile file anchors the maximum score (100.0), and all other files are normalized logarithmically against this maximum.
+>
+> **Effect:** Maps directly to the GitGalaxy Universal Risk Spectrum, scaling from 🟦 **Deep Blue** (stable, rarely touched code) to 🟥 **Intense Red** (highly active hotspots).
 
-## The Philosophy: Deep Time Analysis
+## Engineering Summary
+This subsystem measures how frequently a source file is modified over time relative to the rest of the repository. It solves the problem of raw commit counts being misleading by auto-scaling churn across the codebase. It exists to highlight highly active hotspots that may indicate architectural instability or constant bug fixing. By using a two-pass auto-scaling normalization model, it fits into the broader risk assessment pipeline of GitGalaxy.
 
-We rely on the version control history (Git) to extract "Deep Time" metrics.
+## Purpose
+To measure relative commit volatility and change frequency across the repository, identifying files undergoing frequent, intense modification relative to project history.
 
-* **STATIC (Score 0 - 20, Blue):** The most stable files in this specific repo. Rarely touched since creation.
-* **HIGHLY ACTIVE (Score 80 - 100, Red):** The absolute hotspots of the repository, taking into account their age and commit density.
+## Problem Being Solved
+Code stability varies naturally across project types. Raw commit counts fail to capture true volatility because a rapidly evolving repository might see dozens of commits per week, whereas a stable library might average one commit per month. Using raw counts would unfairly penalize fast-moving projects and hide issues in slower ones.
 
-## The Inputs (Git History Data)
+## Design
+The system uses a two-pass auto-scaling normalization model to measure relative volatility:
+1. **Raw Commit Frequency:** Commit volume is normalized against the square root of the file's age in weeks to dampen the penalty on long-standing legacy files.
+2. **Logarithmic Normalization:** The global maximum frequency ($\text{MaxFreq}$) is identified. A logarithmic transformation $\ln(1 + x)$ flattens extreme outliers and scales all scores onto a 0–100 range.
+3. **Contextual Path Adjustment:** The directory Path Modifier ($Mp$) is applied.
 
-| Variable | Source | Data Type | Structural Definition |
-| :--- | :--- | :--- | :--- |
-| `commit_count` | Analysis Engine | Integer | The raw volume of change. Every commit is a "stress event." |
-| `age_in_weeks` | Calculated | Float | The duration the file has existed relative to the newest commit in the repo. |
-| `max_freq` | Calculated | Float | The highest "Seismic Frequency" found in the entire repository during Phase 1. |
+**Mathematical Formulation**
+$$\text{RawFrequency} = \frac{\text{Commits}}{\sqrt{\max(\text{AgeInWeeks}, 1.0)}}$$
+$$\text{BaseScore} = \left( \frac{\ln(1 + \text{RawFrequency})}{\ln(1 + \max(\text{MaxFreq}, 1.0))} \right) \times 100.0$$
+$$\text{FinalScore} = \min(\text{BaseScore} \times Mp, 100.0)$$
 
-## Universal Framework Integration
+## Pipeline Integration
+```mermaid
+flowchart LR
+    A[Git Log Analyzer] -->|Commit Data| B[Phase 1: Raw Frequency]
+    B -->|Local Maxima| C[Phase 2: Log Normalization]
+    C -->|Base Score| D[Phase 3: Path Adjustment]
+    D -->|Volatility Score| E[Risk Vector Output]
+```
+- **Inputs received:** `commit_count` (total commits modifying the file), `age_in_weeks` (file age relative to newest commit), and `max_freq` (highest raw change frequency in repo).
+- **Outputs produced:** A normalized volatility score (0-100).
+- **Dependencies:** Requires Git version control history upstream. Feeds downstream into the Universal Risk Spectrum dashboard.
 
-While Churn is auto-scaled globally, we still apply the Path Modifier ($Mp$) to account for architectural expectations after normalization.
+## Tradeoffs
+- Logarithmic normalization is chosen to flatten extreme outliers, which sacrifices linear differentiation at the high end but prevents a single hyper-active file from compressing the distribution of the rest of the files.
+- Dampening file age using a square root rather than a linear divisor was chosen to avoid over-penalizing legacy files while still accurately highlighting recent churn spikes.
+- Explicit language fidelity ($Fc$) and syntactical opacity ($Irc$) are deliberately not applied, as commit history is treated as an exact, deterministic log independent of language syntax.
 
-* **$Fc$ (Fidelity Coefficient):** Not Applied. Version control history is absolute.
-* **$Irc$ (Implicit Risk Correction):** Not Applied.
-* **$Mp$ (Path Modifier):** Applied. We expect high churn in an `experiments/` folder (Low $Mp$ penalty), but high churn in a `kernel/` or `core/` folder is a critical architectural warning (High $Mp$ penalty).
+## Limitations
+- Only accounts for commit frequency, not commit size or semantic complexity of changes.
+- Cannot distinguish between trivial formatting commits and massive architectural refactors; a file with 10 typo fixes is weighted identically to one with 10 structural redesigns.
+- Highly dependent on team commit hygiene (e.g., squashed merges vs. raw commit logs).
 
-## The Equation: The Two-Pass Relative Seismic Model
+## Performance Notes
+The logarithmic transformation and square root operations execute in $O(N)$ time across all files during the post-scan phase, ensuring fast calculation. The primary performance cost is bounded by the underlying Git log extraction process.
 
-**Phase 1: Raw Seismic Frequency**
-During the initial scan, we calculate the Raw Seismic Frequency for every file. We divide commits by the square root of its age in weeks. The square root dampens the penalty for very old files. A 10-year-old file with 1,000 commits (sustained activity) is a hotspot, but less so than a 1-month-old file with 100 commits (explosive activity).
+## Future Work
+Current behavior relies strictly on commit frequency. Planned improvements aim to incorporate commit size (lines added/deleted) and semantic impact into the volatility weighting to distinguish between trivial formatting and substantive logic changes. 
 
-$$Freq = \frac{Commits}{\sqrt{\max(AgeInWeeks, 1.0)}}$$
-
-**Phase 2: Logarithmic Normalization**
-Once all files are scanned and the true Global Max Frequency ($MaxFreq$) is found, we revisit every file. We apply $\ln(1 + x)$ to both the global max and the individual file frequency before dividing them. This flattens extreme outliers and ensures a smooth, readable color gradient across the knowledge graph projection.
-
-$$BaseScore = \left( \frac{\ln(1 + Freq)}{\ln(1 + MaxFreq)} \right) \times 100$$
-
-**Phase 3: Context Adjustment**
-Finally, we multiply the normalized logarithmic score by the Path Modifier ($Mp$) to dampen or amplify the significance based on its location in the directory tree.
-
-$$FinalScore = \min(BaseScore \times Mp, 100)$$
-
-## Implementation (Python Reference)
-
-```python
-import math
-from typing import List, Dict, Any
-
-def _normalize_temporal_metrics(self, stars: List[Dict[str, Any]]):
-    """[PASS 2] Normalizes churn using a Logarithmic Curve for better UI gradients."""
-    if not stars: return
-
-    max_freq = 0.0
-
-    # Phase 1: Find the global maximum (Hotspot)
-    for s in stars:
-        freq = s.get("telemetry", {}).get("raw_churn_freq", 0.0)
-        if freq > max_freq:
-            max_freq = freq
-
-    # THE FIX: Apply a logarithmic curve to the maximum ceiling
-    # math.log1p safely handles 0 values (log(1 + x))
-    safe_max_f = math.log1p(max(max_freq, 1.0))
-    idx = self.RISK_SCHEMA.index("churn")
-
-    # Phase 2: Normalize every star against the logarithmic curve
-    for s in stars:
-        freq = s.get("telemetry", {}).get("raw_churn_freq", 0.0)
-        
-        # Apply the same logarithmic curve to the individual file
-        base_score = (math.log1p(freq) / safe_max_f) * 100.0
-
-        # Phase 3: Apply Path Modifiers
-        mp = s.get("telemetry", {}).get("multipliers", {}).get("churn", 1.0)
-        final_churn = min(base_score * mp, 100.0)
-
-        # Inject Churn directly into the dynamic Risk Vector index
-        if "risk_vector" in s and len(s["risk_vector"]) > idx:
-            s["risk_vector"][idx] = round(final_churn, 2)
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- Git Log Analyzer
+- Path Modifier ($Mp$)
+- GitGalaxy Universal Risk Spectrum

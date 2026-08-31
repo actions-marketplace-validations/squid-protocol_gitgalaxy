@@ -1,59 +1,40 @@
-# Overview of Methodology
+# Overview of Methodology & Risk Exposure Index
 
-> **The Core Philosophy: From Raw Text to Relational Knowledge Graph**
->
-> GitGalaxy does not measure subjective "Code Quality," which implies judgment. Instead, it measures objective **Risk Exposures**. 
->
-> By utilizing deterministic keyword heuristics, the engine parses raw text to build a massive, interconnected knowledge graph of the entire repository. We extract structural markers from the code (the data) and translate them into visible risk heatmaps (the projection). This allows architecture teams to instantly see where their system is drifting into dangerous territory without reading a single line of code.
+> **File Reference:** [`gitgalaxy/metrics/signal_processor.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/metrics/signal_processor.py)
 
-## The Universal Risk Spectrum (A11y Standard)
+## Engineering Summary
+This subsystem forms the analytical core that translates raw regex heuristic counts into structured risk exposure ratings. It solves the problem of converting massive volumes of static analysis data into actionable, normalized health indicators without manual inspection. It exists to objectively map structural anomalies to a universal risk spectrum. Within GitGalaxy, it processes data across five architectural scopes to generate the primary knowledge graph attributes.
 
-To reduce cognitive load on the user, GitGalaxy abandons distinct color palettes for individual metrics. Instead, we project the knowledge graph's telemetry using a single, unified **High-Contrast Spectrum** for all risk and exposure dashboards. 
+## Purpose
+To evaluate source code components against 50+ heuristic metrics and aggregate them into a 5-tier Universal Risk Spectrum across function, class, file, directory, and repository scopes.
 
-Regardless of the metric being viewed, the visual translation is always the same:
-* 🟦 **Deep Blue:** Very Low Exposure (Safe / Cold / Clean)
-* 🩵 **Cyan:** Low Exposure
-* 🟨 **Yellow:** Moderate / Intermediate Exposure
-* 🟧 **Orange:** High Exposure
-* 🟥 **Bright Red:** Critical / Extreme Exposure (Hot / Dangerous)
+## Problem Being Solved
+Subjective code quality scores lack consistency and traceability. This subsystem replaces subjective heuristics with deterministic, objective Risk Exposures, enabling engineering teams to identify architectural drift and technical debt algorithmically.
 
-## The Exposure Metrics (Graph Telemetry)
+## Design
+Evaluates metrics mapping to a 5-tier spectrum (Blue, Cyan, Yellow, Orange, Red). It calculates specific risk domains like Cognitive Load, State Flux, Technical Debt, and Concurrency Exposure. Aggregations use distinct mathematical normalization techniques depending on scope: Count-based (Levels 1-2), Sigmoid Normalized (Level 3), and Mass-Weighted Averages (Levels 4-5). Custom topological scales are employed for structural formatting indicators (e.g., Indentation Consistency).
 
-When a user selects a metric from the HUD, the visualizer queries the underlying knowledge graph and recolors the nodes using the Universal Spectrum. The table below defines what the engine's heuristics are actively hunting for, and what a "Red" (Critical) state represents for each mode.
+## Pipeline Integration
+- **Inputs:** Raw text parsing heuristic hits and regex counts.
+- **Outputs:** Normalized risk scores across five architectural levels.
+- **Dependencies:** Integrates downstream from the raw source parser and upstream of the final visualization dataset generation.
 
-| Labeling Mode | Heuristic Target | The "Red" (Critical) State Indicates... |
-| :--- | :--- | :--- |
-| **Cognitive Load** | **How hard is it to read?** Scans for deeply nested logic, sprawling methods, and high control-flow complexity. | The logic is incredibly difficult for a human to follow. A prime target for refactoring. |
-| **Deep Churn** | **How often does it change?** Identifies files that are constantly being rewritten, patched, or reverted based on Git history. | The file refuses to settle down. It is highly fluid and likely a source of recurring bugs. |
-| **Error & Exception Exposure** | **Is it fragile?** Compares the ratio of defensive code (error handling, guards) against aggressive logic. | The file lacks safety nets. It is performing complex logic without adequate exception handling. |
-| **Tech Debt** | **Are there shortcuts?** Scans for `TODO`s, `FIXME`s, known hacks, and temporary architectural band-aids. | The file is heavily burdened by unfinished business and documented technical debt. |
-| **Documentation Risk** | **Is it explained?** Measures the ratio and quality of instructional literature against the raw executable code. | The file is essentially undocumented. It operates as a "black box" to new developers. |
-| **Verification (Tests)** | **Is it proven?** Checks if the file has a corresponding safety net of tests proving it works. | The code is heavily exposed due to a severe lack of testing and verification coverage. |
-| **Stability (Heat)** | **Is it fresh?** Shows where work is happening *right now* vs. code that was written months ago via OS `mtime` or Git logs. | The file is "Hot." It has been actively edited or committed in the very recent past. |
-| **Graveyard** | **Is there dead code?** Finds massive blocks of code that were commented out and abandoned. | The file is hoarding historical, dead code that needs to be purged. |
-| **API Exposure** | **Is it public?** Highlights the entry points and network routers where the system talks to the outside world. | The file serves as a major public endpoint, demanding strict security scrutiny. |
-| **Concurrency** | **Is it multitasking?** Highlights complex timing, threads, or asynchronous execution logic. | Heavy reliance on asynchronous timing, introducing severe risks for race conditions. |
-| **State Flux** | **Is the data changing?** Highlights variables that are constantly being modified or mutated in memory. | "Boiling" data. The file mutates state aggressively, making it hard to track standard values. |
-| **Ownership Entropy** | **Who wrote this?** Measures the Shannon Entropy of Git blame data to see if a file is owned by one person or many. | A "Community" file. It has been touched by so many different developers that no single person truly owns it. |
+Raw Source Parser -> Risk Processor -> Knowledge Graph Database
 
-## Custom Topological Scales
+## Tradeoffs
+Relying on deterministic regex patterns instead of deep semantic AST analysis sacrifices deep context awareness for blazing fast processing speeds and broad language support. Mass-weighted averaging at directory levels can occasionally dilute extreme risk spikes from small utility files.
 
-Certain metrics do not represent a "Safe to Dangerous" pipeline, but rather a difference in structural style or identity within the graph. These bypass the Universal Spectrum and use custom rendering palettes.
+## Limitations
+- Regex heuristics cannot detect logic errors or runtime context.
+- Aggregation across directory scopes may mask isolated critical vulnerabilities if the overall directory mass is heavily defended.
 
-* **Civil War (Tabs vs. Spaces):** Checks for indentation consistency across the codebase.
-  * 🟩 **Green:** Strictly uses Tabs.
-  * 🟨 **Yellow:** Strictly uses Spaces.
-  * 🟦 **Blue:** A chaotic, mixed indentation style (The "Warzone").
-* **Language Identity:** Colors the file based on its evaluated taxonomy (e.g., JavaScript is Yellow, Python is Blue, Rust is Orange) to create a visual map of the system's tech stack.
+## Performance Notes
+The signal processor utilizes vectorized numpy operations to normalize millions of data points, ensuring near-instant metric tiering scaling at $O(N)$ efficiency for repository size.
 
-<br><br>
+## Future Work
+- Integration with language server protocols (LSP) to complement heuristic regex data with semantic type awareness.
+- Dynamic weighting adjustments based on temporal commit frequency.
 
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- [Sub-Equations](08-02-sub-equations.md)
+- [Transforming Regex Counts](08-03-transforming-regex-counts.md)

@@ -1,0 +1,36 @@
+name: Muninn Security Scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  muninn:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run Muninn
+        # zizmor: ignore[github_action_from_unverified_creator_used]
+        uses: skaldlab/muninn@9be5658042b937aae8fa4e7b27458558541f9c32 # v0.3.10
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on: info
+          format: sarif,comment
+
+      - name: Upload SARIF
+        if: always() && hashFiles('muninn.sarif') != ''
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        with:
+          sarif_file: muninn.sarif

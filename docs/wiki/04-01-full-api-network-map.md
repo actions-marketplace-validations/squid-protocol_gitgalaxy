@@ -1,42 +1,66 @@
-# Full API Network Map (The Boundary Cartographer)
+# Full API Network Map (Shadow & Ghost API Audit)
 
-> **Mapping the Attack Surface**
->
-> While the core GitGalaxy engine maps the internal structural dependencies of the codebase (file-to-file), the Full API Network Map (`full_api_network_map.py`) is a standalone spoke designed to map the **external boundaries** of the repository. 
->
-> It acts as the Boundary Cartographer, comparing the actual physical router code against official OpenAPI/Swagger documentation to hunt down undocumented "Shadow APIs" and exposed entry points.
+> **File Reference:** [gitgalaxy/tools/network_auditing/full_api_network_map.py](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/network_auditing/full_api_network_map.py)
 
-## The Router Physics (Framework Traps)
+## Engineering Summary
+While internal dependency tools map file-to-file imports, they do not track the external network boundary of a repository. Web API surfaces drift out of sync with official documentation, leaving undocumented endpoints exposed or deprecated endpoints cluttering specifications. To solve this, an automated attack surface mapping module evaluates executable router code signatures against official OpenAPI/Swagger documentation. By performing a set theory comparison, it identifies undocumented "Shadow APIs" and deprecated "Ghost APIs". This subsystem is the GitGalaxy API Network Mapper.
 
-Rather than simply reading configuration files, the tool utilizes specialized Regex Traps to parse the raw logic streams of multiple backend frameworks:
+## Purpose
+To automatically map backend REST APIs and detect drift between executable source code endpoints and their official OpenAPI/Swagger documentation.
 
-* **Python:** Scans `.py` files for FastAPI and Flask decorators (e.g., `@app.get` or `@router.post`).
-* **Node.js:** Scans `.js` and `.ts` files for Express routes (e.g., `app.get` or `router.delete`).
-* **Java:** Scans `.java` files for Spring Boot annotations (e.g., `@GetMapping` or `@PostMapping`).
-* **Golang:** Scans `.go` files for Gorilla Mux and Gin router configurations.
+## Problem Being Solved
+Web APIs frequently change during development, but API documentation updates are often missed. This results in "Shadow APIs" (undocumented endpoints in code that pose security risks because they bypass audits) and "Ghost APIs" (endpoints present in documentation that no longer exist in code). Discovering this manually or at runtime is error-prone.
 
-The parser normalizes every discovered route into a standard `METHOD /path` string (e.g., `GET /api/users`).
+## Design
+### Router Pattern Matching Across Frameworks
+Rather than requiring a runtime environment or language-specific AST parsers, the mapper uses regular expression routing signatures (`FRAMEWORK_SIGNATURES`) to scan raw source files across major web frameworks:
+* **Python, Node.js, Java, Golang, C#, PHP, Rust, Ruby:** Scans for standard decorator, annotation, or function call patterns defining route registration.
 
-## The Math (Set Theory Validation)
+### Endpoint Normalization & Path Parameter Matching
+The `normalize_endpoint()` function standardizes all discovered endpoints to prevent false discrepancies:
+1. Strips query parameters and whitespace.
+2. Converts framework-specific path parameters (like `/users/:userId` or `/users/<int:user_id>`) to a universal `{var}` token.
+3. Ensures leading root slashes and strips non-root trailing slashes.
 
-To determine the true security posture of the API boundary, the tool performs a Set Theory analysis comparing the "Physical Reality" (the code) against the "Approved Truth" (the documentation):
+### Set Theory Validation & API Drift Analysis
+The mapper compares the documented specification set ($A$) and physical code endpoint set ($P$):
+* **Shadow API Detection ($P \setminus A$):** Identifies endpoints present in source code but missing from documentation.
+* **Ghost API Detection ($A \setminus P$):** Identifies endpoints declared in documentation that no longer exist in code.
 
-1. **The Baseline:** It parses the official `swagger.json` or `swagger.yaml` file to build a Set of Approved APIs.
-2. **Shadow APIs (Critical Risk):** The tool subtracts the Approved Set from the Physical Set (`physical_endpoints - approved_apis`). This isolates APIs that are actively compiled and listening in the code but are hidden from the official documentation, creating a massive blind spot for security teams and penetration testers.
-3. **Ghost APIs (Documentation Bloat):** It subtracts the Physical Set from the Approved Set (`approved_apis - physical_endpoints`). This isolates endpoints that are explicitly documented in Swagger but no longer physically exist in the source code, helping engineering teams clean up rotting documentation.
+### Specification Auto-Discovery
+If no explicit Swagger path is provided, `auto_discover_swagger()` probes the target directory, inspecting the initial 1000 characters of JSON/YAML files to verify schemas without loading massive files entirely into memory.
 
-## The Presentation Dashboard
+## Pipeline Integration
+Inputs received include raw source code files and OpenAPI/Swagger specification files (`swagger.json`, `openapi.yaml`). Outputs produced are structured dictionaries of detected frameworks, shadow counts, ghost counts, and endpoint lists. The component integrates natively via CLI or programmatically into CI/CD pipelines (`run_api_audit()`).
 
-Because this tool is built for security and compliance teams, it prints a clean terminal dashboard. It explicitly lists the total counts for documented vs. physical endpoints, and clearly prints out the exact paths and files where any Shadow or Ghost APIs were discovered.
+```mermaid
+graph LR
+    A[Source Code Routers] --> B[Endpoint Normalizer]
+    C[Swagger/OpenAPI Spec] --> D[Spec Parser]
+    B --> E[Set Comparison]
+    D --> E
+    E --> F[Shadow APIs]
+    E --> G[Ghost APIs]
+```
 
-<br><br>
+## Tradeoffs
+* **Regex Signatures vs. Runtime Reflection:** By using regex matching on raw source instead of runtime reflection or AST construction, the system is much faster and can run on uncompiled code. However, it sacrifices the ability to detect dynamically generated routes that are not statically analyzable.
+* **Static Tokenizing vs. Type Enforcement:** Normalizing all path parameters to `{var}` ignores type constraints (like `<int:user_id>`), simplifying comparison at the expense of ignoring parameter-type drift.
 
----
+## Limitations
+* Dynamic routes registered conditionally or inside loops may be missed by regex patterns.
+* Only supports REST API frameworks mapped in `FRAMEWORK_SIGNATURES`; GraphQL or gRPC endpoints require different structural checks.
+* Specifications located outside the scanned directory or in external registries cannot be auto-discovered.
+* **`audit_shadow_apis` is expected to be near-zero across a general repo corpus (#1148).** `run_api_audit()` short-circuits to `0` unless the repo ships exactly one unambiguous, auto-discoverable OpenAPI/Swagger spec (`status: "no_swagger"` or `"ambiguous"` both report zero) *and* the code has physical endpoints missing from it. Most repositories -- especially non-web-API projects -- never satisfy the first condition, so a near-zero rate in aggregate telemetry reflects how rarely repos carry a matching spec, not a broken producer.
 
-### 🌌 Powered by the blAST Engine
+## Performance Notes
+The module processes files efficiently by reading only the first 1000 characters to auto-discover Swagger files, minimizing memory buffer allocation.
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Future Work
+* **Current Behavior:** Identifies structural drift between code and specs.
+* **Planned Improvements:** Adding support for GraphQL schema drift detection and improving topological suffix matching for nested router prefixes.
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Related Components
+* [GitGalaxy Platform](https://gitgalaxy.io/)
+* [⬅️ Back to Master Index](index.md)
 

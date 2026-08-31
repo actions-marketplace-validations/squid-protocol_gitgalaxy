@@ -1,44 +1,45 @@
-# 2.1.E. Satellite Orbital Distance
+# Sub-Node Orbital Distance & Logarithmic Scaling
 
-> **Metric: Lines of Code (LOC) in a specific function.**
->
-> **Purpose:** Visually separate functions by their physical volume to identify bloated methods at a glance.
->
-> **Effect:** The bigger the function, the further the satellite orbits from the central star. 
-> 
-> **Visual Output:** Modulates the 3D distance of the orbiting satellite from the core (Orbital Radius).
+> **File Reference:** [`gitgalaxy/recorders/gpu_recorder.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/recorders/gpu_recorder.py)
 
-## 2.1.E.1. The Logic: Logarithmic Scaling
+## Engineering Summary
+A spatial sorting mechanism determines the 3D distance between a child function and its parent file node based on physical line count. It solves the challenge of visually identifying bloated functions by correlating spatial displacement with length. This subsystem explicitly visualizes code bloat by pushing large functions further out into space, operating as the sub-node orbital distance mapping in GitGalaxy.
 
-We need to visually differentiate between small helper functions (10 lines), large algorithms (1,000 lines), and massive legacy functions (100,000 lines). 
+## Purpose
+To explicitly visualize function length and code bloat by pushing large functions further out into space, away from the parent file node.
 
-If we mapped distance linearly, massive functions would push their satellites infinitely off the screen, breaking the camera viewport. By applying a Logarithmic Scale, we compress the vast difference in line counts into a manageable physical space. A 100,000-line function is visually distant and imposing, but it remains anchored within the local star system.
+## Problem Being Solved
+Without expanding text views, it is difficult to identify oversized legacy methods buried inside standard modules. Mapping line count to orbital distance instantly flags monolithic functions as outliers positioned far from the file core.
 
-## 2.1.E.2. The Equation
+## Design
+The orbital radius utilizes a base-2 logarithmic scaling formula:
+$$Orbital Radius = 60 + (\log_2(\max(LOC, 1)) \times 30)$$
+- 60: Baseline clearance to prevent intersecting the parent node mesh.
+- 30: Spatial multiplier to ensure adequate separation between sub-nodes of varying lengths.
+A 10 LOC function orbits near 160 units, while a 1,000 LOC method orbits around 360 units.
 
-We establish a base distance (60 units) so satellites don't clip into the parent star's mesh, and then add the log-scaled line count multiplied by a spread factor (30).
+## Pipeline Integration
+- **Inputs**: The physical Lines of Code (LOC) for a specific extracted function.
+- **Outputs**: A scalar radial distance used for 3D placement.
+- **Dependencies**: Depends on data from the function extraction engine; output consumed by the orbital placement calculations.
+```text
+Function LOC -> Logarithmic Distance Formula -> 3D Radial Coordinate
+```
 
-$$\text{Orbital Radius} = 60 + \left( \log_2(\max(\text{LOC}, 1)) \times 30 \right)$$
+## Tradeoffs
+Logarithmic scaling compresses massive differences in function length into relatively small spatial adjustments. We chose this over linear scaling to keep all child nodes within the camera's readable viewport frustum.
 
-## 2.1.E.3. The Scaling Examples
+## Limitations
+- Extremely small differences in function length produce indistinguishable orbital distances.
+- Does not account for code formatting styles which can skew the LOC metric.
 
-This equation produces a clean, readable spread of satellites based on their exact length:
+## Performance Notes
+Applying a baseline clearance (60 units) prevents Z-fighting and mesh collision between the parent node and the child geometries, maintaining clean pixel shader execution.
 
-| Lines of Code (LOC) | Orbital Radius | Visual Representation |
-| :--- | :--- | :--- |
-| **10 LOC** | ~160 units | **Visible Stub:** Hugs the parent star closely. |
-| **100 LOC** | ~260 units | **Standard Branch:** A normal, healthy distance. |
-| **1,000 LOC** | ~360 units | **Major Limb:** A noticeably distant, heavy function. |
-| **100,000 LOC** | ~560 units | **Megastructure Reach:** Pushed to the far edges of the local system. |
+## Future Work
+- Replace raw LOC with calculated AST tokens to eliminate formatting inconsistencies.
+- Allow dynamic adjustment of the spread multiplier based on the zoom level of the camera.
 
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- [Function Sub-Node Units](07-05-satellite-unit.md)
+- [Visual Code Complexity Mapping](07-01-code-complexity.md)

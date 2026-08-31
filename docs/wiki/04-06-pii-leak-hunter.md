@@ -1,49 +1,58 @@
-# PII Leak Hunter (Privacy Incident Responder)
+# PII Leak Hunter (Log Privacy & Incident Responder)
 
-> **Sanitizing the Data Stream**
->
-> Applications frequently leak Personally Identifiable Information (PII)—like user credit cards, Social Security Numbers, or internal AWS API keys—into standard application logs or database exports. 
->
-> The PII Leak Hunter (`pii_leak_hunter.py`) is GitGalaxy's high-speed, single-pass incident response spoke. It is engineered to slice through gigabytes of raw log data, identify exposed sensitive information, and stream out a structurally safe, masked evidence log for security teams.
+> **File Reference:** [gitgalaxy/tools/terabyte_log_scanning/pii_leak_hunter.py](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/terabyte_log_scanning/pii_leak_hunter.py)
 
-## The Regex Physics (Binary Optimization)
+## Engineering Summary
+Server logs and database dumps often inadvertently capture Personally Identifiable Information (PII) such as credit cards, SSNs, and API keys. Scanning terabyte-scale log files for these leaks using standard text parsers causes immense memory overhead and CPU starvation due to string decoding. To solve this, a high-throughput stream processor evaluates raw binary data against byte-level regular expressions, decoding strings only upon a positive match. It sanitizes sensitive data and provides chronological histograms of exposure events. This subsystem is the GitGalaxy PII Leak Hunter.
 
-Parsing massive log files using standard string evaluation is incredibly slow. To achieve maximum computational velocity (often processing multiple gigabytes per second), the Leak Hunter optimizes its search at the byte level.
+## Purpose
+To provide high-throughput, single-pass log analysis that detects exposed PII, masks sensitive values, and outputs sanitized evidence logs for compliance auditing.
 
-The engine compiles its mathematical traps (Regex for VISA, Mastercard, SSN, and AWS Keys) strictly as **binary byte patterns** (`br'\b4[0-9]{12}...'`) rather than standard strings. This allows the engine to search the raw physical data stream without paying the CPU penalty of decoding every line into UTF-8 text first.
+## Problem Being Solved
+Processing multi-gigabyte log files using standard UTF-8 string decoding is too slow for rapid incident response. Storing raw evidence of leaked PII creates secondary compliance violations. Security teams need a way to rapidly discover leaks and extract sanitized evidence without crashing the system or multiplying data risks.
 
-## The Memory Shield & Safe Masking
+## Design
+### Byte-Level Pattern Matching
+The hunter compiles detection patterns directly as binary byte regular expressions (`PII_PATTERNS`), bypassing the need to decode every line of a log file.
+* **Lazy Decoding:** Reads files line-by-line in binary mode (`open(..., "rb")`). Lines are decoded into UTF-8 text *only* after a binary regex match is confirmed.
+* **Multi-Pattern Deduction:** Ensures that a single line containing multiple PII instances is logged once with full masking applied across all categories.
 
-Security tools often create secondary security breaches by copying unencrypted credit cards into their own error logs. The Leak Hunter utilizes a strict Memory Shield to prevent this:
+### Sensitive Value Masking
+The `mask_pii()` function applies surgical string replacements to format matches securely (e.g., `4111222233334444` becomes `VISA-MASKED-4444`). Sanitized entries are written to a secondary evidence log.
 
-1. **Lazy Decoding:** It reads the target file in a raw binary stream. It only decodes a line into readable text *if* one of the binary regex traps is triggered.
-2. **Active Masking:** Once a hit is confirmed, the engine passes the string through a surgical masking function (`mask_pii`). 
-    * Credit cards are truncated (e.g., `VISA-MASKED-1234`).
-    * SSNs are partially obscured (`XXX-XX-1234`).
-    * AWS Keys have their internal characters scrubbed (`AKIA-XXXX-ABCD`).
-3. **The Evidence Log:** These safe, masked strings are then streamed into a dedicated `_pii_leak_evidence.log` file. This allows incident responders to prove the leak exists and see its surrounding context without actually handling toxic, unencrypted PII.
+### Time-Series Exposure Histograms
+The tool extracts ISO and syslog timestamps, bucketing hits into hourly intervals. It generates ASCII histograms (`draw_ascii_histogram()`) and flags volume anomalies where hit rates exceed $3\times$ the interval average.
 
-## Time-Series Exfiltration Histograms
+## Pipeline Integration
+Inputs received are multi-gigabyte log files or database dumps. Outputs produced are sanitized evidence logs (`<target_stem>_pii_leak_evidence.log`) and terminal-based time-series histograms. It acts as a standalone operational security tool rather than an automated CI/CD pipeline gate.
 
-A single exposed credit card in a log file is a bug. Ten thousand exposed credit cards clustered at 2:00 AM is a data exfiltration breach.
+```mermaid
+graph LR
+    A[Raw Log File] --> B[Binary Line Stream]
+    B --> C{Byte-Level Regex Match?}
+    C -- No --> D[Discard Buffer]
+    C -- Yes --> E[Decode to UTF-8]
+    E --> F[Apply PII Masking]
+    F --> G[Extract Timestamp]
+    G --> H[Evidence Log & Histogram]
+```
 
-As the Hunter streams through the logs, it uses a chronological regex pattern to extract the timestamp of every single PII hit. It aggregates this data into time buckets and draws a dynamically scaled ASCII histogram directly in the terminal.
+## Tradeoffs
+* **Binary Regex vs. Text Context:** By evaluating byte streams instead of UTF-8 strings, the system guarantees extreme velocity but sacrifices complex contextual analysis that requires full structural parsing (like JSON unmarshalling).
+* **Static Masking vs. Format Preservation:** Hard-coded masking strings (`XXX-XX-6789`) destroy the original data shape, which is safer for compliance but prevents data-science recovery workflows that require format-preserving encryption.
 
-* **Spike Filtering:** If the log covers a massive time period, the dashboard intelligently filters the view to show only the Top 15 highest-volume spikes.
-* **Anomaly Detection:** It calculates the average hit rate across the timeline. If a specific time bucket breaches the anomaly threshold (> 3x the average volume), it actively flags the bucket with a `<-- MASSIVE EXFILTRATION SPIKE` warning.
+## Limitations
+* Detection is strictly limited to the regular expressions defined in `PII_PATTERNS`. Custom or novel PII formats require code modification.
+* Very long log lines without newline delimiters may still cause memory spikes despite the stream design.
 
-## Executive Dashboard
+## Performance Notes
+By utilizing lazy decoding, the tool achieves streaming velocities in hundreds of MB/s or GB/s, strictly bound by I/O read speeds rather than CPU decoding cycles. Memory remains at $O(1)$ based on the longest log line.
 
-Upon completion, the tool prints a final executive summary detailing the total number of hits per category (Visa, SSN, etc.), the total time elapsed, and the exact Processing Velocity in GB/s.
+## Future Work
+* **Current Behavior:** Streams files linearly and outputs static masked logs.
+* **Planned Improvements:** Adding multi-threaded chunk processing for even faster throughput on massive, single-file database dumps.
 
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Related Components
+* [GitGalaxy Platform](https://gitgalaxy.io/)
+* [⬅️ Back to Master Index](index.md)
 

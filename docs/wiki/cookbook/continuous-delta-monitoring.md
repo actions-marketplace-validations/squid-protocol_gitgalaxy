@@ -50,14 +50,18 @@ ram_cache = rehydrator.load_latest_state("my_enterprise_repo")
 # 2. Ignite the Delta Engine
 scope = Orchestrator("/path/to/repo", config)
 scope.execute_delta_mission(
-    ram_cache=ram_cache['cryolink'],
+    ram_cache=ram_cache["cryolink"],
     added=["src/api/new_route.py"],
     modified=["src/core/auth.py"],
     deleted=["src/legacy/old_auth.py"],
-    db_output_path="repo_master.db"
+    db_output_path="repo_master.db",
 )
 ```
 
 By shifting from O(N) full scans to O(1) delta updates, a single central GitGalaxy server can monitor thousands of active enterprise repositories simultaneously with zero pipeline latency.
 
 > **Read the full technical specification:** [State Rehydrator](../02-22-state-rehydrator.md)
+
+---
+
+**[⬅️ Back to Master Index](../index.md)**

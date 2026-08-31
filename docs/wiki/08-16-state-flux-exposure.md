@@ -1,89 +1,102 @@
 # State Flux Exposure
 
-> **Metric: Data Volatility (Density of Mutation)**
->
-> **Summary:** Visualizes "Data Volatility" within the knowledge graph. State Flux measures the Density of Mutation. It answers the question: "How stable is the data in this file?" The "Tiger in the Cage" rule applies: we do not dampen the signal for state management folders (`store/`, `reducers/`). A file dedicated to mutating state is a high-flux file and should glow red/orange to reflect its true nature as a volatility engine.
->
-> **Effect:** Maps directly to the GitGalaxy Universal Risk Spectrum.
-> * 🟦 **VERY LOW (Score 0-19):** Frozen. Variables are defined once and rarely changed. The logic is predictable and referentially transparent.
-> * 🟨 **MODERATE (Score 40-59):** Warming. Standard levels of local state management and loop counters.
-> * 🟥 **VERY HIGH (Score 80-100):** Boiling. Variables are constantly reassigned, properties are updated, and side effects are triggered. The data state is in constant flux, making it difficult to track "who changed what and when."
+> **File Reference:** [`gitgalaxy/metrics/signal_processor.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/metrics/signal_processor.py)
 
-## The Inputs (Mutation Heuristics)
+## Engineering Summary
+Evaluates the density of variable mutations and state modifications within a module. State flux measures data volatility by tracking property reassignments, array mutations, and side effects. High state flux indicates unstable data structures where tracking state transitions increases cognitive load and defect probability. This subsystem evaluates the input signals to calculate a formalized risk score. In GitGalaxy, this subsystem is known as the State Flux Exposure metric.
 
-We count the heuristics that imply reassignment or side effects. The deterministic engine pre-calculates these and passes them to the Signal Processor.
+## Purpose
+The metric calculates a density-based risk score (0-100) to flag files containing high-risk logic patterns and architectural deviations.
 
-| Variable | Weight | Structural Definition |
-| :--- | :--- | :--- |
-| `flux_hits` | 1.0x | **The Change.** Keywords that mutate data: `let`, `var`, `mut`, `setState`, `push`, `pop`, `+=`, `=`. |
-| `loc` | Denominator | We measure density. A loop counter `i++` in a 1,000-line file is negligible. 50 setters in a 100-line file is a "Boiling" class. |
+## Problem Being Solved
+Unmitigated anti-patterns and vulnerabilities often lead to hard-to-debug bugs and security flaws. By statically analyzing the codebase, this subsystem proactively identifies hazardous logic.
 
-## Universal Framework Integration
+## Design
+The static analysis engine counts mutation keywords and immutability controls:
 
-* **$Fc$ (Fidelity Coefficient):** **Not Applied.** Mutation is an absolute action.
-* **$Irc$ (Implicit Risk Correction):** **Applied to Numerator (Dampened).** Implicit languages (JS, Python) default to mutability. We add a small "Ghost Load" ($Irc \times 0.15$) to the density. This acts as a tie-breaker, pushing implicit code slightly higher on the volatility scale than explicit immutable languages for the exact same operation count.
-* **$Mp$ (Path Modifier):** **Applied to the Threshold.**
-  * *UI/Views ($Mp = 0.8$):* **Low Tolerance.** Heavy internal state mutation in UI components (`setState` spaghetti) is a prime source of bugs. We lower the bar to highlight this risk.
-  * *Standard/Store ($Mp = 1.0$):* **Standard Tolerance.** We accept that Stores exist to mutate data. We let them show their true colors without artificial dampening.
+| Variable | Signal Category | Weight / Role | Description |
+| :--- | :--- | :--- | :--- |
+| `raw_flux` | `state_mutation` | **1.0x** | Reassignment and mutation keywords: `let`, `var`, `mut`, `setState`, `push`, `pop`, `+=`, `=`. |
+| `freeze_hits` | `immutability_locks` | **-0.5x** | Immutability enforcements (`Object.freeze`, const locks). Subtracts 0.5 per hit from raw mutation. |
+| `loc` | Denominator | **Base Density** | Meaningful lines of code (`loc_padding` defaults to 0 to ensure mutations immediately impact density). |
+| `irc` | Language Modifier | **0.15x** | Implicit Risk Correction (accounts for implicit mutability defaults in languages like JavaScript or Python). |
+| `mp` | Path Modifier | **Threshold Modifier** | Context modifier (e.g., `0.8` for UI components where state spaghetti introduces UI state bugs). |
 
-## The Equation: The Mutation Threshold Sigmoid
+### 1. Net Volatility Calculation
+Balance raw mutation signals against immutability markers:
 
-Most code requires some local mutation (e.g., loop counters). We use a Sigmoid curve to ignore this background noise but react sharply once mutation becomes a structural pattern.
+$$\text{net\_volatility} = \max(0.0, \text{raw\_flux} - (\text{freeze\_hits} \times 0.5))$$
 
-**Step A: Pre-Filter (The Zero Check)**
-If the file contains zero `flux` hits, the score is $0.0$.
+If $\text{net\_volatility} = 0$, the function returns $0.0$.
 
-**Step B: Calculate Volatility Density**
-We determine what percentage of the code involves changing data, adding the dampened $Irc$ penalty.
+### 2. Volatility Density
+Calculate mutation density per line of code, adding the dampened language risk ($\text{IRC} \times 0.15$):
 
-$$Density = \left( \frac{flux\_hits + (Irc \times 0.15)}{\max(LOC, 1)} \right) \times 100.0$$
+$$\text{Density} = \left( \frac{\text{net\_volatility}}{\max(\text{LOC} + \text{loc\_padding}, 1)} \right) \times 100.0 + (\text{IRC} \times 0.15)$$
 
-**Step C: Determine The Threshold (The Boiling Point)**
-This is the density required to "Boil" the file. We start with a base of $15.0$ (15% density), which safely absorbs standard loops and local variables before triggering warnings. We then scale it by $Mp$. (e.g., If $Mp$ is $0.8$ for UI, the threshold drops to $12.0\%$).
+### 3. Sigmoid Normalization
+Map density using a base threshold of $15.0$ and slope of $0.2$, scaled by the path modifier ($Mp$):
 
-$$Threshold = 15.0 \times Mp$$
-
-**Step D: The Sigmoid Map**
-We map density against the threshold using a relaxed slope ($0.20$), creating a smooth curve that ramps up as mutation becomes dominant.
-
-$$Score = \frac{100.0}{1 + e^{-0.20 \times (Density - Threshold)}}$$
-
-## Implementation (Python Reference)
+$$\text{RawScore} = \frac{1.0}{1.0 + e^{-0.2 \times (\text{Density} - 15.0)}}$$
+$$\text{FinalScore} = \min(\text{RawScore} \times 100.0 \times Mp, 100.0)$$
 
 ```python
-import math
-from typing import Dict
+def _calc_state_flux(self, loc: int, raw_signals: dict[str, int], irc: int, mp: float) -> float:
+    """
+    Calculates State Flux Exposure & Mutation Volatility.
+    """
+    tuning = self.risk_tuning.get("state_flux", {})
+    loc_padding = tuning.get("loc_padding", 0)
 
-def _calc_state_flux(self, loc: int, eq: Dict[str, int], irc: int, mp: float) -> float:
-    # Step A: Pre-Filter
-    hits = eq.get("flux", 0)
-    if hits == 0: 
+    raw_flux = float(raw_signals.get("state_mutation", 0))
+    freeze_hits = float(raw_signals.get("immutability_locks", 0))
+
+    # Subtract immutability locks from raw mutation
+    net_volatility = max(0.0, raw_flux - (freeze_hits * 0.5))
+
+    if net_volatility == 0:
         return 0.0
 
-    t = self.risk_tuning.get("state_flux", {})
+    density = (net_volatility / max(loc + loc_padding, 1)) * 100.0
+    density += irc * tuning.get("irc_mult", 0.15)
 
-    # Step B: Volatility Density (with 0.15 IRC dampener)
-    density = ((hits + (irc * t.get("irc_mult", 0.15))) / max(loc, 1)) * 100.0
+    threshold = tuning.get("threshold_base", 15.0)
+    slope = tuning.get("sigmoid_slope", 0.2)
 
-    # Step C: Dynamic Threshold
-    threshold = t.get("threshold_base", 15.0) * mp
+    return min(self._sigmoid(density, threshold, slope) * 100.0 * mp, 100.0)
+```
 
-    # Step D: Sigmoid Map
-    try:
-        score = 100.0 / (1.0 + math.exp(-t.get("sigmoid_slope", 0.20) * (density - threshold)))
-    except OverflowError:
-        score = 100.0 if density > threshold else 0.0
+**Risk Classification:**
+* 🟦 **VERY LOW (Score 0–19):** Immutable or referentially transparent logic. Variables are initialized once and rarely modified.
+* 🟨 **MODERATE (Score 40–59):** Standard local mutation (e.g., loop counters, localized state changes).
+* 🟥 **VERY HIGH (Score 80–100):** High-frequency reassignments and shared state mutations lacking immutability protections.
 
-    return min(score, 100.0)
+## Pipeline Integration
+Inputs received include raw static analysis signals from the AST parser and contextual multipliers. Outputs produced are a normalized risk score (0-100). The subsystem depends on upstream token parsers that feed AST information into the signal processor.
+```mermaid
+flowchart LR
+    A[AST Parser] --> B[Signal Processor]
+    B --> C[State Flux Exposure Metric]
+    C --> D[Risk Score Output]
+```
 
-<br><br>
+## Tradeoffs
+* Chose static keyword counting and heuristic multipliers over dynamic symbolic execution to prioritize speed across large codebases.
+* Specific weights are fixed heuristics that balance safety against over-penalization, sacrificing precise dynamic validation for constant-time calculation.
 
----
+## Limitations
+* Detection is strictly reliant on recognized keywords and standard patterns.
+* Cannot dynamically confirm actual vulnerabilities or trace deep runtime dataflows.
+* May produce false positives in non-standard or heavily abstracted codebases.
 
-### 🌌 Powered by the blAST Engine
+## Performance Notes
+The calculation operates in $O(1)$ time leveraging pre-computed token counts, making it suitable for real-time risk profiling on massive codebases.
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Future Work
+* Planned improvements include integrating static dataflow tracing to verify execution paths and reduce false positives.
+* Expand language support and framework-specific annotations.
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+* **[Signal Processor Module](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/metrics/signal_processor.py)**
+* **[GitGalaxy Platform](https://gitgalaxy.io/)**
+* **[⬅️ Back to Master Index](index.md)**

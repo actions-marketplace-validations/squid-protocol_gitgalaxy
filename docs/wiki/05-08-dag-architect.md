@@ -1,32 +1,49 @@
 # DAG Architect (Data Lineage)
 
-> **Architecture: Topological Sorting & Dead Logic Deflection**
->
-> **Summary:** The DAG (Directed Acyclic Graph) Architect parses the structural intent of the repository to map Input/Output data flows. By analyzing which programs read and write to specific physical files, it mathematically calculates the perfect execution order for the entire mainframe cluster.
+> **File Reference:** [`gitgalaxy/tools/cobol_to_cobol/cobol_dag_architect.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/cobol_to_cobol/cobol_dag_architect.py)
 
-## The Ghost Deflector
-Before analyzing data flows, the DAG Architect queries the Intermediate Representation (IR) State Manager for a list of dead paragraphs (unreachable logic). It deliberately masks out these dead zones during its AST scan. This prevents the regex engine from detecting `OPEN` statements that mathematically will never execute, ensuring the generated dependency graph is completely free of hallucinated edges.
+## Engineering Summary
+This subsystem constructs a Directed Acyclic Graph (DAG) to model data flow across procedural programs. It solves the problem of understanding implicit execution orders in batch environments driven by dataset dependencies. It exists to provide a deterministic sequence for executing legacy jobs or migrating data. Within GitGalaxy, it serves as the core mapping engine for macro-level architectural views.
 
-## I/O Intent Mapping
-The architect maps internal COBOL variables to their external physical boundaries (DD Names). It categorizes the execution intent based on standard legacy operations:
-* **Read Operations:** `OPEN INPUT`
-* **Write Operations:** `OPEN OUTPUT`
-* **Mutation Operations:** `OPEN I-O` and `OPEN EXTEND` (These act as both Read and Write dependencies).
+## Purpose
+To parse structural source declarations, map Input/Output data flows across COBOL programs, and compute a deterministic execution order for legacy workflows.
 
-## Topological Execution Pipeline
-Once all dependencies are mapped across the repository, the engine applies **Kahn's Algorithm** for topological sorting. 
-* It calculates the in-degree (number of prerequisites) for every program.
-* It builds a strict, linear execution sequence where no program runs until its data dependencies are fully satisfied.
-* **Deadlock Detection:** If the algorithm detects a cyclic dependency (e.g., Program A waits on File 1 from Program B, but Program B waits on File 2 from Program A), it immediately halts the pipeline and isolates the deadlocked nodes for architectural review.
+## Problem Being Solved
+Legacy batch workflows often lack explicit orchestration scripts, relying instead on shared datasets where Program A writes to a file that Program B later reads. Determining the correct execution order requires analyzing the physical dataset read/write intent across the entire codebase.
 
-<br><br>
+## Design
+- **Unreachable Code Masking**: Accepts a set of known dead paragraphs. Masks out dead paragraph text before parsing `OPEN` statements to prevent false dependencies.
+- **Input / Output Intent Mapping**: 
+  - `OPEN INPUT`: Registers dataset as a program input.
+  - `OPEN OUTPUT`: Registers dataset as a program output.
+  - `OPEN I-O` / `OPEN EXTEND`: Registers as both input and output.
+- **Topological Sorting**: Uses Kahn's Algorithm to calculate execution ordering. Computes in-degrees, enqueues zero-dependency programs, and halts upon detecting circular dataset dependencies, isolating deadlocked nodes for review.
 
----
+## Pipeline Integration
+**Inputs received:** Parsed file control blocks, `OPEN` statements, and dead code metadata from static analysis.
+**Outputs produced:** Directed Acyclic Graph (DAG) of data dependencies and a sorted execution sequence.
+**Dependencies:** Upstream dead code analyzer; downstream batch scheduling or visualization tools.
 
-### 🌌 Powered by the blAST Engine
+```mermaid
+graph TD
+    A[File Control Blocks] --> B[Intent Mapping]
+    B --> C[Graph Construction]
+    C --> D[Kahn's Algorithm Sort]
+    D --> E[Execution Sequence]
+```
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Tradeoffs
+- Masking dead code using whitespace replacement instead of AST pruning. Chosen because it preserves original line numbers and character offsets for downstream reporting, sacrificing minor memory overhead for mapping accuracy.
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Limitations
+- Dynamic file assignments (where the dataset name is resolved at runtime via variables) cannot be statically mapped and are omitted from the DAG.
 
+## Performance Notes
+Kahn's Algorithm executes in $O(V + E)$ time, where $V$ is the number of programs and $E$ is the number of dataset dependencies, ensuring rapid resolution even for extensive enterprise architectures.
+
+## Future Work
+- Integration of symbolic execution to partially resolve dynamic dataset assignments at runtime.
+
+## Related Components
+- `cobol_refractor_controller.py`
+- `cobol_etl_unpacker.py`

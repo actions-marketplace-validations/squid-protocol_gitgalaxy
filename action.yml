@@ -1,5 +1,5 @@
 name: 'GitGalaxy Scanner'
-description: 'High-velocity, AST-free DevSecOps scanner for zero-trust CI/CD, SBOMs, secret detection, and supply chain security.'
+description: 'Repo intelligence for humans and AI, without compilation: architecture mapping, risk scoring, SBOM/SARIF output, CI/CD.'
 branding:
   icon: 'shield'
   color: 'purple'
@@ -8,7 +8,7 @@ inputs:
   tool:
     description: >
       The GitGalaxy command to execute. 
-      Options: galaxyscope, blast, vault-sentinel, supply-chain-firewall, xray-inspector, zero-trust-sbom, pii-leak-hunter, terabyte-log-scanner, api-network-map.
+      Options: galaxyscope, blast, vault-sentinel, supply-chain-firewall, xray-inspector, pii-leak-hunter, terabyte-log-scanner, api-network-map. (Note: SARIF and SBOM generation are now native to galaxyscope).
     required: true
     default: 'galaxyscope'
   target:
@@ -16,7 +16,7 @@ inputs:
     required: true
     default: '.'
   args:
-    description: 'Any additional CLI arguments to pass to the tool (e.g., --output json, --paranoid).'
+    description: 'Additional CLI arguments to pass to the tool (e.g., --sarif-only, --sbom-only, --fail-on-secrets, --fail-on-malware, --max-systemic-threat 150.0).'
     required: false
     default: ''
   version:
@@ -32,22 +32,28 @@ runs:
   using: "composite"
   steps:
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 #
       with:
         python-version: '3.10'
 
     - name: Install GitGalaxy
       shell: bash
+      env:
+        GG_VERSION: ${{ inputs.version }}
+        GG_FULL_PRECISION: ${{ inputs.full_precision }}
       run: |
-        if [ "${{ inputs.version }}" = "latest" ]; then
+        if [ "$GG_VERSION" = "local" ]; then
+          echo "Dogfooding local GitGalaxy source..."
+          pip install -e ".[yaml]"
+        elif [ "$GG_VERSION" = "latest" ]; then
           echo "Installing latest GitGalaxy from PyPI..."
-          pip install gitgalaxy
+          pip install "gitgalaxy[yaml]"
         else
-          echo "Installing GitGalaxy version ${{ inputs.version }}..."
-          pip install gitgalaxy==${{ inputs.version }}
+          echo "Installing GitGalaxy version ${GG_VERSION}..."
+          pip install "gitgalaxy[yaml]==${GG_VERSION}"
         fi
-        
-        if [ "${{ inputs.full_precision }}" = "true" ]; then
+
+        if [ "$GG_FULL_PRECISION" = "true" ]; then
           echo "Unlocking Full Precision Mode..."
           pip install networkx tiktoken xgboost pandas numpy
         else
@@ -56,6 +62,12 @@ runs:
 
     - name: Execute GitGalaxy Tool
       shell: bash
+      env:
+        GG_TOOL: ${{ inputs.tool }}
+        GG_TARGET: ${{ inputs.target }}
+        GG_ARGS: ${{ inputs.args }}
+        GITGALAXY_LICENSE_KEY: "COMMUNITY_FREE_TIER"
       run: |
-        echo "Running: ${{ inputs.tool }} ${{ inputs.target }} ${{ inputs.args }}"
-        ${{ inputs.tool }} ${{ inputs.target }} ${{ inputs.args }}
+        echo "Running: ${GG_TOOL} ${GG_TARGET} ${GG_ARGS}"
+        set -- ${GG_TOOL} ${GG_TARGET} ${GG_ARGS}
+        "$@"

@@ -1,109 +1,109 @@
-# GitGalaxy: High-Velocity Log Scanning & PII Detection
+# High-Volume Log Scanning & PII Leak Detection
 
-[![Velocity](https://img.shields.io/badge/Velocity-2%2B_GB%2Fmin-00C957.svg)](#)
-[![Scale](https://img.shields.io/badge/Tested-10GB%2B_Files-00BFFF.svg)](#)
-[![Architecture](https://img.shields.io/badge/Architecture-Single__Pass_Stream-8A2BE2.svg)](#)
+This directory contains two independent, single-pass streaming scanners for large log files
+and data dumps: `terabyte_log_scanner.py` (keyword search with time-series histograms) and
+`pii_leak_hunter.py` (exposed-PII detection and masking). Neither depends on the core
+GitGalaxy structural-signature engine — both are standalone CLI tools built for one specific
+job: finding things in logs that are too large to comfortably grep, index, or load into memory.
 
-During an active incident response or catastrophic data breach, standard tools fail. Basic `grep` lacks time-series context. Modern SIEMs (Splunk, ElasticSearch) require you to ingest and index data first—taking hours or days for massive database dumps.
+## The Problem: Log Files Don't Fit the Usual Tooling
 
-This suite provides a tactical, pipeline-ready solution: **ultra-high-velocity, unindexed binary streaming.** Running at over 2 GB per minute, our custom stream-processing engine reads data continuously without loading massive files into RAM. Perfect for active breach triage or automated CI/CD pipeline sanitization.
+A production log file or a database dump can run into the tens or hundreds of gigabytes.
+Loading it into memory, building a search index, or piping it through a general-purpose log
+platform is often either too slow, too expensive, or simply not available — especially when
+the log needs to be scanned once, on demand, as forensic evidence (e.g. "did this program
+actually run last night," or "did we ever write a credit card number to this log by mistake").
 
----
+## The Approach: Stream Once, Never Buffer the Whole File
 
-## Part 1: The PII Data Leak Hunter (`pii-leak-hunter`)
-[📖 Official Documentation](https://squid-protocol.github.io/gitgalaxy/04-06-pii-leak-hunter/)
+Both scripts open the target file in binary mode and process it line by line in a single pass
+— nothing is read into memory as a whole, and neither script builds an index before scanning.
+Search patterns are pre-compiled as byte regexes (not decoded text) so the common case — a line
+that matches nothing — costs a binary regex check, not a UTF-8 decode. A line is only decoded
+to text once something in it actually matches. Both tools extract a timestamp from each
+matching line (ISO-style or syslog-style `Mon DD HH`) and bucket hits by hour into an ASCII
+time-series histogram, so a spike in volume is visible directly in the terminal without a
+separate analytics step.
 
-A specialized incident response tool. Designed to find hemorrhaging Personally Identifiable Information inside massive, raw data dumps.
+## `terabyte_log_scanner.py` — Keyword Search Across a Log
 
-**How it works:**
-* **Binary-Level Regex:** Compiles structural patterns to raw bytes. Extreme CPU efficiency.
-* **Automated Masking:** Redacts toxic payloads before writing to safe evidence logs.
-* **Exfiltration Histograms:** Generates ASCII charts. Pinpoints exact breach minutes.
+Streams a log file looking for one or more keywords, and reports when — not just whether —
+each one showed up.
 
-**Performance Showcase:** Streamed a raw **1.00 GB compromised log file**. Completed in **25.72 seconds**. Detected and actively masked over **420,000 sensitive records**. Immediately exposed two distinct attack vectors (Customer data at 14:00, AWS Keys at 09:00).
-
-### Targeted Patterns
-The stream engine currently bypasses standard indexing to hunt and actively mask:
-* **VISA** (Credit Cards)
-* **MASTERCARD** (Credit Cards)
-* **SSN** (US Social Security Numbers)
-* **AWS_KEY** (AKIA, ASIA, AGPA, etc.)
-
-### Quickstart & Integration
-**Local CLI Execution:**
-By default, the tool saves the masked evidence log in the same directory as the target.
 ```bash
-pii-leak-hunter /path/to/massive_database_dump.sql
+python terabyte_log_scanner.py /path/to/app.log -k PGM_BILLING PGM_SHIPPING
 ```
 
-**Using the `--out` Flag:**
-Route the safe, masked telemetry to a secure directory for analysis. 
+Targets can also be supplied automatically from a GitGalaxy Intermediate Representation (IR)
+state file instead of typed by hand — `--input_state ir_state.json` reads the
+`analysis.known_programs` array GitGalaxy's own static extraction produced, so a set of program
+names identified purely from source code can be immediately searched for in a real runtime log,
+without retyping them. This is the tool's actual bridge back to the rest of GitGalaxy: static
+analysis says a program exists in the code, and this script checks whether it actually shows up
+running.
+
+**Output**, written next to the input file (or to `--out <dir>`):
+- `<name>_results.txt` — every matching line, unmodified.
+- `dynamic_telemetry.json` — a small sidecar with per-keyword hit counts.
+
+## `pii_leak_hunter.py` — Exposed PII Detection and Masking
+
+Streams a log file or data dump looking for a fixed set of PII patterns: Visa and Mastercard
+card numbers, US Social Security numbers, and AWS API keys (`AKIA`/`ASIA`/`AGPA`/`AIDA`/`AROA`/`AIPA`
+prefixes). Unlike the keyword scanner, there's nothing to configure — it always checks for all
+four categories.
+
 ```bash
-pii-leak-hunter /path/to/production.log --out /var/secure_logs/
+python pii_leak_hunter.py /path/to/dump.log
 ```
 
-**GitHub Actions CI/CD Integration:**
-Automate sanitization before archiving logs.
-```yaml
-      - name: Run PII Leak Hunter
-        uses: squid-protocol/gitgalaxy@main
-        with:
-          tool: 'pii-leak-hunter'
-          target: './logs/production_dump.sql'
-          args: '--out ./sanitized_logs/'
+Every matching line is masked before it's written anywhere — the raw PII itself is never
+persisted to disk, only a redacted stand-in (last 4 digits of a card or SSN, first+last 4 of an
+AWS key). That's what makes the output safe to keep as evidence: you can prove a leak happened
+and where, without creating a second copy of the sensitive data itself.
+
+**Output**, written next to the input file (or to `--out <dir>`):
+- `<name>_pii_leak_evidence.log` — one masked line per hit, prefixed with which category
+  matched (`[VISA]`, `[SSN]`, `[AWS_KEY]`, `[MASTERCARD]`).
+
+The summary line also reports throughput (GB/s or MB/s), since "how fast did this run" matters
+more here than for a typical CLI tool — the whole point is being usable against files too large
+to comfortably index first.
+
+## Example Run
+
+Real output from a small synthetic log containing one Visa number, one SSN, and one AWS key
+(license banner and per-hit histograms trimmed for brevity — nothing here is fabricated):
+
+```bash
+$ python pii_leak_hunter.py sample_app.log
+```
+```text
+[COMPLETE] Processed sample_app.log in 0.00 seconds.
+Processing Velocity: 1.18 MB/s
+Redacted Evidence Log: sample_app_pii_leak_evidence.log
 ```
 
----
-
-## Part 2: The Terabyte Log Scanner (`terabyte-log-scanner`)
-[📖 Official Documentation](https://squid-protocol.github.io/gitgalaxy/04-07-terabyte-log-scanner/)
-
-A runtime execution tracer. Connects static codebase architecture to physical runtime reality. Parses massive mainframe SMF logs or distributed traces to prove what code actually executes.
-
-**How it works:**
-* **Single-Pass Streaming:** Never loads the full file into RAM.
-* **Execution Verification:** Proves exact runtime execution frequencies.
-* **Zero-Hit Detection:** Mathematically proves if compiled legacy code is abandoned.
-* **Dynamic Sidecars:** Outputs telemetry JSON for 3D WebGPU traffic heatmaps.
-
-**Performance Showcase:**
-Ran against a raw **2.1GB production stream log**. Completed single-pass scan in **30.07 seconds**. Dynamically scaled ASCII histograms instantly exposed a massive brute-force anomaly isolated from background noise:
+The evidence log it wrote:
 
 ```text
- === TIME-SERIES: ERROR ===
- (Filtering to Top 15 Highest Volume Spikes)
- [2026-04-16 14:00] ███████████████████████████████████████ (5,759 hits)  <-- ANOMALY SPIKE
- [2026-04-27 14:00] ███████████████████████████████████████ (5,753 hits)  <-- ANOMALY SPIKE
- [2026-05-02 14:00] ███████████████████████████████████████ (5,718 hits)  <-- ANOMALY SPIKE
+[VISA] 2026-08-01T09:12:04 INFO  Payment attempt with card VISA-MASKED-1111 for order 5521
+[SSN] 2026-08-01T10:03:23 INFO  User SSN on file: XXX-XX-9999 flagged for manual review
+[AWS_KEY] 2026-08-01T10:15:40 INFO  AWS credential loaded: AKIA-XXXX-MNOP
 ```
 
-### Input Methods: Manual vs. Automated
-The tool requires one of two input methods to function. It will not run without a target list.
+No unmasked PII ever touches disk — the original numbers only ever existed in memory for the
+single line being processed.
 
-**1. Manual Mode (`-k` or `--keywords`)**
-Best for quick, grep-style tactical hunts. Supply a space-separated list of targets.
-```bash
-terabyte-log-scanner /path/to/production.log -k ERROR TIMEOUT "DATA EXCEPTION"
-```
+## The GitGalaxy Ecosystem (Powered by the blAST Engine)
 
-**2. Automated Pipeline Mode (`--input_state`)**
-Best for CI/CD modernization pipelines. Supply a GitGalaxy Intermediate Representation (IR) JSON file. The script will automatically extract the targets from the `known_programs` array to hunt for dead code.
-```bash
-terabyte-log-scanner /path/to/production.log --input_state ../core/ir_state.json
-```
+These log scanners are standalone utilities within the broader **GitGalaxy Ecosystem**—an
+AST-free, LLM-free heuristic knowledge graph engine built to scan repositories without a
+compiler toolchain.
 
-*Required JSON Schema for Automated Mode:*
-```json
-{
-  "analysis": {
-    "known_programs": ["PROGRAM1", "PROGRAM2"]
-  }
-}
-```
+Explore the ecosystem:
 
----
-### 🌌 Powered by the blAST Engine (Bypassing LLMs and ASTs)
-This suite is driven by our custom deterministic heuristics engine. It processes multi-dimensional data at extreme velocity without requiring rigid ASTs or hallucinating LLMs. 
-
-* 📖 **[The blAST Paradigm (ASTs vs LLMs)](https://squid-protocol.github.io/gitgalaxy/01-03-the-blast-paradigm/)**
-* 🪐 **[Return to the Main GitGalaxy Hub](https://github.com/squid-protocol/gitgalaxy)**
+* **[Official Documentation](https://squid-protocol.github.io/gitgalaxy/)** — Comprehensive deep dives into the engine's mathematics, pipeline architecture, and DevSecOps integration protocols.
+* **[GitGalaxy Visualizer](http://gitgalaxy.io/)** — Render your codebase's topological network locally in interactive 3D using hardware-accelerated WebGPU.
+* **[The blAST Paradigm](https://squid-protocol.github.io/gitgalaxy/docs/wiki/01-03-the-blast-paradigm/)** — The architectural thesis, academic research, and structural math that makes AST-free parsing possible at scale.
+* **[Language Calibration Standards](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/standards/how_to_add_a_language.md)** — The definitive engineering guide to extending our comparative lexical taxonomy for custom enterprise dialects.

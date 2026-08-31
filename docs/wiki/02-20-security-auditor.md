@@ -1,60 +1,55 @@
-# The Security Auditor (Machine Learning Inference)
+# Security Auditor
 
-> **XGBoost Threat Hunting**
->
-> While the Security Lens relies on rule-based physics and regex signatures to detect vulnerabilities, advanced adversaries constantly evolve their obfuscation techniques. 
->
-> The Security Auditor (`security_auditor.py`) serves as GitGalaxy's predictive AI brain. It executes a trained XGBoost multiclass inference model across the entire resolved repository graph, evaluating the holistic, N-dimensional shape of every file to predict the probability of malicious payloads natively in RAM.
+> **File Reference:** [`gitgalaxy/security/security_auditor.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/security/security_auditor.py)
 
-## N-th Degree Graph Resolution
+## Engineering Summary
+This subsystem executes a trained XGBoost multiclass classification model across extracted codebase feature vectors. It evaluates structural metrics, code complexity distributions, and graph topology to predict malicious software patterns (such as Trojans, Stealers, Droppers, or Botnets). It solves the problem of detecting sophisticated code obfuscation and zero-day threats that evade traditional static analysis rules. It exists to provide machine learning-backed security intelligence and supply chain integrity verification. Within the system, this module is known as the GitGalaxy Security Auditor.
 
-Before the Machine Learning model can evaluate a file, it must understand the file's position within the broader ecosystem. While the `NetworkRiskSensor` handles high-level topology (like PageRank), the Security Auditor calculates specific, transitive fragility paths for the feature matrix.
+## Purpose
+The primary purpose is to classify source files into a multiclass threat taxonomy and flag high-confidence malware detections based on structural heuristics rather than raw pattern matching.
 
-* **Breadth-First Search (BFS) Limits:** The Auditor traces the `raw_imports` graph both upstream and downstream. To prevent memory bombs on massively circular architectures, the BFS traversal is capped at 10,000 nodes.
-* **Blast Radius Metrics:** It calculates the `total_upstream` (how many files ultimately feed into this file) and `total_downstream` (how many files rely on this file). These are then converted into ratios against the total repository size to feed standardized features to the ML model.
+## Problem Being Solved
+Traditional SAST tools rely on explicit signature hits, making them vulnerable to obfuscated malware and unknown attack vectors. This component utilizes the structural "shape" of the code (complexity distributions, orphan functions, graph placement) to identify malicious intent even when signatures are masked.
 
-## The Feature Matrix
+## Design
+### Current Behavior
+- **Dependency Graph Features:** Traces import connections (BFS up to 10,000 nodes) to compute transitive coupling ratios (`total_upstream`, `total_downstream`).
+- **Feature Vector Sanitization:** Applies logarithmic scaling to structural counts, integrates Gini complexity coefficients, signature counts, and global architectural distances into a Pandas DataFrame.
+- **Multiclass Threat Taxonomy:** Uses `XGBClassifier` to predict probabilities across: Safe Code, Botnet/DDoS, Stealer/Trojan, Dropper/Webshell, and Native Infector.
+- **Supply Chain Integrity:** The `is_shadow_patch` flag overrides ML inference for unverified binary changes with executable logic, explicitly flagging them as critical threats.
+- **Fallback Mode:** Skips ML inference gracefully if `xgboost` or `pandas` are unavailable.
 
-To generate accurate predictions, the Auditor reconstructs the exact Pandas DataFrame schema used during the model's original training phase. It synthesizes dozens of data points into a flattened, heavily sanitized vector:
+### Planned Improvements
+- Optimize feature vector extraction to eliminate overhead from unused features.
 
-* **Logarithmic Transforms:** Because file sizes and complexity vary wildly, structural counts (like `logic_loc`, `max_func_complexity`, and `import_count`) are log-transformed (`np.log1p`) to prevent extreme outliers from blinding the decision trees.
-* **Design Slop & Density:** The matrix incorporates advanced heuristics like `func_complexity_gini` (structural inequality), `func_internal_density`, and orphaned/duplicated functions (`design_slop_orphans`).
-* **Contextual Mitigations:** Raw danger hits are mapped alongside their specific mitigations (e.g., `raw_danger`, `raw_sec_tainted_injection`).
-* **Global Architectural Context:** The matrix pulls in the global repository context (e.g., `primary_z_score` and distances to various archetype clusters) to determine if a file is acting anomalously compared to the rest of the project.
-* **Safe Degradation:** If `xgboost` or `pandas` are not installed in the host environment, the Auditor gracefully degrades, running only the graph resolution and skipping the ML inference without crashing the pipeline.
+## Pipeline Integration
+- **Inputs Received:** Sanitized feature vectors, dependency graph topologies, and content hash mutation statuses.
+- **Outputs Produced:** AI Threat Class, AI Threat Confidence percentages, and `is_ml_threat` booleans attached to the file's telemetry dictionary.
+- **Dependencies:** Requires pre-computed structural metrics, pattern signature counts, and topological graph paths.
 
-## Multiclass Threat Inference
+```mermaid
+graph LR
+    A[Feature Vectors & Topology] --> B[Security Auditor]
+    B --> C[XGBoost Inference]
+    C --> D[Threat Classification Telemetry]
+```
 
-Once the feature matrix is sanitized (removing all `NaN` or infinite values), it is passed to the XGBoost model (`XGBClassifier`). The model predicts probabilities across five distinct architectural classes:
+## Tradeoffs
+- **Statistical Inference vs. Determinism:** Machine learning classification introduces non-deterministic confidence scores (false positives/negatives), sacrificing strict boolean logic for the ability to detect unknown threats.
+- **Dependency Bloat vs. Functionality:** Integrating Pandas and XGBoost increases the engine's memory and disk footprint, mitigated slightly by the graceful fallback mode.
 
-1. **Safe Code**
-2. **Botnet / DDoS**
-3. **Stealer / Trojan**
-4. **Dropper / Webshell**
-5. **Native Infector**
+## Limitations
+- **Training Data Bias:** Model accuracy relies entirely on the quality and diversity of the malicious repositories used during the XGBoost training phase.
+- **Feature Obfuscation:** Highly advanced attackers might artificially balance code metrics to mimic the structural shape of "Safe Code".
 
-If a file scores above the dynamic `AI_THREAT_THRESHOLD` (defaulting to 90.0%) in any of the hostile classes, it is explicitly flagged as a threat. 
+## Performance Notes
+- Feature sanitization and model inference are heavily optimized using vectorized Pandas and XGBoost C++ backends. Graph BFS traversal is capped at 10,000 nodes to prevent $O(N^2)$ execution times on circular dependencies.
 
-## The Shadow Patch Override
+## Future Work
+- Retrain the XGBoost model periodically with updated malware datasets.
+- Implement Shapley Additive Explanations (SHAP) to provide human-readable explanations of why the model flagged a specific file.
 
-To support advanced CI/CD supply chain firewalls, the Security Auditor accepts an `is_shadow_patch` flag. 
-
-If a file's cryptographic hash has mutated without a corresponding version bump in the repository, and the file contains actual executable mass (`structural_mass > 0.5`), the Auditor bypasses the ML math. It forcefully pegs the file as a **"Stealer / Trojan"** with 100.0% confidence, instantly highlighting the stealth mutation as a Tier 1 Threat.
-
-## Telemetry Injection
-
-The predictions are not siloed. The Auditor injects the `AI Threat Class`, the exact `AI Threat Confidence` percentage, and an `is_ml_threat` boolean directly back into the star's central `domain_context` telemetry. 
-
-This guarantees that downstream systems—like the `AuditRecorder` and `LLMRecorder`—can place these ML-confirmed threats at the very top of their respective security reports.
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- Network Risk Sensor
+- AI AppSec Sensor
+- Audit Recorder

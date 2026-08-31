@@ -1,45 +1,52 @@
-# The Dev Agent Firewall (AI Guardrails)
+# Dev Agent Firewall
 
-> **Regulating Autonomous AI Editors**
->
-> The Dev Agent Firewall (`dev_agent_firewall.py`) evaluates the repository specifically to determine if it is safe to allow an autonomous AI agent (like Claude, Cursor, or Devin) to modify the code.
->
-> While standard linters check for human errors, this firewall evaluates **Token Physics** and **Architectural Complexity** to anticipate where a Large Language Model is statistically likely to fail, hallucinate, or cause catastrophic cascading breakages.
+> **File Reference:** [`gitgalaxy/tools/ai_guardrails/dev_agent_firewall.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/ai_guardrails/dev_agent_firewall.py)
 
-## Token Physics & Agentic Constraints
+## Engineering Summary
+This subsystem evaluates codebase complexity and network graph metrics to determine safety boundaries for autonomous AI coding agents. It analyzes token mass, algorithmic complexity, graph topology, and documentation density. It solves the problem of AI agents causing silent regressions, context window degradation, or API hallucinations when editing critical architectural choke points. It exists to enforce statistical safety guardrails for autonomous code modifications. Within the system, this module is known as the GitGalaxy Dev Agent Firewall.
 
-The firewall scans the telemetry, risk vectors, and network metrics of every file in the ecosystem to assess its compatibility with standard LLM context windows and reasoning capabilities. It enforces four primary guardrails:
+## Purpose
+The primary purpose is to identify modules where autonomous code edits present high statistical probabilities of failure, generating an `ai_guardrails` object to constrain AI behavior.
 
-### 1. The Context Window Shredder (The Black Hole)
-If a file has a massive token footprint (e.g., `token_mass > 8000`) AND terrible algorithmic complexity (e.g., $O(N^3)$ or worse), it is flagged as an `is_agentic_black_hole`. 
-* **The Threat:** Feeding this file to an AI agent will completely shred its context window and reasoning capabilities, leading to severe logical omissions and "forgetfulness" during refactoring.
+## Problem Being Solved
+Autonomous AI agents frequently struggle with large files, highly coupled components, and dynamically typed logic. Without explicit guardrails, they can truncate code, hallucinate methods, or introduce subtle state corruption in core producers. This component provides the metadata needed to gate or warn agents before they modify these fragile structures.
 
-### 2. The HITL Mandate (Human-In-The-Loop)
-The firewall cross-references the file's Network Graph topology against its local risk. If a file has a massive Blast Radius (Normalized PageRank > 1.0) and severe technical debt (cumulative risk vector > 200), it triggers the `requires_hitl` flag.
-* **The Threat:** The file is too structurally critical and too fragile to trust to autonomous modification. An agent making a mistake here will shatter the entire application. A human must explicitly review any AI-generated changes.
+## Design
+### Current Behavior
+- **Context Window Exhaustion (`is_agentic_black_hole`):** Flags files with massive token footprints (`token_mass > 8000`) and severe algorithmic complexity ($O(N^3)$).
+- **Human-In-The-Loop (`requires_hitl`):** Triggers on files with high PageRank Blast Radius (`> 1.0`) and high technical debt (`> 200`).
+- **Dynamic Logic Warning (`hallucination_zone`):** Flags files relying on reflection or dynamic dispatch without sufficient documentation (`doc_density < 0.2`).
+- **Silent Mutation Risk (`silent_mutation_risk`):** Identifies foundational producers (`in_degree > 5`) with high state volatility and no unit test coverage.
 
-### 3. The Hallucination Zone
-Detects areas of the codebase relying heavily on metaprogramming, reflection, or dynamic dispatch (`heat_triggers > 2`) but lacking adequate documentation (`doc_density < 0.2`).
-* **The Threat:** Because the code's behavior is determined dynamically at runtime and lacks human-readable explanations, static LLM analysis will fail. The AI is highly likely to hallucinate missing methods or incorrect data structures.
+### Planned Improvements
+- Adjust context exhaustion thresholds dynamically based on target AI capabilities.
 
-### 4. The Silent Mutation Risk
-Flags files that possess high state volatility (`state_flux > 50`) and act as heavily relied-upon foundational producers (`in_degree > 5`), but have absolutely zero unit tests.
-* **The Threat:** If an autonomous agent refactors this file and introduces a subtle state-mutation bug, there are no tests to catch it. The AI cannot verify its own fixes, leading to silent, cascading corruption across all downstream dependencies.
+## Pipeline Integration
+- **Inputs Received:** File telemetry, risk vectors, token mass, and dependency graph metrics (in-degree, blast radius).
+- **Outputs Produced:** An `ai_guardrails` object injected into the central telemetry map, containing active guardrails and warning strings.
+- **Dependencies:** Relies heavily on the Network Risk Sensor for blast radius and centrality metrics.
 
-## Telemetry Injection
+```mermaid
+graph LR
+    A[Telemetry & Metrics] --> B[Dev Agent Firewall]
+    B --> C[ai_guardrails Object]
+    C --> D[LLM Recorder]
+```
 
-Once the firewall completes its evaluation, it compiles the triggered guardrails and specific warning messages into an `ai_guardrails` report. This payload is injected directly back into the star's central telemetry. 
+## Tradeoffs
+- **Statistical Probability vs. Guaranteed Failure:** Relies on statistical heuristics to block or warn agents, potentially triggering human-in-the-loop requirements for modules an agent could technically handle, prioritizing safety over autonomy.
+- **Language-Agnostic Boundaries:** Uses universal metrics (token mass, structural complexity) rather than language-specific type system analysis.
 
-This ensures that downstream output modules—specifically the LLM Recorder—can explicitly warn downstream AI agents about the physical constraints and dangers of the files they are attempting to edit.
+## Limitations
+- **Agent Capability Drift:** As LLM context windows and reasoning capabilities improve, the static threshold values (e.g., token mass > 8000) may become overly restrictive and require tuning.
+- **Test Coverage Blind Spots:** Cannot determine the quality of unit tests; it only verifies structural coverage.
 
-<br><br>
+## Performance Notes
+- Rule evaluations execute in $O(1)$ time per file using pre-computed telemetry attributes, adding zero latency to the overall scan pipeline.
 
----
+## Future Work
+- Introduce dynamic threshold scaling based on the specific LLM model being used (e.g., increasing token mass limits for models with larger context windows).
 
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- Network Risk Sensor
+- LLM Recorder

@@ -1,225 +1,395 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# GitGalaxy Spoke: Supply Chain Firewall
-# Purpose: Zero-Trust Dependency Verification, Steganography, and Hostile I/O.
+# GitGalaxy Tool: Supply Chain Firewall
+#
+# PURPOSE:
+# Zero-Trust Dependency Verification and Behavioral Policy Enforcement.
+#
+# ARCHITECTURAL DECISION:
+# Operating as a RAM-Exclusive Logic Gate, this firewall consumes the Phase 1
+# Dependency Graph. By completely divesting from redundant O(N) disk parsing,
+# it achieves near-instant policy enforcement. It mitigates Namespace Hijacking
+# and Dependency Confusion attacks by comparing raw codebase imports against
+# resolved manifest aliases, while enforcing dynamic risk thresholds based on
+# build-time execution contexts and network topography.
 # ==============================================================================
+
+# galaxyscope:ignore sec_hardcoded_secrets, secrets_risk
+
 import argparse
+import json
+import logging
 import sys
-import os
-import time
-import fnmatch
-import re
 from pathlib import Path
+from typing import Any, Optional, Union
 
 # Import exclusively from the GitGalaxy Hub
-from gitgalaxy.core.aperture import ApertureFilter
-from gitgalaxy.security.security_lens import SecurityLens
-from gitgalaxy.standards.analysis_lens import ThreatPolicy
-from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+from gitgalaxy.metrics.signal_processor import SignalProcessor
+from gitgalaxy.standards.config_resolver import ResolvedConfig, resolve_config
 
-# Safely import the config, falling back if the user hasn't added exceptions yet
-try:
-    from gitgalaxy.standards.gitgalaxy_config import (
-        APERTURE_CONFIG, ALLOWLIST_PATHS, DENYLIST_PATTERNS,
-        STRICT_IMPORT_MODE, APPROVED_IMPORTS, BLACKLISTED_IMPORTS
-    )
-except ImportError:
-    from gitgalaxy.standards.gitgalaxy_config import APERTURE_CONFIG
-    ALLOWLIST_PATHS = []
-    DENYLIST_PATTERNS = []
-    STRICT_IMPORT_MODE = False
-    APPROVED_IMPORTS = []
-    BLACKLISTED_IMPORTS = []
+# The behavioral category this firewall gates on, mapped to its name in
+# SignalProcessor.RISK_SCHEMA -- Phase 3 computes it once; the firewall
+# reads it back instead of recomputing risk from raw hit counts.
+_FIREWALL_RISK_MAP = {
+    "Secrets Leak Risk": "secrets_risk",
+}
+_FIREWALL_RISK_INDEXES = {
+    label: SignalProcessor.RISK_SCHEMA.index(key)
+    for label, key in _FIREWALL_RISK_MAP.items()
+    if key in SignalProcessor.RISK_SCHEMA
+}
 
-def main():
-    parser = argparse.ArgumentParser(description="Supply Chain Firewall")
-    parser.add_argument("target", help="Directory (e.g., node_modules/ or venv/) to scan")
-    args = parser.parse_args()
+# risk_vector entries are 0-100 sigmoid outputs from SignalProcessor; 50.0 is
+# the sigmoid's own midpoint, so using it as the block cutoff defers entirely
+# to SignalProcessor's judgment instead of maintaining a second threshold.
+_FIREWALL_BLOCK_THRESHOLD = 50.0
 
-    target_path = Path(args.target).resolve()
-    if not target_path.exists():
-        print(f"Error: Target {target_path} does not exist.")
-        sys.exit(1)
-        
-    print(f"🧱 Supply Chain Firewall inspecting dependencies in {target_path.name}...")
-    
-    # Instantiate the engines
-    filter_engine = ApertureFilter(target_path, LANGUAGE_DEFINITIONS, APERTURE_CONFIG)
-    security = SecurityLens(policy=ThreatPolicy.get_policy("paranoid"))
-    
-    # ---> THE SPEED FIX: NEUTER THE LENS <---
-    security.THREAT_SIGNATURES = {
-        "homoglyphs": security.THREAT_SIGNATURES["homoglyphs"],
-        "shadow_imports": security.THREAT_SIGNATURES["shadow_imports"],
-        "io": security.THREAT_SIGNATURES["io"],
-        "danger": security.THREAT_SIGNATURES["danger"],
-        "flux": security.THREAT_SIGNATURES["flux"]
-    }
-    
-    threats_found = 0
-    threats_allowed = 0
-    forbidden_blocked = 0
-    files_evaluated = 0
-    
-    # Zero-Trust Telemetry
+
+def run_firewall_audit(
+    parsed_files: list,
+    alias_map: Optional[dict] = None,
+    config: Optional[Union[ResolvedConfig, dict[str, Any]]] = None,
+) -> dict:
+    """
+    Programmatic entry point for GalaxyScope (Zero-Disk I/O).
+    Operates exclusively on the pre-tokenized, anomaly-checked RAM graph from Phase 1.
+
+    `config` was previously a module-level `gitgalaxy_config.py` import
+    (#332/#335) -- that meant no YAML/CLI override could ever reach this
+    firewall, regardless of what a user put in .galaxyscope.yaml. Defaults
+    to an unconfigured resolve_config() only when the caller doesn't
+    already have a resolved config to hand over (e.g. direct/test use).
+    """
+    logger = logging.getLogger("GalaxyScope.firewall")
+    safe_alias_map = alias_map or {}
+    # .get() rather than attribute access: the caller may hand over either
+    # a ResolvedConfig or Orchestrator's plain full_config dict, and only
+    # .get() works uniformly across both.
+    resolved_config = config if config is not None else resolve_config()
+    allowlist_paths = resolved_config.get("ALLOWLIST_PATHS", [])
+    strict_import_mode = resolved_config.get("STRICT_IMPORT_MODE", False)
+    approved_imports = resolved_config.get("APPROVED_IMPORTS", [])
+    blacklisted_imports = resolved_config.get("BLACKLISTED_IMPORTS", [])
+    firewall_network_weighting = resolved_config.get("FIREWALL_NETWORK_WEIGHTING", False)
+
     imports_whitelisted = 0
     imports_blacklisted = 0
     imports_unknown = 0
-    
-    # The Universal Import Slicer (Regex for require('x'), import 'x', from 'x')
-    import_regex = re.compile(r'(?:require(?:_once)?\s*\(\s*|import\s+|from\s+)[\'"]([a-zA-Z0-9_@/-]+)[\'"]')
-    
-    files_to_deep_scan = []
-    
-    # ==============================================================================
-    # PASS 1: The Funnel (Build the Queue & Catch Surface Threats)
-    # ==============================================================================
-    for root, dirs, files in os.walk(target_path):
-        rel_root = str(Path(root).relative_to(target_path))
-        
-        if rel_root == ".":
-            dirs[:] = [d for d in dirs if filter_engine._check_solar_shield(d)]
-        elif not filter_engine._check_solar_shield(rel_root):
-            dirs[:] = []
-            continue
-            
-        for file in files:
-            files_evaluated += 1
-            file_path = Path(root) / file
-            
-            rel_path_str = str(file_path.relative_to(target_path)).replace('\\', '/')
-            is_whitelisted = any(approved in rel_path_str for approved in ALLOWLIST_PATHS)
-            
-            is_forbidden = any(fnmatch.fnmatch(file, pattern) for pattern in DENYLIST_PATTERNS)
-            if is_forbidden and not is_whitelisted:
-                print(f"\n🚨 [FORBIDDEN FILE BREACH] Illegal file pattern detected: {rel_path_str}")
-                forbidden_blocked += 1
-                threats_found += 1
-                continue 
-            
-            is_valid, size, reason = filter_engine.evaluate_path_integrity(file_path)
-            if is_valid:
-                files_to_deep_scan.append((file_path, rel_path_str, is_whitelisted))
+    threats_found_files: set[str] = set()
+    threats_allowed = 0
 
-    # ==============================================================================
-    # PASS 2: The Deep Scan (Internal Contents & Zero-Trust Verification)
-    # ==============================================================================
-    print(f"\n🔎 Scanning {len(files_to_deep_scan):,} files for supply chain risks:")
-    print("   - Zero-Trust Package Verification")
-    print("   - Unicode Homoglyphs & Typo-squatting")
-    print("   - Steganography & Shadow Imports")
-    print("   - Tainted I/O & Malicious Execution\n")
-    
-    start_time = time.time()
-    
-    for file_path, rel_path_str, is_whitelisted in files_to_deep_scan:
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-                
-            # --- 1. ZERO-TRUST IMPORT VERIFICATION ---
-            ext = file_path.suffix.lower()
-            if ext in ['.js', '.jsx', '.ts', '.tsx', '.py', '.php', '.go', '.rs']:
-                found_packages = import_regex.findall(content)
-                for pkg in found_packages:
-                    if pkg in BLACKLISTED_IMPORTS:
-                        imports_blacklisted += 1
-                        threats_found += 1
-                        if not is_whitelisted:
-                            print(f"🚨 [BLACKLISTED IMPORT] Malicious package '{pkg}' blocked in: {rel_path_str}")
-                    elif pkg in APPROVED_IMPORTS:
-                        imports_whitelisted += 1
-                    else:
-                        imports_unknown += 1
-                        if STRICT_IMPORT_MODE:
-                            threats_found += 1
-                            if not is_whitelisted:
-                                print(f"🚨 [ZERO-TRUST BREACH] Unknown package '{pkg}' blocked by Strict Mode in: {rel_path_str}")
+    if not parsed_files:
+        return {
+            "imports_whitelisted": imports_whitelisted,
+            "imports_unknown": imports_unknown,
+            "imports_blacklisted": imports_blacklisted,
+            "threats_found": len(threats_found_files),
+            "threats_allowed": threats_allowed,
+        }
 
-            # --- 2. PHYSICS ENGINE & HOMOGLYPHS ---
-            loc = max(len(content.splitlines()), 1)
-            sec_results = security.scan_content(content, loc)
-            
-            # THE INERT DATA SHIELD & MINIFIED BYPASS
-            if ext in ['.json', '.md', '.txt', '.csv', '.yaml', '.yml', '.css', '.less', '.h'] or '.d.ts' in file_path.name or '.min.' in file_path.name or '.umd.' in file_path.name:
-                for key in sec_results["counts"].keys():
-                    sec_results["counts"][key] = 0
-            
-            safe_loc = max(loc + 150, 1)
-            exposures = security.evaluate_risk(sec_results["counts"], safe_loc)
-            
-            if "Hidden Malware Risk" in exposures or "Data Injection Risk" in exposures:
-                if is_whitelisted:
-                    threats_allowed += 1
+    for file_node in parsed_files:
+        rel_path_str = file_node.get("path", "unknown")
+        is_whitelisted = any(approved in rel_path_str for approved in allowlist_paths)
+
+        # =====================================================================
+        # NEW: CONTEXTUAL ALIAS RESOLUTION
+        # Traverse up the directory tree to find the nearest authoritative manifest
+        # =====================================================================
+        local_aliases = {}
+        current_dir = Path(rel_path_str).parent
+
+        while current_dir:
+            dir_key = str(current_dir).replace("\\", "/")
+            if dir_key in safe_alias_map:
+                local_aliases = safe_alias_map[dir_key]
+                break
+
+            if str(current_dir) == ".":
+                break
+
+            # DEFENSIVE DESIGN (ABSOLUTE PATH ROOT BARRIER): the "." check
+            # above only terminates a strictly relative traversal. If
+            # rel_path_str is instead an absolute path (e.g. "/opt/app/
+            # main.py"), current_dir climbs to the filesystem root and
+            # Path("/").parent == Path("/") forever -- it never becomes
+            # ".", so the loop never terminates. A path is at its own root
+            # exactly when .parent returns itself; catch that directly.
+            if current_dir == current_dir.parent:
+                break
+
+            current_dir = current_dir.parent
+
+        # =====================================================================
+        # 1. ZERO-TRUST IMPORT VERIFICATION
+        # =====================================================================
+        for imp in file_node.get("raw_imports", []):
+            # JSON serializes Python tuples as lists, so we must check for both
+            raw_pkg = imp[0] if isinstance(imp, (tuple, list)) else imp
+
+            # DEFENSIVE DESIGN (RELATIVE PATH SHIELD):
+            # Ignore native internal routing (e.g., './utils') to focus strictly
+            # on external supply chain dependencies.
+            if raw_pkg.startswith("."):
+                continue
+
+            # DEFENSIVE DESIGN (DEEP-PATH TRUNCATOR):
+            # Attackers often hide malicious payloads deep inside nested sub-modules.
+            # Normalizing paths (e.g., 'lodash/nested/file' -> 'lodash') ensures
+            # policy rules evaluate the authoritative root package.
+            if raw_pkg.startswith("@"):
+                parts = raw_pkg.split("/")
+                pkg = f"{parts[0]}/{parts[1]}" if len(parts) >= 2 else raw_pkg
+            else:
+                pkg = raw_pkg.split("/")[0]
+
+            # DEFENSIVE DESIGN (IDENTITY TRANSLATION SHIELD):
+            # Dereference manifest aliases to catch Dependency Confusion attacks
+            # where a malicious package masks itself behind a trusted internal alias.
+            true_pkg = local_aliases.get(pkg, pkg)
+
+            if true_pkg in blacklisted_imports:
+                imports_blacklisted += 1
+                threats_found_files.add(rel_path_str)
+                # The Allowlist Loophole Fix: A blacklisted import is ALWAYS a threat. Never suppress it.
+                if true_pkg != pkg:
+                    logger.critical(
+                        f"🚨 [BLACKLISTED IMPORT] Spoofed alias blocked: '{pkg}' -> '{true_pkg}' in: {rel_path_str}"
+                    )
                 else:
-                    print(f"\n🚨 [SUPPLY CHAIN COMPROMISE] Density Threshold Breached in: {rel_path_str}")
-                    if "Hidden Malware Risk" in exposures:
-                        print(f"   -> Malware Exposure Density: {exposures['Hidden Malware Risk'] * 100:.1f}%")
-                    if "Data Injection Risk" in exposures:
-                        print(f"   -> Injection Exposure Density: {exposures['Data Injection Risk'] * 100:.1f}%")
-                    
-                    for key, snips in sec_results["snippets"].items():
-                        if snips and key in ["homoglyphs", "shadow_imports", "tainted_injection", "danger", "io"]:
-                            print(f"   -> Evidence ({key}):")
-                            for s in snips: print(f"      {s}")
-                    threats_found += 1
-        except Exception:
-            pass
-            
-    end_time = time.time()
-    time_delta = end_time - start_time
-    scan_rate = len(files_to_deep_scan) / time_delta if time_delta > 0 else 0
+                    logger.critical(f"🚨 [BLACKLISTED IMPORT] Unauthorized package '{pkg}' blocked in: {rel_path_str}")
+            elif true_pkg in approved_imports:
+                imports_whitelisted += 1
+            else:
+                imports_unknown += 1
+                if strict_import_mode and not is_whitelisted:
+                    threats_found_files.add(rel_path_str)
+                    if true_pkg != pkg:
+                        logger.warning(
+                            f"⚠️ [POLICY VIOLATION] Spoofed alias '{pkg}' -> '{true_pkg}' blocked by Strict Mode in: {rel_path_str}"
+                        )
+                    else:
+                        logger.warning(
+                            f"⚠️ [POLICY VIOLATION] Unknown package '{pkg}' blocked by Strict Mode in: {rel_path_str}"
+                        )
 
-    # ==============================================================================
-    # MISSION REPORT
-    # ==============================================================================
-    mode_str = "Strict (Exclude Blacklist and Unknown)" if STRICT_IMPORT_MODE else "Audit (Allow Whitelist + Unknown, Exclude Blacklist)"
-    
-    print("\n" + "="*75)
-    print(" 🧱 SUPPLY CHAIN FIREWALL: MISSION REPORT")
-    print("="*75)
-    print(f" Mode               : {mode_str}")
-    print(f" Files Deep Scanned : {len(files_to_deep_scan):,}")
-    print(f" Scan Velocity      : {scan_rate:,.0f} files/sec")
+        # =====================================================================
+        # 2. BEHAVIORAL POLICY ENFORCEMENT (Leveraging Phase 1 Measurements)
+        # =====================================================================
+        # Shield inert static assets (SVGs, Templates, XMLs) from executing behavioral heuristics
+        safe_path_lower = rel_path_str.lower()
+        ext = Path(rel_path_str).suffix.lower()
+
+        # .d.ts files are TypeScript declarations. They contain no executable logic.
+        if ext in {
+            ".svg",
+            ".xml",
+            ".jelly",
+            ".html",
+            ".css",
+            ".md",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".txt",
+            ".properties",
+        } or safe_path_lower.endswith(".d.ts"):
+            continue
+
+        # Shield test environments. Unit tests intentionally mock attacks, use hardcoded dummy data,
+        # and contain high-entropy strings which trigger massive false positives in behavioral heuristics.
+        safe_path = rel_path_str.lower()
+        if (
+            "/test/" in safe_path
+            or "/tests/" in safe_path
+            or "test_" in Path(safe_path).name
+            or "_test" in Path(safe_path).name
+        ):
+            continue
+
+        # DEFENSIVE DESIGN (BUILD-TIME EXECUTION MULTIPLIER):
+        # Configuration scripts (like setup.py or package.json) are executed by CI/CD
+        # runners at build time. RCE here compromises the host before the app even runs.
+        # We amplify SignalProcessor's already-computed risk scores for these files so
+        # any I/O or Danger signal instantly trips the firewall's block threshold.
+        build_time_multiplier = 1.0
+        filename = Path(rel_path_str).name
+        if filename in [
+            "setup.py",
+            "build.rs",
+            "preinstall.js",
+            "postinstall.js",
+            "package.json",
+        ]:
+            build_time_multiplier = 10.0
+
+        # DEFENSIVE DESIGN (NETWORK-CENTRALITY MULTIPLIER, opt-in):
+        # A highly central "hub" file (large Downstream Exposure / Blast Radius from
+        # Phase 4's network topology) gets less tolerance for the same embedded threat
+        # signal than a peripheral file. Only ever amplifies -- a low-centrality file
+        # is still judged on its own merits, never given a discount for being obscure.
+        network_multiplier = 1.0
+        if firewall_network_weighting:
+            network_metrics = file_node.get("telemetry", {}).get("network_metrics", {})
+            blast_radius = network_metrics.get("normalized_blast_radius", 0.0)
+            betweenness = network_metrics.get("betweenness_score", 0.0)
+            if blast_radius > 1.0:
+                network_multiplier += blast_radius * 0.5
+            if betweenness > 0.05:
+                network_multiplier += 0.5
+
+        # Read the risk scores SignalProcessor already computed for this file back in
+        # Phase 3, rather than recomputing risk from raw hit counts (single source of truth).
+        risk_vector = file_node.get("risk_vector", [])
+        exposures = {}
+        for risk_label, schema_idx in _FIREWALL_RISK_INDEXES.items():
+            if schema_idx >= len(risk_vector):
+                continue
+            raw_score = risk_vector[schema_idx]
+            if not isinstance(raw_score, (int, float)) or raw_score <= 0.0:
+                continue
+            scaled_score = min(raw_score * build_time_multiplier * network_multiplier, 100.0)
+            if scaled_score >= _FIREWALL_BLOCK_THRESHOLD:
+                exposures[risk_label] = scaled_score
+
+        if exposures:
+            if is_whitelisted:
+                threats_allowed += 1
+            else:
+                logger.warning(f"🚨 [THREAT DETECTED] Risk Threshold Breached in: {rel_path_str}")
+                for risk, score in exposures.items():
+                    logger.warning(f"   -> {risk}: {score:.1f}%")
+                threats_found_files.add(rel_path_str)
+
+    return {
+        "imports_whitelisted": imports_whitelisted,
+        "imports_unknown": imports_unknown,
+        "imports_blacklisted": imports_blacklisted,
+        "threats_found": len(threats_found_files),
+        "threats_allowed": threats_allowed,
+    }
+
+
+def main():
+    """
+    Standalone Execution Mode.
+    Because the firewall is decoupled from redundant O(N) disk parsing,
+    it must be fed the compiled JSON Dependency Graph generated by the GalaxyScope orchestrator.
+    """
+    from gitgalaxy.licensing import enforce_licensing_guard
+
+    enforce_licensing_guard("Supply Chain Firewall")
+
+    parser = argparse.ArgumentParser(description="Supply Chain Firewall (RAM-Exclusive Mode)")
+    parser.add_argument("target", help="Path to the compiled GalaxyScope RAM graph (e.g., results.json)")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to project-level configuration file (e.g., .galaxyscope.yaml) -- "
+        "same resolver galaxyscope.py uses, so standalone runs honor the same "
+        "STRICT_IMPORT_MODE / BLACKLISTED_IMPORTS / etc. overrides (#335).",
+    )
+    args = parser.parse_args()
+
+    resolved_config = resolve_config(yaml_path=args.config)
+
+    target_path = Path(args.target).resolve()
+    if not target_path.exists():
+        print(f"Error: Target '{target_path}' does not exist.")
+        sys.exit(1)
+
+    print(f"🧱 Initializing Supply Chain Firewall against {target_path.name}...")
+
+    parsed_files = []
+
+    try:
+        if target_path.is_dir():
+            print("   -> Directory detected. Orchestrating GalaxyScope RAM graph generation...")
+            import subprocess
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Run the orchestrator to generate the JSON graph in a temp directory
+                target_out_file = str(Path(tmpdir) / "firewall_temp.json")
+                # sys.executable, not a bare "python" PATH lookup -- guarantees
+                # the exact same interpreter/venv GitGalaxy itself is running
+                # under, not whatever "python" happens to resolve to (#472).
+                result = subprocess.run(  # noqa: S603 -- args are fixed strings + a Path, no untrusted input
+                    [sys.executable, "-m", "gitgalaxy.galaxyscope", str(target_path), "--output", target_out_file],
+                    capture_output=True,
+                    text=True,
+                )
+
+                if result.returncode != 0:
+                    print(f"❌ GalaxyScope execution failed:\n{result.stderr}")
+                    sys.exit(1)
+
+                # Dynamically locate the generated audit file to avoid naming convention bugs
+                tmp_path = Path(tmpdir)
+                audit_files = list(tmp_path.glob("*_audit.json"))
+
+                if not audit_files:
+                    print("❌ GalaxyScope did not produce an audit JSON in the temp directory.")
+                    print("\n--- 🕵️ ENGINE TELEMETRY & CRASH LOGS ---")
+                    print(result.stderr)
+                    print("------------------------------------------\n")
+                    sys.exit(1)
+
+                with open(audit_files[0], encoding="utf-8") as f:
+                    data = json.load(f)
+                    # Extract files from the structured audit directory groups
+                    parsed_files = []
+                    groups = data.get("6. Parsed Files (Scanned Artifacts)", {})
+                    for folder_data in groups.values():
+                        for path, file_info in folder_data.get("Files", {}).items():
+                            file_info["path"] = path  # Ensure path remains attached
+                            parsed_files.append(file_info)
+        else:
+            # Standard file-based load
+            with open(target_path, encoding="utf-8") as f:
+                data = json.load(f)
+                parsed_files = []
+                groups = data.get("6. Parsed Files (Scanned Artifacts)", {})
+                for folder_data in groups.values():
+                    for path, file_info in folder_data.get("Files", {}).items():
+                        file_info["path"] = path
+                        parsed_files.append(file_info)
+
+    except Exception as e:
+        print(f"❌ Failed to parse RAM graph: {e}")
+        sys.exit(1)
+
+    # In standalone CLI mode, we bypass the dynamic manifest parsing for speed,
+    # relying purely on strict exact-match dependencies and behavioral structural signatures.
+    results = run_firewall_audit(parsed_files, alias_map={}, config=resolved_config)
+
+    mode_str = (
+        "Strict (Exclude Blacklist and Unknown)"
+        if resolved_config.get("STRICT_IMPORT_MODE")
+        else "Audit (Allow Whitelist + Unknown)"
+    )
+
+    print("\n" + "=" * 75)
+    print(" 🧱 SUPPLY CHAIN FIREWALL: SCAN SUMMARY")
+    print("=" * 75)
+    print(f" Mode                 : {mode_str}")
+    print(f" Files Evaluated      : {len(parsed_files):,}")
     print("-" * 75)
-    print(f" Approved Packages    : {imports_whitelisted:,}")
-    print(f" Banned Packages      : {imports_blacklisted:,}")
-    print(f" Unknown Packages     : {imports_unknown:,}")
+    print(f" Approved Packages    : {results['imports_whitelisted']:,}")
+    print(f" Banned Packages      : {results['imports_blacklisted']:,}")
+    print(f" Unknown Packages     : {results['imports_unknown']:,}")
     print("-" * 75)
-    print(f" Active Threats       : {threats_found:,}")
-    print(f" File Denylist Blocks : {forbidden_blocked:,}")
-    print(f" File Allowlist Bypasses: {threats_allowed:,}")
+    print(f" Active Threats       : {results['threats_found']:,}")
+    print(f" Allowlist Bypasses   : {results['threats_allowed']:,}")
     print("-" * 75)
-    
-    if threats_found > 0:
-        print(f" ❌ BUILD FAILED: {threats_found} infected dependencies or policy violations blocked.")
+
+    if results["threats_found"] > 0:
+        print(f" [BLOCKING ACTION] {results['threats_found']} high-risk dependencies or policy violations blocked.")
         sys.exit(1)
     else:
-        print(" ✅ BUILD PASSED: Dependency supply chain is clean.")
-    print("="*75 + "\n")
+        print(" [SUCCESS] Dependency supply chain is clean.")
+    print("=" * 75 + "\n")
 
-def run_firewall_audit(target_path: Path) -> dict:
-    """Programmatic entry point for GalaxyScope."""
-    # Note: Keep this extremely lightweight so it doesn't double-scan the entire repo during the main run.
-    # Since the main GalaxyScope pipeline ALREADY scans for Homoglyphs and I/O, we only need to return 
-    # the Zero-Trust package counts for the LLM!
-    
-    imports_unknown = 0
-    imports_blacklisted = 0
-    import_regex = re.compile(r'(?:require(?:_once)?\s*\(\s*|import\s+|from\s+)[\'"]([a-zA-Z0-9_@/-]+)[\'"]')
-    
-    for root, dirs, files in os.walk(target_path):
-        for file in files:
-            if Path(file).suffix.lower() in ['.js', '.ts', '.py', '.php', '.go', '.rs']:
-                try:
-                    with open(Path(root) / file, 'r', encoding='utf-8', errors='ignore') as f:
-                        found_packages = import_regex.findall(f.read())
-                        for pkg in found_packages:
-                            if pkg in BLACKLISTED_IMPORTS: imports_blacklisted += 1
-                            elif pkg not in APPROVED_IMPORTS: imports_unknown += 1
-                except Exception: pass
-                
-    return {"imports_unknown": imports_unknown, "imports_blacklisted": imports_blacklisted}
 
 if __name__ == "__main__":
     main()

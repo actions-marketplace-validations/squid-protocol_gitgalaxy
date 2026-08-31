@@ -1,0 +1,284 @@
+"""javascript strict structural-signature coverage.
+
+Migrated out of tests/core_engine/test_language_standards_strict.py, then
+colocated here in tests/extraction/languages/ alongside the extraction
+gauntlets' own test_<lang>.py files (the `_strict` suffix on this filename
+avoids a basename collision between the two under pytest's default import
+mode). See tests/core_engine/test_language_standards_strict.py's git history
+for the original single-file layout and section banners (Issue references, etc).
+"""
+
+import sys
+from pathlib import Path
+
+import pytest
+
+from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+_LANGUAGES_DIR = str(Path(__file__).resolve().parent)
+if _LANGUAGES_DIR not in sys.path:
+    sys.path.insert(0, _LANGUAGES_DIR)
+
+from _strict_harness import assert_redos_immune  # noqa: E402 # type: ignore
+
+# ==============================================================================
+# JAVASCRIPT: STRICT STRUCTURAL SIGNATURE COVERAGE (Issue #589)
+# ==============================================================================
+# One positive-match case (and, where the doc's EXCLUDES wording calls for
+# one, a negative-match case) per non-None structural signature javascript
+# defines. Signatures whose behavior is simple/self-evident from a single
+# keyword match are grouped into one parametrized test; signatures with
+# real ReDoS history, control-flow exclusion shields, or cross-rule
+# ambiguity risk get their own dedicated test below.
+JS_RULES = LANGUAGE_DEFINITIONS["javascript"]["rules"]
+
+_JS_SIMPLE_CASES = [
+    # (signature, positive snippet, text expected to NOT match / None to skip)
+    ("branch", "if (x) { y(); }", "throw new Error('x');"),
+    ("safety", "try { f(); } catch (e) { g(); }", "f();"),
+    ("safety_bypasses", "if (x == y) {}", "if (x === y) {}"),
+    ("high_risk_execution", "eval(userInput);", "console.log('safe');"),
+    ("io", "fetch('/api/data');", "let fetched = true;"),
+    ("api", "export default Foo;", "let exported = true;"),
+    ("state_mutation", "this.value = 1;", "Math.max(1);"),
+    ("dead_code", "// if (debug) { doThing(); }", "// just a note"),
+    ("doc", "/** @param {string} name */", "/* A regular block comment */"),
+    ("concurrency", "async function f() { await g(); }", "function f() { g(); }"),
+    ("ui_framework", "const [x, setX] = useState(0);", "let state = 0;"),
+    ("globals", "window.location.href;", "let window_loc = href;"),
+    ("decorators", "@Component({})", "let Component = {};"),
+    ("generics", "/** @template T */", "/* template T */"),
+    ("comprehensions", "arr.map(x => x * 2);", "arr.length;"),
+    ("scientific", "const cv = require('opencv');", "const cv = 1;"),
+    ("reflection_metaprogramming", "Object.assign(target, source);", "let obj = assign(t, s);"),
+    ("ownership", "// @author Jane Doe", "// authorized by Jane Doe"),
+    ("planned_debt", "// TODO: refactor this", "// TODONE"),
+    ("fragile_debt", "// HACK: temporary workaround", "// HACKATHON"),
+    ("spec_exposure", "// [SPEC-123] implements the contract", "// spec sheet"),
+    ("ssr_boundaries", "export async function getServerSideProps() {}", "function foo() {}"),
+    ("events", "emitter.on('data', handler);", "onData(handler);"),
+    ("dependency_injection", "@Injectable()", "let inject = true;"),
+    ("memory_alloc", "const x = new Foo();", "const x = new foo();"),
+    ("telemetry", "logger.info('started');", "let logger = info;"),
+    ("debug_prints", "console.log('debug value:', x);", "let console = log;"),
+    ("explicit_casts", "Number('42');", "let num = 42;"),
+    ("panics_and_aborts", "throw new Error('bad state');", "let err = new Error();"),
+    ("thread_sleeps", "setTimeout(fn, 100);", "let timeout = set;"),
+    ("sync_locks", "mutex.lock();", "let locked = true;"),
+    ("immutability_locks", "const x = Object.freeze({});", "let x = freeze({});"),
+    ("cleanup", "resource.dispose();", "let disposed = true;"),
+    ("encapsulation", "class Foo { #secret; }", "class Foo { secret; }"),
+    ("listeners", "el.addEventListener('click', fn);", "el.onclick = fn;"),
+    ("test_skip", "test.skip('not ready', () => {});", "let skipped = true;"),
+    ("serialization_parsing", "JSON.parse(raw);", "let parsed = true;"),
+    ("regex_execution", "str.match(/foo/);", "let matched = true;"),
+    ("time_date_logic", "Date.now();", "let now = true;"),
+    ("ipc_rpc_bridges", "worker.postMessage(data);", "let posted = true;"),
+    ("bitwise_ops", "const mask = flags << 2;", "const power = base ** exponent;"),
+    ("closures", "const add = (x) => { return x + 1; };", "const add = (x) => x + 1;"),
+    ("cryptography", "import bcrypt from 'bcrypt';", "const hash = require('hash.js');"),
+    (
+        "dl_frameworks",
+        "import * as tf from '@tensorflow/tfjs';",
+        "import { RandomForestClassifier } from 'ml-random-forest';",
+    ),
+    (
+        "exfiltration_camouflage",
+        "fetch('https://telemetry.example.com/collect', { method: 'POST', body: JSON.stringify(payload) })",
+        "fetch('https://api.example.com/users', { method: 'POST', body: JSON.stringify(payload) })",
+    ),
+    ("hardware_bridge", "import { SerialPort } from 'serialport';", "import net from 'net';"),
+    ("import", "import React from 'react';", "important = true;"),
+    ("lazy_evaluation", "function* generator() { yield 1; }", "function regular() { return 1; }"),
+    ("llm_api", "import OpenAI from 'openai';", "import axios from 'axios';"),
+    ("llm_orchestrator", "import { LLMChain } from 'langchain';", "import express from 'express';"),
+    ("llm_vector_store", "import { ChromaClient } from 'chromadb';", "import mongoose from 'mongoose';"),
+    ("ml_traditional", "import x from 'sklearn';", "import * as tf from 'tensorflow';"),
+    ("rce_funnel", "child_process.exec('bash deploy.sh')", "child_process.exec('./cleanup.sh')"),
+    ("structural_boundaries", "export class Widget {}", "function widget() {}"),
+    ("test", "describe('widget', () => { expect(true).toBe(true); })", "myRegex.test('x')"),
+    ("vectorized_math", "const result = matmul(a, b);", "const result = a * b;"),
+]
+
+
+@pytest.mark.parametrize("signature,positive,negative", _JS_SIMPLE_CASES)
+def test_javascript_signature_positive_and_negative(signature, positive, negative):
+    pattern = JS_RULES[signature]
+    assert pattern is not None, f"javascript's {signature!r} rule is unexpectedly None"
+    assert pattern.search(positive), f"javascript {signature!r} failed to match its own documented positive case"
+    if negative is not None:
+        assert not pattern.search(negative), (
+            f"javascript {signature!r} incorrectly matched an excluded/negative case: {negative!r}"
+        )
+
+
+def test_javascript_structural_boundaries_excludes_const():
+    """const is explicitly reserved for immutability_locks, not structural_boundaries."""
+    pattern = JS_RULES["structural_boundaries"]
+    assert pattern.search("let x = 1;")
+    assert not pattern.search("const x = 1;")
+
+
+def test_javascript_args_control_flow_shield():
+    """
+    Regression guard for the documented "Control Flow Shield": args must not
+    hallucinate control-flow statements (while/if/for/switch/catch/return)
+    that structurally resemble a method signature followed by a block.
+    """
+    pattern = JS_RULES["args"]
+    assert pattern.search("function foo(a, b) {")
+    assert pattern.search("(a, b) => {")
+    assert pattern.search("myMethod(a, b) {")
+    assert not pattern.search("while (i < 10) {")
+    assert not pattern.search("if (x) {")
+    assert not pattern.search("switch (x) {")
+
+
+def test_javascript_args_redos_immunity():
+    """The 'Ghost Args Shield' comment documents this as a historical ReDoS trap."""
+    pattern = JS_RULES["args"]
+    poison = "myMethod(" + "a, " * 20000 + "z) {"
+    assert_redos_immune(pattern, poison, timeout_sec=3.0)
+
+
+def test_javascript_func_start_excludes_control_flow_and_reserved_words():
+    """
+    func_start's negative lookahead explicitly excludes if/for/while/switch/
+    catch/return/throw/new/typeof/jQuery/function so these never get
+    hallucinated as function declarations just because they're followed by
+    an open paren.
+    """
+    pattern = JS_RULES["func_start"]
+    assert pattern.search("function namedFn() {")
+    assert pattern.search("const foo = () => {")
+    assert pattern.search("methodName(a, b) {")
+    for reserved in ("if", "for", "while", "switch", "catch", "return", "throw", "typeof"):
+        assert not pattern.search(f"{reserved} (x) {{"), f"func_start hallucinated on reserved word {reserved!r}"
+
+
+def test_javascript_func_start_vertical_assignment_redos_immunity():
+    """
+    Regression guard for the documented 'Vertical Assignment Shield': a
+    deeply multi-line-formatted async arrow assignment must not trigger
+    catastrophic backtracking across vertical whitespace.
+    """
+    pattern = JS_RULES["func_start"]
+    poison = "export const\n" + "  \n" * 5000 + "foo\n = \n async () => {"
+    assert_redos_immune(pattern, poison, timeout_sec=3.0)
+
+
+def test_javascript_class_start_captures_name_and_parent():
+    pattern = JS_RULES["class_start"]
+    m = pattern.search("export default class Dog extends Animal {")
+    assert m is not None
+    assert m.group(1) == "Dog"
+    assert m.group(2) == "Animal"
+
+
+def test_javascript_import_dependency_capture():
+    """import/_dependency_capture must extract the exact module path string, not just match generically."""
+    dep_pattern = JS_RULES["_dependency_capture"]
+    m = dep_pattern.search("import { Component } from 'react';")
+    assert m is not None
+    assert "react" in m.groups()
+
+    m2 = dep_pattern.search("const fs = require('fs');")
+    assert m2 is not None
+    assert "fs" in m2.groups()
+
+
+def test_javascript_test_vs_regex_execution_ambiguity():
+    """
+    Regression test: javascript's `test` signature used to lack the
+    negative lookbehind TypeScript's near-identical rule already had,
+    so `myRegex.test('x')` -- a regex method call -- was miscounted as a
+    unit-test-framework call (confirmed against the real config and fixed
+    as part of this issue; jQuery's ajax.js/css.js in the golden-crucible
+    corpus both had this exact false positive before the fix).
+    """
+    test_pattern = JS_RULES["test"]
+    assert not test_pattern.search("myRegex.test('some string');"), (
+        "test incorrectly matched a .test( regex method call"
+    )
+    assert test_pattern.search("test('should work', () => {});"), "test failed to match a real bare test( call"
+    assert test_pattern.search("it('should work', () => {});"), "test failed to match a real bare it( call"
+    assert test_pattern.search("describe('suite', () => {});"), "test failed to match describe("
+
+
+def test_javascript_bitwise_ops_and_closures_do_not_collide():
+    """
+    The known bitwise_ops/closures ambiguity found in Rust (`|a| a + 1`) and
+    C++ (`std::cout <<`) doesn't reproduce in javascript's own token set --
+    javascript's arrow syntax (`=>`) shares no substring with its bitwise
+    operators (`<<`, `>>`, `>>>`, `^`, `~`). This test confirms that holds,
+    rather than assuming it from the other languages' bug reports.
+    """
+    bitwise = JS_RULES["bitwise_ops"]
+    closures = JS_RULES["closures"]
+
+    assert bitwise.search("x = a << 2;")
+    assert not bitwise.search("const f = (x) => x + 1;"), "bitwise_ops false-positived on an arrow function"
+
+    assert closures.search("const f = (x) => { return x; };")
+    assert not closures.search("x = a << 2;"), "closures false-positived on a bitwise shift"
+
+
+def test_javascript_standard_block_redos_immunity_for_deeply_nested_jsdoc_generics():
+    """
+    C#'s func_start ReDoS'd on deeply nested generic return types (already
+    found and fixed). javascript doesn't have real generics, but its JSDoc
+    '@template'-based simulation still needs to survive a pathological
+    payload rather than assume small-input testing is representative.
+    """
+    pattern = JS_RULES["generics"]
+    poison = "/**\n" + " * @template T\n" * 20000 + " */"
+    assert_redos_immune(pattern, poison, timeout_sec=3.0)
+
+
+def test_javascript_args_generator_methods():
+    """args must capture generator methods (ES6)."""
+    pattern = JS_RULES["args"]
+    assert pattern.search("function * foo(a, b) {")
+    assert pattern.search("function* foo(a, b) {")
+    assert pattern.search("async function* foo(a) {")
+    assert pattern.search("static async get *#myGen(a) {")
+
+
+def test_javascript_class_start_decorators():
+    """class_start must handle decorators before the class keyword."""
+    pattern = JS_RULES["class_start"]
+    assert pattern.search("@Component\nexport default class Dog extends Animal {")
+    assert pattern.search("@Inject()\n@Singleton()\nclass Service {}")
+
+
+def test_javascript_structural_boundaries_yield():
+    """structural_boundaries should capture yield (it is a keyword like await/return)."""
+    pattern = JS_RULES["structural_boundaries"]
+    assert pattern.search("yield 1;")
+
+
+def test_javascript_func_start_generator_spacing():
+    """func_start should handle function * name() correctly."""
+    pattern = JS_RULES["func_start"]
+    assert pattern.search("function * foo() {")
+
+
+def test_javascript_import_dynamic():
+    """import regex should capture dynamic imports."""
+    pattern = JS_RULES["import"]
+    assert pattern.search("await import('lodash');")
+
+
+def test_javascript_func_start_vertical_assignment():
+    """func_start handles vertical assignment for fat arrows."""
+    pattern = JS_RULES["func_start"]
+    assert pattern.search("export const \n foo \n = \n async () => {")
+
+
+def test_javascript_dependency_capture_multiline():
+    """_dependency_capture captures multiline imports properly."""
+    pattern = JS_RULES["_dependency_capture"]
+    text = "import {\n  foo,\n  bar\n} from\n'my-module'"
+    m = pattern.search(text)
+    assert m is not None
+    assert "my-module" in m.groups()

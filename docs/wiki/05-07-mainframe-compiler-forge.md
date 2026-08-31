@@ -1,29 +1,49 @@
-# Mainframe Compiler Forge
+# Mainframe Compiler Generator
 
-> **Architecture: Era-Aware JCL Generation & AST Flattening**
->
-> **Summary:** The MVS 3.8j COBOL Compiler Forge dynamically generates the exact Job Control Language (JCL) required to compile legacy payloads on IBM mainframes. It features a Dialect Sensor to prevent catastrophic compiler strokes by routing code to the correct compiler era (OS/VS vs. Enterprise).
+> **File Reference:** [`gitgalaxy/tools/cobol_to_cobol/cobol_compiler_forge.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/cobol_to_cobol/cobol_compiler_forge.py)
 
-## The Dialect Sensor
-Mainframe compilers are notoriously fragile. Feeding post-1985 syntax into a 1974 compiler results in immediate ABENDs (Abnormal Ends). The forge scans the Abstract Syntax Tree (AST) for modern structural signatures (e.g., `EVALUATE`, `INITIALIZE`, inline `*>` comments, and explicit scope terminators like `END-IF`). 
-* If detected, it routes the build step to the modern Enterprise Compiler (`IGYWCL`). 
-* If absent, it conservatively routes to the legacy OS/VS Compiler (`COBUCL`).
+## Engineering Summary
+This subsystem constructs Job Control Language (JCL) build scripts required to compile legacy modules on MVS mainframe architectures. It solves the problem of manually determining the correct compiler utility and dataset allocations based on source code dialects. It exists to automate the deployment process for legacy environments. In GitGalaxy, it supports in-place modernization and testing on legacy architectures.
 
-## The Copybook Flattener
-Legacy code frequently relies on external `COPY` statements, fragmenting the business logic across multiple files. To create a self-contained compilation payload, the forge recursively resolves and inlines all copybooks.
-* **Infinite Loop Protection:** Because legacy systems often contain cyclic copybook references (A calls B, B calls A), the flattener enforces a strict recursion depth limit (maximum 10 layers). If the limit is exceeded, it forcefully aborts the cyclic branch to prevent memory exhaustion.
+## Purpose
+To dynamically produce JCL build scripts for compiling COBOL modules, detecting language dialects, and routing to compatible compilers (`COBUCL` or `IGYWCL`).
 
-## Execution Intent Extraction
-The forge parses the structural boundaries of the file to extract the `PROGRAM-ID` and all physical file allocations (`SELECT ... ASSIGN TO`). It uses this data to automatically scaffold the Phase 1 infrastructure provisioning steps (`IEFBR14`) in the generated JCL, ensuring all required datasets are allocated before the compiler runs.
+## Problem Being Solved
+Mainframe compilers enforce strict syntax rules based on standards (COBOL-74 vs. COBOL-85). Additionally, legacy codebases rely on external copybook files that must be resolved, and require explicit dataset allocation steps for compilation.
 
-<br><br>
+## Design
+- **Language Dialect Detection**: Scans for modern COBOL signatures (`EVALUATE`, `INITIALIZE`, explicit scope terminators, `*>` comments). Routes to `IGYWCL` if found, else defaults to `COBUCL`.
+- **Recursive Copybook Flattening**: Resolves and inlines external `COPY` statements. Enforces a maximum recursion depth of 10 to guard against cyclic dependency stack overflows.
+- **Dataset Allocation & JCL Scaffolding**: 
+  - Extracts `PROGRAM-ID` to assign job names and load module output locations.
+  - Parses `SELECT ... ASSIGN TO` to construct dataset allocation steps (`IEFBR14`).
+  - Configures linkage editor steps (`LKED`) to resolve system libraries and output binary load modules.
 
----
+## Pipeline Integration
+**Inputs received:** Raw COBOL source files and associated copybooks.
+**Outputs produced:** Validated, flat COBOL source and JCL compilation scripts.
+**Dependencies:** Upstream file system access; downstream mainframe job submission endpoints.
 
-### 🌌 Powered by the blAST Engine
+```mermaid
+graph TD
+    A[COBOL Source] --> B[Dialect Detection]
+    B --> C[Copybook Flattening]
+    C --> D[JCL Scaffolding]
+    D --> E[Build Scripts]
+```
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Tradeoffs
+- Inlining copybooks before compilation rather than relying on the compiler's library resolution. Chosen to guarantee self-contained payload submissions for remote compilation, sacrificing modularity in the final payload.
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Limitations
+- Maximum recursion depth of 10 for copybooks prevents resolution of deeply nested architectures.
+- Dependent on predefined system library mappings (e.g., `SYS1.COBLIB`).
 
+## Performance Notes
+Copybook flattening executes efficiently in memory. Cycle detection limits recursion strictly, ensuring $O(1)$ depth overhead and preventing exponential expansion in degenerate cases.
+
+## Future Work
+- Dynamic detection of required system libraries based on external CALL heuristics.
+
+## Related Components
+- `cobol_dag_architect.py`

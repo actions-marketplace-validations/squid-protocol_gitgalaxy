@@ -1,0 +1,12 @@
+{
+  "args_comparable": 964,
+  "args_exact_match": 964,
+  "corpus_path": "language-crucible/data/csharp",
+  "extra_classes": 0,
+  "extra_functions": 0,
+  "files_scanned": 6,
+  "found_classes": 33,
+  "found_functions": 964,
+  "real_classes": 33,
+  "real_functions": 964
+}

@@ -1,50 +1,55 @@
 # Vault Sentinel (High-Speed Secrets Scanner)
 
-> **Guarding the Cryptographic Vault**
->
-> Committing a hardcoded AWS key or Stripe token to a Git repository is a catastrophic security failure. By the time a background CI/CD job catches it, bots have already scraped the key from the public commit history.
->
-> The Vault Sentinel (`vault_sentinel.py`) is GitGalaxy's specialized, ultra-fast secrets scanner. It is specifically engineered to act as a localized pre-commit hook, instantly scanning files for hardcoded secrets, `.env` exposures, and cryptographic keys *before* they ever leave the developer's machine.
+> **File Reference:** [gitgalaxy/tools/supply_chain_security/vault_sentinel.py](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/supply_chain_security/vault_sentinel.py)
 
-## High-Speed Physics (Neutering the Lens)
+## Engineering Summary
+Developer environments often accidentally leak sensitive credentials via hardcoded keys or committed configuration files. Catching these leaks requires scanning code before it enters version control. To solve this, a high-speed secret scanning module acts as a pre-commit hook and CI/CD validator, detecting hardcoded API keys, SaaS credentials, private key certificates, and uncommitted `.env` files. It emphasizes sub-second execution speeds to avoid blocking local developer workflows. This subsystem is the GitGalaxy Vault Sentinel.
 
-Because pre-commit hooks must execute in milliseconds to avoid frustrating developers, the Sentinel cannot afford to run the full, computationally heavy 60-point optical scan. 
+## Purpose
+To provide high-speed, low-latency secret scanning for developer pre-commit hooks and CI/CD pipelines, blocking the accidental commit or deployment of sensitive credentials.
 
-To achieve massive velocity, the Orchestrator instantiates the `SecurityLens` in "paranoid" mode but explicitly **neuters the lens**. It rips out all threat signatures except for two:
-* `private_info`: Hunts for high-entropy strings, AWS API keys, SaaS tokens, and database passwords.
-* `graveyard`: Hunts for commented-out logic (developers frequently comment out old API keys instead of deleting them).
+## Problem Being Solved
+Standard security scanners apply hundreds of heavy regex patterns and AST rules, which can take minutes to execute. If a pre-commit hook takes too long, developers bypass it. Vault Sentinel isolates only critical credential signatures to execute in milliseconds, ensuring compliance without impacting developer velocity.
 
-## The Two-Pass Funnel
+## Design
+### Sensor Optimization
+The tool narrows the scope of `SecurityLens` signature matching exclusively to high-priority targets (`hardcoded_secrets` and `dead_code`). By stripping general AST, cyclomatic complexity, and non-credential regex rules, the scanner maximizes file throughput.
 
-The Sentinel processes files using a strict two-pass funnel to optimize I/O and CPU cycles:
+### Two-Pass Detection Pipeline
+1. **Phase 1: Path Surface Radar (Zero-I/O Checks):** Evaluates file paths against ignore patterns (`ApertureFilter`), wildcard denylists (`DENYLIST_PATTERNS`, e.g., `*.pem`, `.env*`), and path integrity checks. Matching paths block execution immediately without opening file handles.
+2. **Phase 2: Deep Content Inspection:** Files passing Phase 1 are loaded into memory. The optimized `SecurityLens` hunts for cloud tokens, SaaS keys, and commented-out credentials. Detected secret snippets are redacted in console logs to prevent exposure in build output.
 
-### 1. Tier 0 Path Scan (The Surface Radar)
-Before opening a single file, the Sentinel evaluates the file paths against the `ApertureFilter` and `DENYLIST_PATTERNS`. 
-* It instantly flags any file claiming to be a `.pem` certificate, an `id_rsa` private key, or a `.env` file.
-* If a Tier 0 Path Breach is detected, the Sentinel immediately increments the leak counter and flags the file without wasting CPU cycles reading its contents.
+### Configuration & Allowlist Management
+Settings are resolved via `resolve_config()`. `ALLOWLIST_PATHS` bypasses checks for test fixtures, while `APERTURE_CONFIG` controls max file size limits to prevent scanning enormous binary blobs.
 
-### 2. The Deep Content Scan
-If the file path is safe, the Sentinel loads the file's contents into memory and runs the neutered Security Lens to hunt for:
-* Cloud Infrastructure Keys (AWS, GCP, Azure)
-* SaaS & CI/CD Tokens (GitHub Personal Access Tokens, Stripe Secret Keys)
-* Cryptographic Vaults
+## Pipeline Integration
+Inputs received include local repository files and `.galaxyscope.yaml` configurations. Outputs produced are scan velocity metrics, leak counts, and console-redacted evidence. It functions as an active blocking gate upstream of the main build process.
 
-When a hardcoded credential is breached, the Sentinel dumps the exact snippet to the console so the developer can immediately locate and scrub the token.
+```mermaid
+graph TD
+    A[Repository Files] --> B[Phase 1: Path Radar]
+    B -- Denylist Match --> C[Block & Alert]
+    B -- Valid Path --> D[Phase 2: Deep Content Inspection]
+    D -- Secrets Found --> E[Redact & Block]
+    D -- Clean --> F[Allow Commit]
+```
 
-## Allowlist Bypasses & CI/CD Integration
+## Tradeoffs
+* **Speed vs. Exhaustive Scanning:** By limiting the `SecurityLens` signatures strictly to `hardcoded_secrets` and `dead_code`, the tool sacrifices the ability to catch general code vulnerabilities during this phase in exchange for sub-second credential scanning.
+* **Regex Matching vs. Entropy Analysis:** The sentinel relies primarily on regex matching and path checks. It does not perform deep Shannon entropy analysis (used by other GitGalaxy modules) on file contents to find obfuscated secrets, prioritizing speed over deep anomaly detection.
 
-In testing environments, developers often use mock API keys or dummy certificates. To prevent the Sentinel from blocking legitimate test data, it cross-references the file path against the `ALLOWLIST_PATHS` defined in the global `gitgalaxy_config.py`. If a mock secret is found in an allowlisted test file, the tool logs it as an `[ALLOWED BYPASS]` but does not fail the build.
+## Limitations
+* Custom, proprietary internal key formats will not be detected unless manually added to the `THREAT_SIGNATURES`.
+* Large text files exceeding `APERTURE_CONFIG` file size limits may be bypassed to maintain performance SLAs.
 
-When the scan is complete, the Sentinel generates a strict Mission Report detailing the Uncontrolled Leaks. If even a single unauthorized secret is exposed, the script exits with a status code of `1`, violently blocking the `git commit` or Pull Request.
+## Performance Notes
+Phase 1 operates with zero-I/O by evaluating paths before opening file handles. Phase 2 leverages optimized regex compilation to achieve processing velocities measured in thousands of files per second.
 
-<br><br>
+## Future Work
+* **Current Behavior:** Blocks commits based on static regex and path matching.
+* **Planned Improvements:** Integrating an asynchronous key-validation API call to check if detected AWS or GitHub tokens are actively valid before failing the build, reducing false positive blocks on revoked keys.
 
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Related Components
+* [GitGalaxy Platform](https://gitgalaxy.io/)
+* [⬅️ Back to Master Index](index.md)
 

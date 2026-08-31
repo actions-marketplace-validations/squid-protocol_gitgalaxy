@@ -1,72 +1,51 @@
-# The GuideStar Protocol: Contextual Intelligence
+# Project Manifest and Metadata Resolution
 
-> **The Intelligence Officer**
->
-> The GuideStar Protocol acts as the "Intelligence Officer" of the GitGalaxy observatory. While the Aperture Filter serves as a shield—a wavelength filter designed to block out binaries and noise by removing files from analysis—we use user-defined whitelists to ensure we don't lose what is important. The GuideStar Protocol is an adaptive intelligence engine that tunes the observatory to the unique atmospheric conditions of a repository by analyzing the structural metadata created by the user.
->
-> By reading a project's own roadmap (manifests, folder biases, and explicit `.gitattributes`), GuideStar tells the telescope which signals are intentional logic and which are mere debris. This transforms a rigid exclusion filter into a dynamic system that understands the "Social Proof" of a file before the Language Lens begins its atomic scan.
+> **File Reference:** [`gitgalaxy/core/guidestar_lens.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/core/guidestar_lens.py)
 
-## The Prior Probability Vector
+## Engineering Summary
+This subsystem acts as the project metadata parser and contextual intelligence engine. It solves the problem of analyzing files with ambiguous extensions or no extensions by parsing build manifests (e.g., `package.json`, `Cargo.toml`, `Makefiles`) and repository attributes (`.gitattributes`) to assign initial language priors and intent locks before lexical analysis. It exists to establish file importance and language hints based on verified developer intent, ensuring downstream components prioritize analysis correctly. Within the overall pipeline, this component is known as GitGalaxy's GuideStar.
 
-In the GitGalaxy pipeline, every file in the CensusArray begins as an uninitialized artifact with a base probability of "Deep Space Mystery." Because the observatory operates on a Bayesian logic of "Proof over Assumption," the GuideStar Protocol is responsible for the first major update to this Prior Vector.
+## Purpose
+To resolve contextual metadata, assign Bayesian prior probabilities for language identification, and lock in intent based on developer declarations.
 
-By searching for multiple lines of evidence—ranging from explicit `.gitattributes` directives to hardcoded build manifests—the protocol categorizes files into distinct Quality Tiers. These tiers allow the telescope to prioritize its instrumentation: high-tier evidence (like an Authoritative Override) allows for an immediate focus lock, while low-tier or absent evidence flags an artifact for a more intensive spectral audit later in the pipeline.
+## Problem Being Solved
+Relying solely on file extensions for language identification fails in polyglot codebases or when extensions are missing/ambiguous. A mechanism is needed to infer identity and intent from the project's build configurations.
 
-* **Selective Injection:** GuideStar only updates priors for files or patterns it explicitly "touches" during its environmental scan. It does not perform a blanket sweep; instead, it generates specific evidence of intent via manifests, `.gitattributes` pattern rules, and sector biases.
-* **Contextual Tagging:** When GuideStar identifies a file, it attaches a **Data Vector** to the file's metadata. This vector contains the predicted `lang_id`, the `prior_confidence` (intensity), and the `source_proof` (e.g., "Roadmap Lock").
-* **Whitelist Trust Bonus:** If an artifact's filename appears in a user-provided **Priority Whitelist**, the GuideStar applies a **Confidence Boost**. The prior intensity is increased by **+0.10** (capped at 0.99), signaling to the pipeline that this specific file has explicit human-validated importance.
+## Design
+The metadata resolver employs a Bayesian prior probability model. It uses a 3-tier evidence hierarchy:
+- Tier 1: Machine Roadmap (explicit `.gitattributes` assignments give a 0.99 confidence lock).
+- Tier 2: Build Manifest Declarations (files declared as entry points or dependencies receive 0.85-0.95 confidence).
+- Tier 3: Directory Location Heuristics (files in standard paths like `/src` or `/bin` get a 0.75 confidence).
+It separates context resolution (intent) from concrete identification (structural validation).
 
-## The Handover: Intent vs. Identity
+## Pipeline Integration
+Inputs: Unfiltered file paths, build manifests, `.gitattributes`, and priority whitelists.
+Outputs: Pre-configured confidence vectors, predicted language IDs, and source provenance labels.
+Dependencies: Downstream to the language identifier (`language_lens.py`).
 
-This separation of concerns allows the pipeline to maintain a "Scan Once" efficiency by distinguishing between two different types of intelligence:
+```mermaid
+flowchart LR
+    A[Build Manifests & Metadata] --> B[Metadata Resolver]
+    B --> C[Language Confidence Vectors]
+    C --> D[Language Identifier]
+```
 
-1. **GuideStar (The Scout):** Identifies **Intent** (Why this file exists). It says: *"I found this file referenced in a Makefile and it has a known C-extension; I predict it is a C-target with 0.90 confidence."*
-2. **Language Lens (The Scientist):** Identifies **Identity** (What this file is). It updates the prior for the "Standard Galaxy" (files with known extensions) and performs the atomic scan to verify all claims.
+## Tradeoffs
+- **Heuristic Depth vs Certainty**: Employs heuristic path matching (e.g., assuming files in `/src` are source code) to gain broad context, which sacrifices absolute certainty for better coverage in missing-extension scenarios.
+- **Lookup Sequence Priority**: Exact matches take precedence over directory context. This choice correctly overrides default heuristics but risks incorrectly locking files if a manifest is outdated.
 
-## The Evidence Hierarchy: Identifying Social Proof
+## Limitations
+- Requires recognizable build manifests; fails to provide strong priors in custom or obscure build systems.
+- Normalization strips `./` prefixes, which may clash if non-standard paths are used.
+- Priority whitelist boosts (+0.10) are arbitrary scalars.
 
-GuideStar prioritizes evidence based on its "Proximity to Human Intent." This principle assumes that explicit configuration files override automated guessing. This hierarchy creates three distinct Quality Tiers that guide the telescope's sensors.
+## Performance Notes
+Path lookup resolution occurs in $O(1)$ to $O(N)$ strict sequence, avoiding deep file reads until absolutely necessary. Lookup is purely string-based and normalized for fast execution.
 
-### Tier 1: Machine Roadmap (Authoritative Proof)
-This is the "God Tier" of evidence. If a developer explicitly dictates the language of a file or pattern using GitHub's standard `.gitattributes` file (e.g., `*.h linguist-language=C++`), the engine trusts it absolutely.
-* **Detection:** Parses `.gitattributes` for `linguist-language=` flags, normalizes the names, and locks the pattern with a **0.99 Prior**, overriding all other heuristics.
+## Future Work
+Expanding manifest support to emerging build systems like Bazel and Buck2.
 
-### Tier 2: Functional Motion (Dynamic Triggers)
-These are machine-readable build manifests where a developer has explicitly declared an artifact's role in the system. Because these files are essential for successful execution, they provide high proximity to logic.
-* **Manifest Entries / Binaries:** Files explicitly declared as `main` or `bin` in `package.json`, or as `path =` in `Cargo.toml` receive a **0.95 Prior**.
-* **Manifest Scripts / Sources:** Files extracted from command strings (like `npm run`) or Makefile variables (like `SRCS =`) receive a **0.85 Prior**.
-
-### Tier 3: Informational Context (Heuristic Labels)
-This tier captures evidence of a file "in motion" or residing in a designated execution neighborhood.
-* **Intent-Biased Sectors:** If a file resides in a known execution-heavy directory (e.g., `/bin`, `/scripts`, `/hooks`, `/tools`, `/src`), it is granted an automatic **0.75 Prior** simply for existing in that sector.
-* **Makefile Targets:** Non-reserved custom targets identified in build files (e.g., `build-assets:`) are granted a **0.70 Prior**.
-
-## Rules for Deep Manifest & README Analysis
-
-### Deep Manifest Inspection
-GuideStar dispatches specific scouts to extract internal references:
-* **Node.js:** Scans `main`, `bin`, and the values within `scripts` blocks for potential filenames, using regex to extract `.js`/`.ts` targets from command strings.
-* **Makefiles:** Extracts variable assignments (e.g., `SRCS`, `SOURCES`, `FILES`, `TARGET`).
-* **Makefile Target Heuristics:** Identifies custom targets. If a target name is not a generic reserved word (like `all` or `clean`), it is injected as a valid artifact.
-* **TOML (Python/Rust):** Parses `path =` assignments in `Cargo.toml` and colon-delimited entry points in `pyproject.toml`.
-
-### Tactful README Scanning
-Instead of fuzzy README scraping, GuideStar establishes absolute truth by parsing `.gitattributes`. It isolates lines containing `linguist-language=`, translates human-readable tags (like `c++` or `objective-c++`) into the engine's internal nomenclature (`cpp`, `objective-c`), and registers a global pattern matcher. When a file is evaluated, its relative path and filename are tested against these patterns, allowing entire directories or file extensions to be instantly focus-locked.
-
-## Determinism and Inventory Integrity
-
-* **Traceability:** Every file in the final inventory indicates whether its prior was provided by Context (GuideStar) or Signature (Language Lens).
-* **Dynamic Resolution:** When asked for a file's status, GuideStar checks in this exact order: `Exact Filename Match` $\rightarrow$ `Relative Path Match` $\rightarrow$ `Pattern Match (.gitattributes)` $\rightarrow$ `Sector Bias`. This ensures hyper-specific locks override generic folder biases.
-* **Clean Room Normalization:** Before injection, GuideStar cleans and normalizes all filenames (stripping `./` and leading whitespace) to ensure manifest references align perfectly with physical file paths.
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Related Components
+- [Aperture Filter](02-03-aperture-filter.md)
+- [Language Lens](02-05-language-lens.md)
 

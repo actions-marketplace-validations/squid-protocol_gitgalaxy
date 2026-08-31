@@ -1,0 +1,61 @@
+# GitGalaxy Enterprise Security Scanner
+# Integration: Bitbucket Pipelines
+#
+# Requires bitbucket_insights.py in the same directory as this file —
+# it publishes GitGalaxy's SARIF findings as native Bitbucket Code Insights
+# PR annotations. Copy both files together; this pipeline will still run
+# without it, but PR annotations will not be published.
+
+image: python:3.12-slim
+
+clone:
+  depth: full
+
+pipelines:
+  default:
+    - parallel:
+        - step:
+            name: 'Vault Sentinel'
+            caches:
+              - pip
+            script:
+              - export GITGALAXY_LICENSE_KEY="COMMUNITY_FREE_TIER"
+              - pip install --upgrade pip
+              - pip install gitgalaxy
+              - vault-sentinel .
+
+        - step:
+            name: 'X-Ray Inspector'
+            caches:
+              - pip
+            script:
+              - export GITGALAXY_LICENSE_KEY="COMMUNITY_FREE_TIER"
+              - pip install --upgrade pip
+              - pip install gitgalaxy
+              - xray-inspector .
+
+        - step:
+            name: 'Supply Chain Firewall'
+            caches:
+              - pip
+            script:
+              - export GITGALAXY_LICENSE_KEY="COMMUNITY_FREE_TIER"
+              - pip install --upgrade pip
+              - pip install gitgalaxy
+              - supply-chain-firewall .
+
+        - step:
+            name: 'GalaxyScope Reporting (SARIF + ML Malware Gate)'
+            caches:
+              - pip
+            script:
+              - export GITGALAXY_LICENSE_KEY="COMMUNITY_FREE_TIER"
+              - pip install --upgrade pip
+              - pip install "gitgalaxy[yaml]" networkx tiktoken xgboost pandas numpy
+              - |
+                galaxyscope . --config .galaxyscope.yaml --fail-on-malware --sarif-only --output gitgalaxy-results.json
+              # Publishes SARIF results as native Bitbucket Code Insights PR
+              # annotations. Requires bitbucket_insights.py (see header note).
+              - python bitbucket_insights.py gitgalaxy-results_sarif.json
+            artifacts:
+              - gitgalaxy-results_sarif.json

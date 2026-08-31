@@ -1,36 +1,53 @@
-# Legacy Refraction Controller
+# COBOL Refactoring Controller
 
-> **Architecture: Hybrid Intermediate Representation (IR) State Manager**
->
-> **Summary:** The COBOL Refractor Controller is the core orchestration engine for the legacy modernization suite. It scans procedural COBOL repositories, extracts the deterministic business logic, and translates it into a standardized JSON Intermediate Representation (IR). 
->
-> **OOM Prevention:** To handle planetary-scale legacy monoliths without crashing, the controller utilizes an auto-scaling Hybrid State Manager. It scouts the repository mass upon execution; if the mass exceeds safe limits (e.g., >2,000 files or >200 MB), it seamlessly shifts the IR state from High-Speed RAM into a localized SQLite3 database to prevent Out-Of-Memory (OOM) failures.
+> **File Reference:** [`gitgalaxy/cobol_refractor_controller.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/cobol_refractor_controller.py)
 
-## The Three-Phase Extraction Pipeline
+## Engineering Summary
+This subsystem is an orchestration engine that parses procedural legacy source code to extract deterministic business logic into a structured format. It solves the problem of analyzing massive monolithic codebases by converting source text into a machine-readable intermediate representation. It exists to provide the foundational data structures required for downstream code generation and architectural visualization. Within the ecosystem, it functions as the primary entry point for static analysis, producing artifacts consumed by the rest of GitGalaxy.
 
-The pipeline processes each legacy payload through a strict, shared-state architecture to ensure no execution logic is lost during translation.
+## Purpose
+To parse COBOL source code, extract business logic and data structures, and output a standardized JSON Intermediate Representation (IR).
 
-### Phase 0: Lexical Sanitization
-The engine executes the Lexical Patcher to neutralize known architectural traps (e.g., legacy `NEXT SENTENCE` directives) before the main analysis begins, ensuring a clean, deterministic Abstract Syntax Tree.
+## Problem Being Solved
+Legacy codebases contain large amounts of monolithic procedural code, undocumented data dependencies, and unstructured control flow. Modernizing this code requires a structured way to analyze and extract the relevant logic without executing it.
 
-### Phase 1: Reconnaissance & Analysis
-* **The Graveyard Reaper:** Scans the code to identify "Dead Memory" (orphaned variables) and "Phantom Logic" (unreachable paragraphs). This structural necrosis is mapped and saved to the State Manager so downstream forges know what to ignore.
-* **The DAG Architect:** Maps the Input/Output intent of the file, deliberately querying the Graveyard state to deflect and ignore ghost dependencies.
-* **Honesty Protocol:** Scans for structural anomalies, system limit overrides, and unresolved dynamic `CALL` statements, logging them into a master audit report for manual architectural review.
+## Design
+The controller uses a three-phase extraction pipeline:
+1. **Lexical Sanitization:** Neutralizes legacy syntax pitfalls, such as deprecated `NEXT SENTENCE` directives, to enable clean syntax tree processing.
+2. **Static Analysis & Code Audit:** 
+   - Uses `x_ray_dead_code` to identify orphaned variables and unreachable paragraphs.
+   - Maps program I/O relationships using `extract_lineage`.
+   - Scans for structural anomalies and unresolved dynamic `CALL` statements via `scan_system_limits`.
+3. **Context-Aware Code Generation:**
+   - Translates active variables into JSON and PostgreSQL DDL database schemas.
+   - Generates Job Control Language (JCL) execution scripts based on dataset lineage.
+   - Slices business logic around target variables to output isolated JSON business rules, skipping unreachable blocks.
 
-### Phase 2: Context-Aware Generation
-* **Schema Forge:** Translates the active memory map into Cloud Schemas (JSON/SQL), explicitly bypassing the orphaned variables identified in Phase 1 to prevent schema bloat.
-* **Zero-Trust JCL Forge:** Utilizes the DAG lineage to generate highly restricted, zero-trust Job Control Language (JCL) emulators.
-* **Microservice Slicer:** Slices the business logic based on target variables, skipping dead execution blocks to output a perfectly isolated JSON rule set ready for LLM translation.
+## Pipeline Integration
+**Inputs received:** Procedural COBOL source code files.
+**Outputs produced:** JSON Intermediate Representation (IR), PostgreSQL DDL schemas, JCL scripts.
+**Dependencies:** Upstream file system readers; downstream consumers include the Java Translation Controller and code generation agents.
 
-<br><br>
+```mermaid
+graph TD
+    A[COBOL Source Files] --> B[COBOL Refactoring Controller]
+    B --> C[JSON IR / Schemas]
+    B --> D[Audit Reports]
+```
 
----
+## Tradeoffs
+- Uses a hybrid state manager instead of purely in-memory structures. Chosen to prevent Out-Of-Memory (OOM) failures on large repositories, sacrificing raw processing speed for stability by writing to SQLite when limits are reached.
 
-### 🌌 Powered by the blAST Engine
+## Limitations
+- Relies on heuristics for dynamic `CALL` statements, which may not resolve at compile time.
+- Unresolved system limits and overrides require manual architectural review.
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Performance Notes
+The controller checks repository size on launch. If the volume exceeds 2,000 files or 200 MB, it shifts IR storage from RAM to a localized SQLite database. This limits memory usage to $O(1)$ for state storage, allowing processing of theoretically unbounded repository sizes at the cost of disk I/O latency.
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Future Work
+- Implementation of more precise control flow graph analysis to eliminate edge cases in dynamic subroutine resolution.
 
+## Related Components
+- `cobol_to_java_controller.py`
+- `cobol_dag_architect.py`

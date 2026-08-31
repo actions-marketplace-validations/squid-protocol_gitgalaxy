@@ -1,30 +1,49 @@
 # ETL Unpacker (EBCDIC to CSV)
 
-> **Architecture: Binary Translation & Precision Decoding**
->
-> **Summary:** The ETL (Extract, Transform, Load) Unpacker acts as the data bridge between the legacy mainframe and the modern cloud. It translates raw, binary EBCDIC byte streams into standard UTF-8 CSV files, unpacking highly compressed mainframe memory formats on the fly.
+> **File Reference:** [`gitgalaxy/tools/cobol_to_cobol/cobol_etl_unpacker.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/cobol_to_cobol/cobol_etl_unpacker.py)
 
-## Schema-Driven Byte Slicing
-Mainframe data files do not have delimiters (like commas or tabs). They are continuous blocks of binary data. To slice them correctly, the unpacker reads the GitGalaxy-generated JSON Schema.
-It calculates the exact physical byte length of each field based on its legacy `PIC` clause. For example, it translates `PIC X(50)` into a rigid 50-byte read buffer, allowing it to perfectly segment the binary stream row by row.
+## Engineering Summary
+This subsystem translates raw legacy binary data into standard character-delimited formats. It solves the problem of migrating fixed-width, non-delimited mainframe datasets encoded in EBCDIC and COMP-3 into modern relational databases. It exists to decouple data migration from application logic execution. In GitGalaxy, this tool enables the seamless transition of legacy state to cloud-native data stores.
 
-## COMP-3 (Packed Decimal) Decoding
-To save physical disk space, IBM mainframes compress numeric data using COMP-3. This format packs two digits into a single byte (nibbles), utilizing the final half-byte to store the positive/negative sign.
-* The unpacker calculates the compressed byte size using the formula: `ceil((digits + 1) / 2)`.
-* It decodes the raw hex values into standard Python floats.
-* It validates the final nibble (checking for `D` or `B` to indicate negative values) and applies the schema's defined decimal scale (e.g., shifting the decimal point for `PIC S9(5)V99`).
+## Purpose
+To convert raw EBCDIC binary byte streams into UTF-8 CSV files by parsing Packed Decimal (COMP-3) and Zoned Decimal fields using layout metadata.
 
-## EBCDIC Character Translation
-Standard text fields and zoned decimals are read in their raw EBCDIC encoding and translated to standard UTF-8. The unpacker strictly uses the `cp037` code page (the standard IBM US EBCDIC character set) to ensure special characters and legacy formatting survive the transition to the cloud intact.
+## Problem Being Solved
+Mainframe binary datasets lack row delimiters (newlines) and utilize specialized encodings (EBCDIC) and compression (Packed Decimal). These formats cannot be natively read by modern database import utilities.
 
-<br><br>
+## Design
+- **Schema-Driven Byte Slicing**: Reads GitGalaxy JSON Schema (`_schema.json`) to calculate exact field byte boundaries based on `PIC` clauses. Slices incoming binary streams row-by-row based on calculated `record_length`.
+- **Packed Decimal (COMP-3) Decoding**: 
+  - Calculates physical footprint using `ceil((digits + 1) / 2)`.
+  - Inspects final nibble for sign (`D`/`B` negative; `C`/`A`/`F`/`E` positive).
+  - Divides integer by `10^decimals` according to schema scale.
+- **EBCDIC Encoding Conversion**: Decodes alphanumeric text and Zoned Decimal numbers to UTF-8 using the IBM US EBCDIC code page (`cp037`), preserving special characters.
 
----
+## Pipeline Integration
+**Inputs received:** Raw mainframe binary datasets and GitGalaxy JSON schemas.
+**Outputs produced:** UTF-8 encoded CSV files.
+**Dependencies:** Upstream static analysis (schema generator); downstream database ingestion pipelines.
 
-### 🌌 Powered by the blAST Engine
+```mermaid
+graph TD
+    A[Binary EBCDIC Data] --> B[ETL Unpacker]
+    A2[JSON Schema] --> B
+    B --> C[UTF-8 CSV File]
+```
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Tradeoffs
+- Decoding entirely in memory row-by-row instead of utilizing native database extensions. Chosen to maximize portability across target database engines, sacrificing raw ingestion speed for platform independence.
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Limitations
+- Only supports standard IBM `cp037` encoding; international EBCDIC code pages require manual configuration.
+- Does not automatically resolve nested OCCURS DEPENDING ON (variable length records) without explicit length headers.
 
+## Performance Notes
+Processing is $O(N)$ relative to dataset size. Stream-based processing ensures memory consumption remains flat ($O(1)$) regardless of the total file size.
+
+## Future Work
+- Implementation of variable-length record decoding using dynamic schema resolution.
+
+## Related Components
+- `cobol_refractor_controller.py`
+- `cobol_to_java_controller.py`

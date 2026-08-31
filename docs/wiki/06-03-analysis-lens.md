@@ -1,52 +1,45 @@
-# Analysis Lens (Math Constants & Schemas)
+# Analysis Lens & Schema Registry
 
-> **The Universal Schemas**
->
-> The `analysis_lens.py` file operates as the strict mathematical and schema registry for GitGalaxy. While `language_standards.py` defines *how* to parse code, the Analysis Lens defines *what* that parsed data actually means. 
->
-> It enforces the exact array structures, string translations, and mathematical thresholds required to turn raw regex counts into meaningful 3D visuals and forensic audits without breaking downstream Python dictionaries or GPU shaders.
+> **File Reference:** [`gitgalaxy/standards/analysis_lens.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/standards/analysis_lens.py)
 
-## The Triad of Schemas (`RECORDING_SCHEMAS`)
+## Engineering Summary
+Mathematical schemas and normalization formulas for extracted source code metrics form the core of this module. It solves the problem of standardizing disparate telemetry data by flattening object-oriented syntax counts into contiguous numerical arrays. This subsystem transforms raw syntax hits into calculated risk vectors and visual attributes, acting as the mathematical normalization layer for GitGalaxy.
 
-Because GitGalaxy eventually pivots data from object-oriented Python into flattened C-style arrays for WebGL, array order is critical. The Analysis Lens hardcodes the exact order of elements for the entire pipeline:
+## Purpose
+To enforce strict schema layouts for metric vectors and apply standardized mathematical thresholds for security and risk evaluation.
 
-### 1. `SIGNAL_SCHEMA` (The 60-Point Heuristic Matrix)
-This defines the absolute layout of the raw telemetry extracted by the `LogicSplicer`. Every language's regex hits are aggregated into this exact 60-element array. It represents the foundational signal data of the file, including active logic (e.g., `branch`, `memory_alloc`), passive data (e.g., `doc`, `graveyard`), and raw security triggers (e.g., `sec_danger`, `sec_io`).
+## Problem Being Solved
+Exporting raw syntax counts directly to visualization or audit tools creates inconsistent payload structures. This registry normalizes data into contiguous arrays to ensure predictable ingestion by WebGL buffers and reporting systems.
 
-### 2. `RISK_SCHEMA` (The 18-Point Exposure Vector)
-This schema defines the final, processed risk metrics calculated by the `SignalProcessor`. It transforms the raw 60-point signal array into 18 standardized exposures (e.g., `cognitive_load`, `tech_debt`, `logic_bomb`, `memory_corruption`). Every file in the visible galaxy receives a score from 0.0 to 100.0 for every element in this array.
+## Design
+The module defines three core schemas:
+- `SIGNAL_SCHEMA`: A 60-point vector aggregating raw syntax heuristics (e.g., branching, memory allocation).
+- `RISK_SCHEMA`: An 18-point vector representing normalized risk exposure (e.g., tech debt, secrets risk) on a 0-100 scale.
+- `SAT_SCHEMA`: A 10-element array for individual function metadata (e.g., LOC, complexity).
+It also includes string translation maps and security thresholds.
 
-### 3. `SAT_SCHEMA` (Satellite Data)
-Defines the strict 10-element array used to flatten individual internal functions (Satellites) into the GPU manifest. It enforces the order of metrics like LOC, Control Flow Ratio, and Big-O Depth.
+## Pipeline Integration
+- **Inputs**: Raw syntax counts extracted by the language parser.
+- **Outputs**: Flattened schema arrays (60-point, 18-point, 10-point) and mapped UI strings.
+- **Dependencies**: Consumes data from `language_standards`; outputs are passed to UI renderers and audit loggers.
+```text
+Raw Syntax Counts -> Analysis Lens & Schema Registry -> Normalized Risk and Signal Vectors
+```
 
-## The Translation Dictionaries
+## Tradeoffs
+Using contiguous flat arrays for schemas discards hierarchical metadata present in the original source code. This structural loss was accepted to optimize data serialization speed and minimize memory allocation overhead during bulk array processing.
 
-LLMs and human auditors cannot easily read raw backend keys like `sec_bitwise_hits` or `cog_raw`. The Analysis Lens contains the master translation maps utilized by the `AuditRecorder` and `LLMRecorder`:
+## Limitations
+- Fixed-size schemas mean that adding a new metric requires a global schema update and pipeline restart.
+- Normalization formulas use static thresholds which may not suit all project risk profiles equally.
 
-* **`FRIENDLY_MAP`:** Translates raw heuristic keys into descriptive text (e.g., converting `sec_bitwise_hits` into "Sub-Atomic Decryption (Custom XOR)").
-* **`EXPOSURE_LABELS`:** Formats the 18-point risk vector for the JSON audit (e.g., formatting `secrets_risk` as "Secrets Risk Exposure").
-* **`GPU_TEXTURE_LOOKUPS`:** A fixed string-interning dictionary that maps functional archetypes (like `io`, `mutation`, `event`, `logic`) into strict integers so the GPU knows exactly which 3D material to apply to a satellite node.
+## Performance Notes
+Contiguous numerical arrays align perfectly with WebGL memory buffers, enabling zero-copy or minimal-copy data transfers to the GPU renderer.
 
-## Mathematical Constants & Thresholds
+## Future Work
+- Enable dynamic schema extensions without requiring core engine restarts.
+- Implement machine-learning weights for risk normalization instead of static thresholding.
 
-The file houses the global physics constants used to calculate mass, momentum, and risk degradation:
-
-* **Trust Constants (The Fog of War):** Defines the "Opacity Tax" for dynamically typed or implicit languages (like Shell or SQL). Languages with higher opacity receive an artificial boost to their baseline risk scores to account for runtime unpredictability.
-* **Network Load-Bearing Multipliers:** Determines exactly how heavily PageRank and Betweenness scores are weighted when calculating a file's Systemic Threat Vector.
-* **Security Tripewires:** Houses the exact floating-point thresholds (e.g., > 60.0%) that trigger the `ELEVATED_SURFACE_RISK` and `CRITICAL_THREATS_DETECTED` statuses in the final SHBOM audit.
-
-## Architectural Stability
-
-By centralizing these schemas, GitGalaxy achieves extreme stability. If a developer needs to add a new security metric to the engine, they do not have to update 15 different Python modules. They simply add the key to the `RISK_SCHEMA` array in the Analysis Lens, and the Splicer, Signal Processor, GPU Recorder, and Audit Recorder will automatically inherit, process, and serialize the new metric perfectly.
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- [Language Standards Registry](06-02-language-standards.md)
+- [GitGalaxy Configuration Registry](06-01-gitgalaxy-config.md)

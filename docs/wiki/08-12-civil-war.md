@@ -1,82 +1,65 @@
-# The "Civil War" Algorithm (Tabs vs. Spaces)
+# Layout Uniformity (Indentation Consistency)
 
-> **Metric: Layout Unity (Indentation Polarization)**
+> **File Reference:** [`gitgalaxy/metrics/signal_processor.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/metrics/signal_processor.py)
 >
-> **Summary:** While colloquially referred to as "Civil War," this equation measures Layout Unity. It visualizes the structural formatting consistency of a file by calculating the ratio of space-indented lines to tab-indented lines. 
-> 
-> **Disclaimer:** *While GitGalaxy is built for rigorous architectural and security analysis, this specific metric is included as a lighthearted joke for the engineering team. Please do not take it seriously (even though it does technically calculate accurate formatting consistency)!*
+> **Metric:** Indentation Polarization (Tabs vs. Spaces)
 >
-> **Effect:** This metric **bypasses the Universal Risk Spectrum** because it does not measure escalating danger. Instead, it uses a custom Diverging Spectrum.
-> * 🟩 **TABS (Score 0-19):** Pure Tabs. Glowing Green (`#39ff14`). Emissive intensity is maxed.
-> * 🟦 **MIXED (Score 20-79):** The "War Zone". Maximum conflict sits at exactly 50. Deep Blue (`#0000ff`). Triggers the "Bifurcation Shimmer" (geometry flickering).
-> * 🟨 **SPACES (Score 80-100):** Pure Spaces. Glowing Yellow (`#ffff00`). Emissive intensity is maxed.
+> **Summary:** Measures which indentation "camp" a file falls into by calculating the ratio of space-indented lines to tab-indented lines.
+>
+> **Disclaimer:** *While GitGalaxy is designed for rigorous architectural and security analysis, this specific metric is included as a lighthearted Easter egg for engineering teams. It is reported as descriptive file telemetry (`indentation_style`), not a `RISK_SCHEMA` exposure vector -- see #1147.*
+>
+> **Effect:** A categorical read, not a scored exposure:
+> * 🟩 **Tabs:** 100% Tab Indentation.
+> * 🟦 **Mixed (NN.N% Spaces / NN.N% Tabs):** Both styles present in the same file.
+> * 🟨 **Spaces:** 100% Space Indentation.
+> * ⬜ **Neutral / No Indentation:** File has no indented lines at all.
 
-## The Philosophy: The Linear Polarization Model
+## Engineering Summary
+This subsystem measures the structural formatting consistency of source files by calculating the ratio of spaces to tabs. It solves the problem of identifying files with conflicting editor settings or mixed formatting conventions introduced by multiple contributors. It exists as an independent analytical component to surface formatting noise that causes merge conflicts and developer friction. Though functioning as a novelty metric, its output cleanly integrates into GitGalaxy UI visualizations.
 
-By mapping Tabs to 0 and Spaces to 100, the "War Zone" (a 50/50 mix of indentation styles) naturally falls into the center of the spectrum (Score 50). 
+## Purpose
+To calculate the polarization of indentation types within a file, surfacing mixed layout formatting where conflicting standards are actively in use.
 
-This visually exposes files that lack a unified formatting standard. A file glowing bright green or bright yellow is unified and clean. A file glowing deep blue is structurally fractured, indicating that multiple developers with conflicting IDE configurations are fighting over the layout.
+## Problem Being Solved
+Inconsistent formatting creates unnecessary code churn, Git blame noise, and merge conflicts. When multiple developers commit to the same file using different editor settings, the resulting mixed indentation decreases readability and disrupts standardized auto-formatting pipelines.
 
-## The Inputs (Indentation Context)
+## Design
+The scanner counts leading indentation tokens per line, summing lines that begin with `\t` versus spaces, then maps the ratio to a plain-English label instead of a scored value -- deliberately, so it can't be read as a quality bar to clear.
 
-The scanner counts the absolute number of lines that lead with either tabs or spaces.
+**Formulation**
+1. **Count Indented Lines:**
+$$\text{TotalIndentedLines} = \text{TabLines} + \text{SpaceLines}$$
+2. **Calculate Space Ratio:**
+$$\text{SpaceRatio} = \frac{\text{SpaceLines}}{\text{TotalIndentedLines}} \times 100$$
+3. **Map to Label:**
+   - `TotalIndentedLines == 0` → `"Neutral / No Indentation"`
+   - `SpaceRatio == 0` → `"Tabs"`
+   - `SpaceRatio == 100` → `"Spaces"`
+   - otherwise → `"Mixed (NN.N% Spaces / NN.N% Tabs)"`
 
-| Variable | Source | Structural Definition |
-| :--- | :--- | :--- |
-| `indent_tabs` | Scanner | Count of lines starting with one or more Tabs. |
-| `indent_spaces` | Scanner | Count of lines starting with one or more Spaces. |
+## Pipeline Integration
+```mermaid
+flowchart LR
+    A[Static Line Parser] -->|Tab/Space Counts| B[Ratio Calculator]
+    B -->|Normalization| C[Diverging Layout Score]
+```
+- **Inputs received:** Token counts for `indent_tabs` and `indent_spaces`.
+- **Outputs produced:** A descriptive `indentation_style` label in file telemetry.
+- **Dependencies:** Relies directly on the raw static line parser. Does NOT feed into risk aggregation vectors.
 
-## The Equation: The Polarization Ratio
+## Tradeoffs
+- Reported as a categorical label (`telemetry["indentation_style"]`) rather than a 0-100 score. An earlier version scored it into `RISK_SCHEMA` as a diverging 0-100 value ("Civil War Exposure"), which every downstream consumer ended up special-casing as not-a-real-risk anyway -- the label now says directly what the score used to require translating (#1147).
+- Empty files or files with no indentation report `"Neutral / No Indentation"` rather than defaulting into either camp.
 
-**Step A: Gather Indentation Context**
-We calculate the total number of lines that contain measurable indentation context. If a file has no indentation at all, it defaults to the neutral center (50.0).
+## Limitations
+- Only inspects leading indentation on a per-line basis; it cannot detect mixed spaces and tabs occurring mid-line (e.g., alignment spacing after a tab indent).
+- Completely ignores the semantic structure of the language (e.g., Python relying critically on spacing vs C++ using curly braces).
 
-$$TotalLines = TabLines + SpaceLines$$
+## Performance Notes
+Runs continuously during the initial static line parsing phase, adding negligible $O(L)$ operational cost where $L$ is the number of lines. Arithmetic calculation is $O(1)$.
 
-**Step B: Calculate Space-Ratio**
-We calculate the percentage of indented lines that are controlled by spaces. A result of 0.0 means 100% Tabs. A result of 1.0 means 100% Spaces.
+## Future Work
+Currently serves strictly as an Easter egg metric isolated from architectural risk. Future considerations may involve extending the logic to detect inconsistent line endings (CRLF vs LF) to further reduce cross-platform structural noise.
 
-$$Ratio = \frac{SpaceLines}{\max(TotalLines, 1)}$$
-
-**Step C: Final Score Mapping**
-We map the ratio to a standard 0-100 visual scale.
-
-$$FinalScore = Ratio \times 100.0$$
-
-## Implementation (Python Reference)
-
-```python
-from typing import Dict
-
-def _calc_civil_war(self, eq: Dict[str, int]) -> float:
-    """
-    Calculates Layout Unity (Tabs vs Spaces). 
-    0 = Pure Tabs (Green), 100 = Pure Spaces (Yellow), 50 = War Zone (Blue).
-    NOTE: This is an Easter Egg metric and not used for actual Risk calculations.
-    """
-    tab_lines = eq.get('indent_tabs', 0)
-    space_lines = eq.get('indent_spaces', 0)
-    
-    l_total = tab_lines + space_lines
-    
-    # Handle Void States (No indentation at all)
-    if l_total == 0:
-        return 50.0 # Default to Neutral Blue
-        
-    # Calculate Space-Ratio
-    space_ratio = space_lines / l_total
-    
-    # Final Score Mapping (0-100)
-    return space_ratio * 100.0
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- Static Line Parser

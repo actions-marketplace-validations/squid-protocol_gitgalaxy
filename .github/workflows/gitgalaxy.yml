@@ -1,0 +1,182 @@
+name: GitGalaxy Zero-Trust Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: ["docs/**"]
+  # The post-gate (SARIF / SBOM / LLM brief) used to run on every push to main.
+  # With the docs-auto-update bots merging ~40x/day (see the LLM-brief loop
+  # below), that meant ~40 full-precision galaxyscope runs/day here AND ~40
+  # runs/day on the mirrored azure-pipelines.yml / bitbucket-pipelines.yml,
+  # which instantly exhausts their free hosted-CI minute grants. The brief is
+  # an orientation doc and the SARIF feed is a dashboard -- neither needs to be
+  # fresher than daily. So the post-gate now runs on a schedule instead.
+  schedule:
+    - cron: "17 5 * * *" # daily, 05:17 UTC
+  # Manual re-fire for the post-gate without waiting for the schedule -- also
+  # the recovery lever from 2026-08-06, when push-to-main events silently
+  # stopped creating runs for ~4.5h (suspected Actions run-creation throttling
+  # from this repo's push volume, the same volume this schedule change cuts).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ============================================================
+  # PRE-GATE — runs on every PR, blocks the merge on failure.
+  # Fast; no heavy ML/graph dependencies installed.
+  # ============================================================
+  vault-sentinel:
+    if: github.event_name == 'pull_request'
+    name: Vault Sentinel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./
+        with:
+          tool: vault-sentinel
+          target: .
+          version: local
+
+  xray-inspector:
+    if: github.event_name == 'pull_request'
+    name: X-Ray Inspector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./
+        with:
+          tool: xray-inspector
+          target: .
+          version: local
+
+  supply-chain-firewall:
+    if: github.event_name == 'pull_request'
+    name: Supply Chain Firewall
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./
+        with:
+          tool: supply-chain-firewall
+          target: .
+          version: local
+
+  # ============================================================
+  # POST-GATE — one galaxyscope pass produces all 6 outputs; we route 3 of
+  # them (SARIF -> Security tab, SBOM + self-scan DB -> artifacts, LLM brief
+  # -> committed doc) and let the rest live only in the ephemeral runner.
+  # --fail-on-malware stays on here too, as a safety net in case branch
+  # protection is ever bypassed.
+  #
+  # Runs on a daily schedule (or manual dispatch), NOT per-push: the LLM brief
+  # embeds a Timestamp/Scan Duration/Git Commit (llm_recorder.py) so it always
+  # produces a diff, its PR auto-merges, and that merge is itself a push --
+  # a per-push trigger made this a treadmill (~21 brief commits/day; a
+  # confirmed 13-commits-in-13-minutes runaway on 2026-07-25) that also
+  # exhausted the mirrored Azure/Bitbucket free CI minutes. A daily brief is
+  # plenty for an orientation doc, and a daily SARIF refresh is plenty for a
+  # dashboard. The real per-PR malware gate is the PRE-GATE jobs above.
+  # ============================================================
+  full-report:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Full Report (SARIF, SBOM, LLM Brief)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write   # NEW — required for create-pull-request to open the PR
+      security-events: write
+    steps:
+      - name: Checkout Repository          # unchanged
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Python                 # unchanged
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install GitGalaxy & Full Precision Engines
+        run: |
+          python -m pip install --upgrade pip
+          pip install "gitgalaxy[yaml]" networkx tiktoken xgboost pandas numpy
+
+      - name: Run GalaxyScope (single pass — all 6 outputs)   # unchanged
+        env:
+          GITGALAXY_LICENSE_KEY: "COMMUNITY_FREE_TIER"
+        run: |
+          galaxyscope . --config .galaxyscope.yaml --fail-on-malware --output gitgalaxy-results.json
+
+      - name: Upload SARIF to GitHub Security Tab   # unchanged
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        with:
+          sarif_file: gitgalaxy-results_sarif.json
+
+      - name: Upload SBOM as Build Artifact   # unchanged
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitgalaxy-sbom
+          path: gitgalaxy-results_sbom.json
+
+      # The self-scan DB (tests/tools/self_scan.py) is gitignored on purpose --
+      # it's a cheap-to-regenerate (~6-8s), disposable structural index, same
+      # spirit as .crucible_venvs/ -- so unlike the LLM brief below, it's never
+      # committed to git history. Publishing it as a build artifact instead
+      # gives anyone (a fresh worktree, a coding-agent session without a local
+      # `pip install -e .`) a guaranteed-fresh copy without a repo-history cost.
+      - name: Regenerate Self-Scan DB
+        run: python tests/tools/self_scan.py
+
+      - name: Upload Self-Scan DB as Build Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitgalaxy-self-scan-db
+          path: docs/self_scan/gitgalaxy_master.db
+
+      # --- everything below here REPLACES the old "Commit LLM Brief to Docs" step ---
+      - name: Prepare LLM Brief
+        run: |
+          mkdir -p docs
+          mv *_galaxy_llm.md docs/gitgalaxy_architecture_brief.md
+
+      - name: Open PR with Updated LLM Brief
+        id: llm-brief-pr
+        uses: squid-protocol/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # forked from peter-evans/create-pull-request v8.1.1
+        with:
+          token: ${{ secrets.AUTOMATION_PAT }}
+          commit-message: "docs: auto-update LLM architectural brief"
+          title: "docs: auto-update LLM architectural brief"
+          body: "Automated update from the latest GalaxyScope scan on `main`."
+          branch: auto/llm-architecture-brief
+          delete-branch: true
+          add-paths: docs/gitgalaxy_architecture_brief.md
+
+      # Nothing gates this PR today (branch protection requires 0
+      # reviews/checks), so without this it just sits mergeable-but-unmerged
+      # until a human notices. `gh pr merge --auto` alone is unreliable here:
+      # GitHub's enablePullRequestAutoMerge mutation *rejects* PRs that are
+      # already in "clean" (immediately mergeable) status with "Pull request
+      # is in clean status" -- and given 0 required checks, a fresh PR here
+      # reaches clean almost instantly, so whether --auto lands before or
+      # after that happens is a race (confirmed: PR #409 hit the rejection).
+      # Try a direct merge first (the expected path today); only fall back
+      # to --auto if that's rejected because something is still genuinely
+      # pending -- which is exactly the case --auto is for.
+      - name: Merge the LLM Brief PR
+        if: steps.llm-brief-pr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_PAT }}
+        run: |
+          PR="${{ steps.llm-brief-pr.outputs.pull-request-number }}"
+          gh pr merge --squash "$PR" --repo ${{ github.repository }} || \
+            gh pr merge --squash --auto "$PR" --repo ${{ github.repository }}

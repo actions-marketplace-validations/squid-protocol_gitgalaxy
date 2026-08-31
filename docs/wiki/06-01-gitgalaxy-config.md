@@ -1,48 +1,45 @@
-# GitGalaxy Config (The Master Registry)
+# GitGalaxy Configuration Registry
 
-> **The Central Nervous System**
->
-> The `gitgalaxy_config.py` file serves as the master configuration registry for the entire GitGalaxy engine. Rather than hardcoding thresholds, timeouts, and project-specific quirks deep inside the analytical lenses, all global constants and dynamic overrides are centrally managed here. 
->
-> This design allows architects to instantly tune the engine's performance—from adjusting the AI threat tolerance to extending the Chronometer's historical lookback—without modifying the core physics engines.
+> **File Reference:** [`gitgalaxy/standards/gitgalaxy_config.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/standards/gitgalaxy_config.py)
 
-## The Chronometer Configuration (`CHRONOMETER_CONFIG`)
+## Engineering Summary
+A centralized configuration module manages global constants and dynamic overrides for static analysis. It solves the problem of hardcoded configuration drift by decoupling analysis thresholds, stream timeouts, and project-specific parsing rules from the core execution logic. This subsystem provides a single source of truth for tuning execution parameters without mutating the underlying analysis pipeline, operating as the `gitgalaxy_config` within GitGalaxy.
 
-To maintain hyper-scale velocity when reading Git histories, the config defines strict temporal boundaries and kill-switches:
+## Purpose
+To provide a centralized configuration interface for static analysis parameters, ensuring consistent execution across diverse repository structures.
 
-* **`DYNAMIC_WINDOW_MIN_DAYS` (30):** The absolute minimum lookback period. Ensures brand-new repositories still generate a sufficient volatility baseline.
-* **`DYNAMIC_WINDOW_MAX_DAYS` (365):** The "Museum Demo Protocol" cap. Prevents the engine from grinding through decades of ancient bedrock on massive legacy projects.
-* **`DORMANT_FALLBACK_COMMITS` (500):** If the dynamic time window yields zero events, the engine falls back to fetching this flat volume of commits.
-* **`STREAM_TIMEOUT_SECONDS` (15.0 - 60.0):** The hardware guillotine limit for the `Popen` Git log stream, preventing OS-level zombie processes if Git hangs.
-* **`FALLBACK_SCAN_LIMIT` (25000):** The maximum number of files to evaluate when falling back to OS-level `mtime` scans in non-Git environments, protecting disk I/O.
+## Problem Being Solved
+Hardcoding parameters like lookback windows or timeout limits directly within parsing functions creates brittle architectures that fail on non-standard repositories. This registry prevents configuration fragmentation and allows environment-specific tuning.
 
-## Project Overrides (Dialect Injection)
+## Design
+The configuration is structured into distinct registries:
+- `CHRONOMETER_CONFIG`: Sets temporal boundaries for Git history parsing (e.g., 30-day minimum, 365-day maximum lookback).
+- `PROJECT_OVERRIDES`: Patches `LANGUAGE_DEFINITIONS` in memory for domain-specific codebases (e.g., OS kernels).
+- `PROJECT_STORIES`: Maps repository identifiers to architectural metadata.
+- `APERTURE_CONFIG`: Defines file and directory exclusion patterns (e.g., `node_modules`).
 
-Because programming languages are not monolithic, the `PROJECT_OVERRIDES` registry acts as a hot-patching system for specific repositories. 
+## Pipeline Integration
+- **Inputs**: Environment variables or runtime flags defining the target repository.
+- **Outputs**: In-memory configuration dictionaries used by the analysis engine.
+- **Dependencies**: Relies on Python dictionary structures; consumed by the Git parser, AST heuristics, and metadata exporters.
+```text
+Runtime Environment -> GitGalaxy Configuration Registry -> Parsing and Analysis Pipeline
+```
 
-If the user targets a known legacy or idiosyncratic repository (e.g., the FreeBSD kernel, `cpython`, or an `ansible` playbook repo), the Orchestrator intercepts the `PROJECT_OVERRIDES` dictionary before the scan begins. It dynamically patches the standard `LANGUAGE_DEFINITIONS` in RAM, allowing the regex sensors to perfectly parse the specific structural dialect of that project without polluting the global language standards.
+## Tradeoffs
+Centralized configuration requires loading all potential overrides into memory at startup, increasing initial memory footprint marginally. This was chosen over file-based config parsing (like YAML) to avoid I/O bottlenecks during high-throughput analysis passes.
 
-## Dynamic Lore & Story Injection (`PROJECT_STORIES`)
+## Limitations
+- Changes to configuration require restarting the analysis engine.
+- `PROJECT_OVERRIDES` rely on predefined keys and cannot infer structural exceptions dynamically.
 
-GitGalaxy is not just a security tool; it is an architectural visualizer. The `PROJECT_STORIES` registry maps specific repository names to human-readable narratives. 
+## Performance Notes
+Startup initialization is $O(1)$ memory lookup since configurations are evaluated as static Python dictionaries, avoiding runtime disk reads.
 
-When the `GPURecorder` serializes the final 3D map, it pulls from this config to inject:
-* **Status & Why:** The high-level objective and health status of the repository.
-* **Significance:** Why this specific codebase matters to the broader enterprise.
-* **Highlighted Artifacts:** Specific files or clusters that the user should be drawn to in the visualizer (e.g., the core event loop, a specific vulnerability cluster).
+## Future Work
+- Implement hot-reloading for configurations during long-running streaming analysis.
+- Migrate static dictionary overrides to a validated data-class schema.
 
-## Aperture Black Holes (`APERTURE_CONFIG`)
-
-While the `.gitignore` specifies what shouldn't be tracked by version control, the `APERTURE_CONFIG` defines what should be completely invisible to the physics engines. It contains the `BLACK_HOLES` set—a global list of directories (`node_modules`, `.venv`, `dist`, `__pycache__`) that are violently bypassed during both the initial filesystem survey and the Chronometer's OS-level fallbacks.
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- [Language Standards Registry](06-02-language-standards.md)
+- [Analysis Lens & Schema Registry](06-03-analysis-lens.md)

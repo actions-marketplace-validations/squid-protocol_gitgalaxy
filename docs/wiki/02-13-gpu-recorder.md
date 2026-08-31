@@ -1,53 +1,52 @@
-# The GPU Recorder (Hypercompressed Data Storage)
+# GPU Recorder
 
-> **The Starmap**
->
-> The GPU Recorder (`gpu_recorder.py`) is the instrument's high-performance recording head. It prepares project telemetry for real-time 3D WebGL/WebGPU rendering by transforming verbose, row-based JSON into a hypercompressed, columnar format. Unlike the Audit Recorder, it prioritizes memory efficiency, bandwidth reduction, and raw computational speed over human readability.
+> **File Reference:** [`gitgalaxy/recorders/gpu_recorder.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/recorders/gpu_recorder.py)
 
-## Destructive RAM Eviction
+## Engineering Summary
+This subsystem is the high-performance data transformation module of the pipeline. It converts verbose, object-oriented JSON telemetry into a hypercompressed columnar format (Structure of Arrays / SoA) designed specifically for WebGL/WebGPU 3D rendering engines. It solves the problem of high latency and memory overhead when loading large codebase models into the browser. It exists to prioritize memory efficiency, low payload transfer size, and fast buffer loading over human readability. Within the system, this module is known as the GitGalaxy GPU Recorder.
 
-To handle massive repositories without exhausting system memory, the engine employs an aggressive eviction strategy during the final serialization phase.
+## Purpose
+The primary purpose is to generate a highly compressed, serialized payload suitable for direct ingestion by WebGL and WebGPU vertex buffers.
 
-* **Iterative Destruction:** As each file (Star) or anomaly (Singularity) is converted into its columnar components, it is physically removed from the RAM-resident list using `.pop()`. This ensures the list is physically emptied as the new structure is built.
-* **Explicit Garbage Collection:** The original object references are explicitly deleted (e.g., `del s`, `del d`), followed by a manual Python garbage collection cycle (`gc.collect()`) to completely clear the heap before the massive file-write operation.
+## Problem Being Solved
+Object-oriented JSON structures consume excessive memory and network bandwidth, causing WebGL visualizers to crash or stall when rendering thousands of nodes. This component flattens the data and uses techniques like string interning and fixed-point quantization to minimize memory footprint and transfer times.
 
-## The Columnar Pivot & Dependency Graphing
+## Design
+### Current Behavior
+- **Memory Management:** Iteratively evicts arrays from RAM-resident dictionaries using `.pop()` and explicit garbage collection (`gc.collect()`) during serialization.
+- **Columnar Layout:** Generates parallel arrays for spatial positions, file masses, and structural metrics.
+- **Dependency Resolution:** Pre-resolves string import declarations into numerical array index pointers for fast GPU vertex buffer rendering.
+- **String Dictionary Encoding:** Replaces repeated string values with integer dictionary keys (`ext_lookup`, `import_lookup`, etc.).
+- **Fixed-Point Quantization:** Multiplies floating-point values by fixed scaling factors and stores them as integers.
 
-The recorder converts the object-oriented manifest into a "Structure of Arrays" (SoA). It introduces advanced dependency graphing and Machine Learning clustering directly into this pivot:
+### Planned Improvements
+- Optimize fixed-point scaling dynamically per attribute range.
 
-* **Primary Arrays:** Parallel columns for spatial coordinates (`pos_x`, `pos_y`, `pos_z`), masses, and DNA signals (`cog_raw`, `raw_churn_freq`, `ownership_entropy`).
-* **The WebGL Edge Engine:** The recorder builds a pre-computed Dependency Resolution Map *before* destruction. It maps every raw import to its target file's exact array index, generating `edges` (inbound connections) and `outbound_edges`. This allows the UI to render thousands of 3D relational lines instantly without performing expensive string-matching in the browser.
-* **Satellite Minification:** Flattens the internal function (satellite) data into a single 1D array (`satellite_data_flat`), tracking block sizes using `satellite_offsets`. It reverses the chunks to maintain a highest-first order.
-* **ML Archetypes & AI Threats:** Extracts dynamic Machine Learning fingerprint data (`a_ids`, `a_dists`) and injects the XGBoost AI Threat Confidence scores directly into a dedicated `ai_threats` column.
+## Pipeline Integration
+- **Inputs Received:** Verbose, nested dictionary hierarchies of JSON telemetry, metrics, and dependencies.
+- **Outputs Produced:** A hypercompressed, columnar format serialized payload suitable for WebGL/WebGPU rendering.
+- **Dependencies:** Relies on the core telemetry and dependency resolution output.
 
-## String Interning & Numerical Quantization
+```mermaid
+graph LR
+    A[Nested JSON Telemetry] --> B[GPU Recorder]
+    B --> C[Compressed Columnar Payload]
+```
 
-To achieve maximum compression, the recorder eliminates repetitive text and floating-point bloat.
+## Tradeoffs
+- **Compression vs. Readability:** Flattens JSON data and serializes without formatting whitespace, making the output unreadable to humans but highly optimized for WebGL consumption.
+- **Precision vs. Format Compatibility:** Employs fixed-point quantization for floating-point values, sacrificing some mathematical precision to match graphics pipeline vertex buffer formats.
 
-### String Interning Registries
-Repeated strings are stored once in a master header registry and replaced in the columns with lightweight integer IDs. Registries include standard metadata (Languages, Authors, Proofs) as well as vectorized lookups for `ext_lookup`, `import_lookup`, `const_lookup` (Constellations), and `archetype_lookup` (ML Archetypes).
+## Limitations
+- **Format Rigidity:** The output format strictly adheres to the Structure of Arrays (SoA) layout, making it difficult to append new ad-hoc metadata fields without modifying the rendering engine.
+- **Memory Spikes:** Despite iterative eviction, large codebases can still cause temporary memory spikes during the final serialization step.
 
-### Physics and Exposure Scaling
-Floating-point values are precision-scaled and converted to integers to match the input expectations of vertex shaders:
-* **Physics Scaling (x10):** Applied to Spatial Coordinates, Structural Mass, and Satellite Angles (e.g., `150.45` becomes `1505`).
-* **Exposure Scaling (x1000):** Applied to AI Threat Scores, Control Flow Ratios, Ownership Entropy, and Author Distribution (e.g., a float `0.854` becomes `854`).
+## Performance Notes
+- Achieves high memory efficiency and low-latency buffer loading through iterative array eviction, explicit garbage collection, and minimal-byte payload serialization. Lookups and quantization execute in $O(N)$ time relative to telemetry node count.
 
-## Dynamic Lore & Final Sealing
+## Future Work
+- Explore direct binary serialization formats (like FlatBuffers or Cap'n Proto) for even faster ingestion.
 
-Before final serialization, the recorder shapes the payload for the frontend UI:
-
-* **Flattened Singularity:** The heavily nested Dark Matter composition statistics are flattened into a UI-friendly breakdown, explicitly separating formats and mapping their specific diagnostic reasons.
-* **Dynamic Lore Injection:** Fetches the `PROJECT_STORIES` registry to inject the specific narrative, historical significance, and highlighted artifacts into the root of the GPU manifest, bridging the gap between raw data and human storytelling.
-* **Final Sealing:** The JSON is serialized with `indent=None` and `separators=(',', ':')` to strip all whitespace, yielding the absolute lowest latency payload possible for the 3D visualizer.
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- Record Keeper
+- Audit Recorder

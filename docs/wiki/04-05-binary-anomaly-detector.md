@@ -1,51 +1,62 @@
-# Binary Anomaly Detector (The X-Ray Inspector)
+# Binary Anomaly Detector (Heuristic File Integrity Scanner)
 
-> **Seeing Through the Disguise**
->
-> Advanced adversaries rarely drop plain-text malware into a repository. They use steganography, packing techniques, and high-entropy encryption to hide their payloads inside seemingly harmless files (like `.png` images, `.zip` archives, or compiled binaries). 
->
-> The Binary Anomaly Detector (`binary_anomaly_detector.py`), known internally as the X-Ray Inspector, is designed for the fast triage of these concealed threats. It scans the raw bytes and mathematical entropy of files to detect malicious execution headers and obfuscated payloads.
+> **File Reference:** [gitgalaxy/tools/supply_chain_security/binary_anomaly_detector.py](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/supply_chain_security/binary_anomaly_detector.py)
 
-## The Funnel & The Binary Exception
+## Engineering Summary
+Standard source code parsers drop binary assets to conserve memory and avoid parsing errors. However, attackers exploit this blind spot by embedding malware, packed executables, or steganographic payloads inside seemingly benign files like images or archives. To combat this, a heuristic file integrity scanner explicitly targets binary files, inspecting byte-level headers and calculating mathematical entropy to flag hidden threats. This subsystem is the GitGalaxy Binary Anomaly Detector.
 
-Most GitGalaxy tools (like the Optical Lenses) rely on the `ApertureFilter` to explicitly drop binary files from the scan queue to save memory. The X-Ray Inspector fundamentally reverses this logic.
+## Purpose
+To perform high-speed triage of binary anomalies, magic byte mismatches, and obfuscated payloads within the build pipeline.
 
-* **The Binary Exception:** During the initial Pass 1 Funnel, the X-Ray Inspector intentionally *bypasses* the standard path integrity checks. It actively wants to scan the binaries (`.png`, `.zip`) to verify that their internal structures actually match their file extensions.
-* **The Test Data Shield:** Because unit tests often generate highly randomized or encrypted mock data, the Inspector automatically whitelists any paths containing `/test/`, `/tests/`, or `phpunit` to prevent false positives.
-* **X-Ray Bypasses:** It utilizes dedicated `XRAY_BYPASS_EXTENSIONS` and `XRAY_BYPASS_PATHS` from the global config, allowing architects to explicitly whitelist known, safe dense data formats (like `.gz` or `.json` fixtures).
+## Problem Being Solved
+Binary files (`.png`, `.zip`, `.dll`) are typically ignored by SAST tools. Attackers use this to bypass security checks by disguising executable payloads with benign file extensions. Discovering these threats requires byte-level inspection without loading massive gigabyte assets into memory.
 
-## The Deep Scan (8KB Heuristics)
+## Design
+### Selective Binary Ingestion Logic
+The module explicitly overrides the standard `ApertureFilter` binary exclusion rules. It enqueues binary files while automatically whitelisting test fixtures (`/test/`, `/tests/`) and compressed configuration formats (`XRAY_BYPASS_EXTENSIONS`) to prevent false positives.
 
-To maintain hyper-scale velocity, the Inspector does not read massive binaries into memory. It reads only the first 8KB of every file as raw bytes, looking for structural anomalies:
+### 8KB Header Inspection
+To maintain throughput and avoid out-of-memory risks, the detector reads only the first $8\text{ KB}$ (8,192 bytes) of a file.
 
-### 1. Magic Byte Mismatches
-The Inspector checks the file's Magic Bytes (the invisible signature at the very beginning of a file) against its claimed extension. If a file claims to be a `.jpg` but has the Magic Bytes of a compiled `.elf` Linux executable, the Inspector immediately flags it as a hidden threat.
+### Mathematical Entropy & Header Checks
+The 8KB chunk undergoes several evaluations:
+1. **Magic Byte Mismatch:** Compares the file's magic bytes against its declared file extension (e.g., flagging an executable disguised as a `.png`).
+2. **Expected Shebang Exemption:** Suppresses anomaly alerts for shell scripts (`.sh`, `.bash`) that legitimately contain executable header signatures.
+3. **Shannon Entropy Validation:** Calculates string entropy. If $\text{Entropy} > 4.8$, it flags the file as potentially containing packed executables or encrypted payloads.
+4. **Bitwise Operation Traps:** Inspects byte buffers for dense clusters of XOR operations, indicating potential unpacking routines.
 
-### 2. Shannon Entropy Math (Packed Payloads)
-The Inspector decodes the raw bytes into UTF-8 and evaluates the mathematical randomness of the strings. If the file contains mathematically dense or encrypted strings resulting in a Shannon Entropy score greater than 4.8, it flags the file as a potential packed payload or encrypted malware.
+## Pipeline Integration
+Inputs received include raw binary file paths and configuration settings. Outputs produced are anomaly alerts and execution blocks (exit code `1`). It runs alongside or immediately after standard source code static analysis.
 
-### 3. Sub-Atomic Decryption Loops
-The Inspector hunts for specific Bitwise operations (`bitwise_hits`). High concentrations of custom XOR math are a primary indicator of a sub-atomic decryption routine, often used by malware to unpack itself dynamically in memory.
+```mermaid
+graph LR
+    A[Binary File Path] --> B[Read First 8KB]
+    B --> C[Magic Byte Check]
+    B --> D[Shannon Entropy Calc]
+    B --> E[Bitwise XOR Search]
+    C --> F{Threshold Met?}
+    D --> F
+    E --> F
+    F -- Yes --> G[Block & Alert]
+    F -- No --> H[Allow]
+```
 
-## Speed Optimization & The Header Shield
+## Tradeoffs
+* **8KB Truncation vs. Exhaustive Scanning:** By only reading the first 8KB of a file, the system achieves massive speed gains and zero out-of-memory crashes on large video or archive files. However, it sacrifices the ability to detect payloads appended to the very end of massive legitimate files.
+* **Heuristics vs. Signatures:** Relying on Shannon entropy (> 4.8) catches novel zero-day packed malware, but will generate false positives on heavily compressed benign files (like certain encrypted test fixtures or compressed data models).
 
-* **Neutered Lens:** To maximize speed, the Orchestrator instantiates a `SecurityLens` but heavily neuters it. It strips out all complex regex and AST parsing, restricting the engine to look *only* at `heat_triggers` and `bitwise_hits`.
-* **The Expected Header Shield:** Linux and macOS scripts (`.sh`, `.bash`, `.command`) legally contain execution strings like `#!/bin/bash`. If the binary scanner flags a threat but detects this exact pattern in a shell extension, it safely clears the threat to prevent false positives.
+## Limitations
+* Steganographic payloads embedded deep within large files (past the 8KB header) will not be detected.
+* Heuristic thresholds for entropy require careful tuning via allowlists to avoid blocking legitimate binary data.
 
-## CI/CD Triage Alert
+## Performance Notes
+Memory usage is capped at $O(1)$ per file (exactly 8,192 bytes allocated). Execution time is bound by raw disk read speed rather than CPU computation.
 
-When the scan is complete, the X-Ray Inspector prints a Mission Report detailing the scan velocity and the exact files containing structural anomalies. 
+## Future Work
+* **Current Behavior:** Inspects 8KB headers and blocks based on magic byte and entropy math.
+* **Planned Improvements:** Implementing a dual-chunk read (first 8KB and last 8KB) to detect payloads appended to the EOF tail without loading the middle contents.
 
-If any encrypted payloads, Magic Byte mismatches, or parasitic execution headers are detected, it issues a `TRIAGE ALERT`, exiting with a status code of `1` to violently block the malicious commit or Pull Request.
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+## Related Components
+* [GitGalaxy Platform](https://gitgalaxy.io/)
+* [⬅️ Back to Master Index](index.md)
 

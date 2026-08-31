@@ -1,62 +1,45 @@
-# Language Standards (The Linguistic Registry)
+# Language Standards Registry
 
-> **The Universal Translator**
->
-> The `language_standards.py` file is the master linguistic registry of GitGalaxy. It does not execute any logic itself; rather, it provides the precise mathematical constants, structural blueprints, and regular expression schemas that the optical lenses use to parse the universe.
->
-> **Extensibility:** If GitGalaxy encounters an unknown syntax, this is the exact file where developers can add support for entirely new programming languages, proprietary legacy scripts, or custom domain-specific languages (DSLs).
+> **File Reference:** [`gitgalaxy/standards/language_standards.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/standards/language_standards.py)
 
-## The 51-Element Universal Schema
+## Engineering Summary
+A central dictionary maps programming languages to syntax schemas and extraction rules. It solves the challenge of cross-language static analysis by providing a unified definition layer for regular expressions, block delimiters, and comment structures. This decoupling allows engineers to add new language support without modifying the core parsing logic, known as `language_standards` in GitGalaxy.
 
-To ensure that downstream engines (like the XGBoost ML model and the 3D WebGL UI) never crash due to misaligned data, the standards enforce a strict `UNIVERSAL_METRICS_SCHEMA`. 
+## Purpose
+To define uniform extraction rules and map disparate language syntax constructs onto a standard numerical metrics array.
 
-Every language, regardless of how it is structured, must map its **syntax heuristics** into this exact 51-element array. This guarantees that a loop in C++, a list comprehension in Python, and a recursive function in Lisp can all be compared mathematically on the exact same risk scale. If a new language definition attempts to inject an unregistered rule, the engine will actively ignore it.
+## Problem Being Solved
+Evaluating multi-language repositories usually requires writing bespoke parsers for each language. This registry abstracts language-specific syntax into structured regex heuristics, avoiding the overhead of maintaining distinct AST parsers.
 
-## The Language Definitions Registry
+## Design
+The registry categorizes definitions into:
+- Ecosystem Metadata: File extensions, false-positive filters, and matching weights.
+- Function Extraction Modes: Strategies like block-scoped (C++, Java), indentation (Python), or terminator cleaving (SQL).
+- Comment Handling: Standardized handlers to strip comments without corrupting strings.
+- Syntax Patterns: Maps structural and security heuristics to a 51-element `UNIVERSAL_METRICS_SCHEMA`.
 
-The core of the file is the `LANGUAGE_DEFINITIONS` dictionary. Every supported language possesses a strict blueprint defining its physical properties. 
+## Pipeline Integration
+- **Inputs**: Source code files during the discovery phase.
+- **Outputs**: Syntax heuristics mapped to a 51-element numerical array.
+- **Dependencies**: Relies on standard regex libraries; outputs are consumed by the SignalProcessor and recording engines.
+```text
+Source Code -> Language Standards Registry -> 51-Element Universal Metrics Array
+```
 
-If you are **adding a new language** to GitGalaxy, you simply add a new block to this registry. A complete language block requires four core components:
+## Tradeoffs
+Regex-based heuristics are less accurate than full Abstract Syntax Tree (AST) parsing, occasionally resulting in false positives for complex nested structures. This sacrifice in absolute precision was chosen to achieve high-speed, language-agnostic parsing that scales linearly with repository size.
 
-### 1. Identity & Ecosystem (The Metadata)
-* **`extensions`:** The list of file extensions associated with the language (e.g., `['.js', '.jsx']`). Used by the Language Lens to establish initial Ecosystem Gravity.
-* **`disqualifiers`:** A blacklist of regex strings. If the engine finds `<?php` inside a file claiming to be Python, the definition actively rejects the file to prevent hallucinations.
-* **`handicap`:** A multiplier (typically `1.0`). Legacy languages with incredibly broad keywords (like ABAP or Fortran) receive a severe handicap (e.g., `0.4`) so their greedy regex rules don't artificially swallow other languages during Discovery Mode.
+## Limitations
+- Cannot accurately parse deeply nested or obfuscated syntax that breaks regex boundaries.
+- Lacks semantic understanding of variable scopes or type definitions.
 
-### 2. The Optical Mode (The Splicer Routing)
-Tells the Detector which extraction algorithm to use when slicing the file into functions:
-* **Mode A (Label-Based):** For procedural legacy languages (Assembly, COBOL).
-* **Mode B (Recursive Scope):** For languages using braces `{}` or parentheses `()` (C++, Java, Lisp).
-* **Mode C (Density Stratification):** For whitespace-sensitive languages (Python, YAML).
-* **Mode D (Semantic Handshake):** For keyword-bounded scripts (Ruby, Elixir, Bash).
-* **Mode E (Terminator Cleaving):** For declarative architectures (SQL, Erlang).
+## Performance Notes
+By pre-compiling regular expressions on startup and using $O(1)$ dictionary lookups for extensions, file classification operates in microsecond timeframes per file.
 
-### 3. The Prism Family (Comment Routing)
-Tells the Prism exactly how to strip the literature out of the file without destroying string literals. You map the language to one of the 9 pre-compiled **language families** (e.g., `std_c` for `//`, `pure_hash` for `#`, or `hybrid_dash` for `--`).
+## Future Work
+- Introduce WebAssembly-based pre-compiled state machines to replace complex regex structures.
+- Support dynamic addition of custom DSLs via JSON configurations instead of Python code.
 
-### 4. The Structural Geometry (Regex Triggers)
-The bulk of the definition. This maps the language's specific syntax to the Universal Schema.
-* **Example:** To satisfy the `branch` metric, the Python definition might supply the regex `r'\b(if|elif|else)\b'`, while the SQL definition supplies `r'\b(WHEN|ELSE|IF)\b'`.
-* **Security Triggers:** This is also where language-specific danger zones are defined, such as mapping `eval()` or `child_process.exec` to the `sec_danger` key for the AI AppSec Sensor to catch.
-
-## Extending the Galaxy (Adding New Languages)
-
-Because GitGalaxy dynamically compiles its parsing engines at runtime based on this exact file, adding a new language requires **zero changes to the core parsing logic**. 
-
-To add a proprietary or novel language:
-1. Open `language_standards.py`.
-2. Create a new dictionary key (e.g., `my_custom_dsl`).
-3. Define its extensions, routing modes, and regex triggers.
-4. The next time the Orchestrator boots, the `LanguageDetector` and `LogicSplicer` will automatically ingest the new blueprint, instantly allowing the 3D Cartographer to map your custom code.
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- [Analysis Lens & Schema Registry](06-03-analysis-lens.md)
+- [GitGalaxy Configuration Registry](06-01-gitgalaxy-config.md)

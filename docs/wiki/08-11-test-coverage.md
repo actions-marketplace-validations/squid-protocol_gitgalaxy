@@ -1,112 +1,66 @@
-# Testing & Verification Exposure
+# Verification Risk Exposure (Test Coverage)
 
-> **Metric: Verification Density (Internal Assertions & Sibling Coverage)**
+> **File Reference:** [`gitgalaxy/metrics/signal_processor.py`](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/metrics/signal_processor.py)
 >
-> **Summary:** Visualizes the "Security Blanket" of the knowledge graph. In GitGalaxy, we distinguish between *Defensive Code* (handling errors at runtime) and *Verified Code* (proving correctness at design time). Because this metric has been unified into the Risk Exposure model, a high score now indicates a *lack* of verification (high risk), while a low score indicates ironclad, verified code.
+> **Metric:** Logic Complexity vs. Defensive Test Verification
 >
-> **Effect:** Maps directly to the GitGalaxy Universal Risk Spectrum.
-> * 🟦 **IRONCLAD (Score 15-20):** Fortified. The code is heavily backed by internal assertions, mocks, or a dedicated sibling test suite. *(Note: The deterministic engine enforces a hard minimum floor of 15.0, acknowledging that no code is 100% perfectly safe).*
-> * 🟨 **MODERATE (Score 40-59):** Partial verification. Meets the bare minimum threshold.
-> * 🟥 **VERY HIGH (Score 80-100):** Speculative. The code might work, but there is no programmatic proof. It relies entirely on hope.
+> **Summary:** Measures verification risk by assessing code complexity and structural impact against internal assertions and external test coverage. Rather than relying on simple line-count coverage, GitGalaxy computes residual **Untested Impact** at the function, class, file, directory, and repository levels.
+>
+> **Effect:** Maps directly to the GitGalaxy Universal Risk Spectrum:
+> * 🟦 **VERY LOW (Score 0-19):** High Verification. Functions are heavily covered by targeted unit tests or snapshot assertions.
+> * 🟨 **INTERMEDIATE (Score 40-59):** Moderate Exposure. Core paths have basic tests, but some functions lack sufficient defensive assertions.
+> * 🟥 **VERY HIGH (Score 80-100+):** Unverified Execution. Complex functions and files operate with minimal or zero test verification.
 
-## The Inputs (Verification Signals)
+## Engineering Summary
+This subsystem measures the risk of unverified logic execution. It solves the problem of naive line-coverage metrics by structurally evaluating the actual logic complexity of a function against its specific defensive assertions and external test coverage. It exists to highlight brittle, complex logic that lacks testing safeguards, feeding this residual "Untested Impact" directly into the GitGalaxy multi-level risk aggregation pipeline.
 
-We combine internal evidence (assertions) with external evidence (sibling files). The file system checks are now abstracted, passing an `is_protected` boolean directly into the deterministic engine.
+## Purpose
+To calculate verification risk by subtracting defensive testing mass (internal assertions and external test targets) from raw logic impact, providing a realistic assessment of untested complexity.
 
-| Variable | Target Syntax / System | Weight | Structural Definition |
-| :--- | :--- | :--- | :--- |
-| `test_hits` | `assert`, `describe`, `mock` | 5.0x | **Internal Tests.** Assertions, mocks, and test definitions inside the file itself. |
-| `is_protected` | `X.test.js` next to `X.js` | +30.0 (Flat) | **Sibling Match.** External Coverage. This flat density bonus represents strong verification intent. |
-| `Mass Penalty` | `LOC > 300` | Variable | **Monolith Penalty.** Files over 300 lines gain a stacking risk penalty up to +40. Massive files cannot be adequately verified by unit tests alone. |
+## Problem Being Solved
+Standard line-coverage tools report high coverage if a file is simply imported and executed, even if the tests contain zero actual assertions (e.g., executing without validating outputs). This creates a false sense of security for highly complex state machines that are executed but fundamentally unverified.
 
-## Universal Framework Integration
+## Design
+Verification risk is calculated across a five-level hierarchy:
+- **Level 1 (Function):** Calculates `BaseImpact` by subtracting internal defenses (assertions, guards) from structural impact, applying a negative modifier for bypassed tests (`it.skip`). External tests dilute their defensive weight (`DefensiveRatio`) if they target multiple functions. An inverse decay formula yields the residual `UntestedImpact`.
+- **Level 2 (Class):** Aggregates function-level impact into `ClassUntestedImpact`.
+- **Level 3 (File):** Normalizes total impact per executable line of code (`CodingLOC`), applying a language Opacity Tax ($Ot$), Directory Test Dampener, and Blast Radius to calculate `AdjustedDensity`. A logistic Sigmoid function maps this to a 0–100 score.
+- **Level 4 (Directory):** Mass-weighted average using `CodingLOC` of child files.
+- **Level 5 (Repository):** Mass-weighted average across top-level directories.
 
-**Exemptions:** Untestable files (e.g., Markdown, Makefiles, CMake, or specific extensions configured in the asset masks) bypass the engine entirely, returning a $0.0$ risk score.
+**Mathematical Formulation (Function Level)**
+$$\text{BaseImpact} = \max(\text{FunctionImpact} - ((\text{Verification} + \text{Safety} - (\text{Bypassed} \times 2.0)) \times Fc), 0.0)$$
+$$\text{DefensiveRatio} = \frac{\sum (\text{EffectiveTestImpact} / \text{TargetCount})}{\text{FunctionImpact}}$$
+$$\text{UntestedImpact} = \text{BaseImpact} \times \left( \frac{1}{1 + (C_t \times \text{DefensiveRatio})} \right)$$
 
-* **$Fc$ (Fidelity Coefficient):** Applied as an inverted multiplier ($2.0 - Fc$). We trust explicit verification in high-fidelity languages more than loose assertions in implicit languages.
-* **$Irc$ (Implicit Risk Correction):** Added to the Threshold. Implicit languages (Python, Ruby) rely entirely on tests for type safety, meaning they require a *higher* density of tests to clear the risk bar.
-* **$Mp$ (Path Modifier):** Scales the Threshold. Critical infrastructure (`core/`) gets a higher bar; notoriously hard-to-test views (`UI/`) get a lower bar.
+## Pipeline Integration
+```mermaid
+flowchart LR
+    A[Function Impact] --> B[Subtract Internal Defenses]
+    C[External Tests] --> B
+    B --> D[Decay to Untested Impact]
+    D --> E[Class/File Aggregation]
+    E --> F[Sigmoid Score & Path Modifier]
+```
+- **Inputs received:** Structural impact, internal assertions, skipped tests, external test targets, `CodingLOC`.
+- **Outputs produced:** Residual untested impact and a normalized verification score (0-100).
+- **Dependencies:** Relies upstream on structural AST-free logic parsing and test-file coupling analysis.
 
-## The Equation: The Verification Sigmoid
+## Tradeoffs
+- Diluting external test impact by dividing by `TargetCount` (the number of functions targeted by a single test) assumes integration tests provide weaker specific verification than isolated unit tests.
+- Uses mass-weighted averaging (`CodingLOC`) at the directory and repository levels to prevent tiny untested scripts from skewing the aggregate score, prioritizing complex core logic.
+- Test files receive $Mp = 0.0$ to zero out their own risk, intentionally treating test code as structurally exempt from verification requirements.
 
-**Step A: The Exemption Bypass**
-If the file matches known untestable patterns (e.g., `readme`, `makefile`), the engine immediately returns $0.0$.
+## Limitations
+- Cannot evaluate if an assertion is actually meaningful (e.g., `assert true` provides defensive weight but verifies nothing).
+- Does not utilize dynamic execution or runtime tracing, meaning coverage is strictly inferred from static import graphs and testing patterns.
 
-**Step B: Calculate Verification Density**
-We calculate the density of internal tests and add the flat Sibling Bonus ($+30.0$). The bonus is added directly to the density because the existence of a test file implies coverage of the whole module.
+## Performance Notes
+The inverse decay computation at the function level and mass-weighted aggregation scale highly efficiently ($O(N)$ with respect to functions and files). 
 
-$$InternalDensity = \left( \frac{test\_hits \times 5.0}{\max(LOC, 1)} \right) \times 100.0$$
-$$TotalDensity = InternalDensity + SiblingBonus$$
+## Future Work
+Current behavior infers external test targeting via static import analysis. Planned improvements involve integrating dynamic coverage reports (e.g., LCOV files) to merge precise runtime hit counts with structural impact calculations.
 
-**Step C: Determine The Bar (Dynamic Threshold)**
-This is the "Passing Grade" the density must overcome to lower the risk score.
-
-$$Threshold = (15.0 + (Irc \times 3.0)) \times Mp$$
-
-**Step D: The Inverse Sigmoid Map**
-We map density against the dynamic threshold using a positive exponent. As Verification Density *increases*, the denominator grows, and the Risk Exposure mathematically *decreases*.
-
-$$RawExposure = \frac{100.0}{1 + e^{0.25 \times (TotalDensity - Threshold)}}$$
-
-**Step E: Trust Adjustment & Mass Penalty**
-We multiply the result by the inverted Fidelity score ($2.0 - Fc$). If the file size exceeds the `MASSIVE_FILE_THRESHOLD` (300 lines), we calculate and add a structural mass penalty, capping the final calculation between the $15.0$ risk floor and $100.0$ maximum.
-
-$$FinalExposure = \min(\max((RawExposure \times (2.0 - Fc)) + MassPenalty, 15.0), 100.0)$$
-
-## Implementation (Python Reference)
-
-```python
-import math
-import os
-from typing import Dict
-
-def _calc_verification(self, loc: int, file_path: str, is_protected: bool, eq: Dict[str, int], irc: int, fc: float, mp: float, umbrella_bonus: float = 0.0) -> float:
-    filename = os.path.basename(file_path).lower()
-    ext = filename.split('.')[-1] if '.' in filename else ""
-    
-    exempt_exts = self.asset_masks.get("UNTESTABLE_EXTENSIONS", set())
-    exempt_names = self.asset_masks.get("UNTESTABLE_NAMES", set())
-    
-    # Step A: Untestable Bypass
-    if ext in exempt_exts or filename in exempt_names or filename.startswith('readme') or 'makefile' in filename or 'cmake' in filename:
-        return 0.0
-
-    t = self.risk_tuning.get("verification", {})
-    safe_loc = max(loc, 1)
-    
-    # Step B: Verification Density
-    sibling_bonus = t.get("sibling_bonus", 30.0) if is_protected else 0.0
-    internal_density = (eq.get("test", 0) * t.get("internal_test_mult", 5.0) / safe_loc) * 100.0
-    total_density = internal_density + sibling_bonus 
-    
-    # Step C: Dynamic Threshold
-    threshold = (t.get("threshold_base", 15.0) + (irc * t.get("irc_mult", 3.0))) * mp
-    
-    # Step D: Inverse Sigmoid Map
-    try:
-        raw_exposure = 100.0 / (1.0 + math.exp(t.get("sigmoid_slope", 0.25) * (total_density - threshold)))
-    except OverflowError:
-        raw_exposure = 0.0 if total_density > threshold else 100.0
-        
-    # Step E: Trust Adjustment
-    final_exposure = raw_exposure * (2.0 - fc)
-
-    # Step F: The Mass Penalty
-    if safe_loc > self.MASSIVE_FILE_THRESHOLD:
-        mass_penalty = min((safe_loc - self.MASSIVE_FILE_THRESHOLD) / t.get("mass_penalty_div", 20.0), t.get("mass_penalty_max", 40.0)) 
-        final_exposure += mass_penalty
-
-    # Enforce the 15.0 Risk Floor
-    return min(max(final_exposure, t.get("risk_floor", 15.0)), 100.0)
-
-<br><br>
-
----
-
-### 🌌 Powered by the blAST Engine
-
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
-
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
-
+## Related Components
+- Function Structural Impact Calculator
+- Path Context Modifier ($Mp$)

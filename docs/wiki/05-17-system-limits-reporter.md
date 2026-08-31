@@ -1,37 +1,59 @@
-# System Limits Reporter (The Honesty Protocol)
+# Architectural Anomaly & Boundary Detector
 
-> **Architecture: Deterministic Boundary Validation**
->
-> **Summary:** The System Limits Reporter (also known as the "Honesty Protocol") is a specialized static analysis sensor. Its sole purpose is to detect structural anomalies, dynamic routing, and legacy architectural patterns that compromise the deterministic mathematical mapping of the repository.
+> **File Reference:** [gitgalaxy/tools/cobol_to_cobol/cobol_system_limits_reporter.py](https://github.com/squid-protocol/gitgalaxy/blob/main/gitgalaxy/tools/cobol_to_cobol/cobol_system_limits_reporter.py)
 
-## The "Ancient Dragons"
-Certain legacy COBOL commands fundamentally break modern Abstract Syntax Tree (AST) analysis because they alter the execution flow or memory structure at runtime. The reporter scans line-by-line (ignoring standard punch-card comments) to flag these critical limiters:
+## Engineering Summary
+The Architectural Anomaly & Boundary Detector is a static analysis sensor that evaluates the deterministic nature of legacy code structures. It solves the problem of unsafe modernization by identifying logic constructs that dynamically alter execution paths or memory states at runtime. This subsystem serves as a critical safety gate in GitGalaxy, ensuring code meets static analysis requirements before being passed to automated dependency mappers or LLM agents. It is commonly referred to as the System Limits Reporter.
 
-### 1. The ALTER Statement (`CRITICAL`)
-* **Detection:** `ALTER ... TO PROCEED TO ...`
-* **Architectural Impact:** The `ALTER` statement dynamically rewrites the target of a `GO TO` jump during runtime. This mathematically compromises the control flow graph. The static AST cannot guarantee where the execution will route, completely blinding the Microservice Slicer.
+## Purpose
+To scan COBOL source files for dynamic routing statements, asynchronous event handlers, and macro substitution patterns that break deterministic static analysis and dependency graph resolution.
 
-### 2. CICS Asynchronous Jumps (`CRITICAL`)
-* **Detection:** `EXEC CICS HANDLE CONDITION`
-* **Architectural Impact:** This command establishes asynchronous error routing. If a specific condition occurs anywhere in the program, the execution flow instantly jumps to an error-handling paragraph, bypassing the static DAG. This breaks topological execution sorting.
+## Problem Being Solved
+Certain legacy structures, such as dynamic control flow alterations, prevent static tools from accurately modeling program behavior. Attempting to modernize or map dependencies on code containing these non-deterministic constructs can result in severe logic drift and catastrophic runtime errors.
 
-### 3. Macro Substitution (`HIGH`)
-* **Detection:** `COPY ... REPLACING`
-* **Architectural Impact:** While the Graveyard Reaper attempts to actively resolve and expand copybooks, heavy macro substitution means the static source code may drift significantly from the actual compiled execution path.
+## Design
+### Structural Violation Rules
+The detector scans source lines (bypassing comment lines starting with `*` in column 7) using strict regular expression rules (`SYSTEM_LIMIT_RULES`):
 
-## Master Audit Integration
-When the orchestrator runs, the System Limits Reporter acts as a strict verification gateway. 
-* If no anomalies are detected, the pipeline certifies that the DAG is "100% mathematically deterministic."
-* If anomalies *are* detected, the engine refuses to fail silently. It aggregates the specific files, line numbers, and severity codes into the Master Audit Report, explicitly flagging the repository as requiring human architectural review or autonomous LLM remediation before the modernization can be trusted.
+* **1. Dynamic Jump Target Alteration (`ALTER_STATEMENT` - `CRITICAL`)**
+  * **Regex Pattern:** `\bALTER\s+[A-Z0-9\-]+\s+TO\s+(?:PROCEED\s+TO\s+)?[A-Z0-9\-]+\b`
+  * **Architectural Impact:** The `ALTER` statement dynamically overwrites the destination target of a `GO TO` statement at runtime. This invalidates static control flow graphs and makes static data flow analysis unreliable.
 
-<br><br>
+* **2. Asynchronous Event Handling (`CICS_ASYNC_JUMP` - `CRITICAL`)**
+  * **Regex Pattern:** `EXEC\s+CICS\s+HANDLE\s+CONDITION`
+  * **Architectural Impact:** Registers asynchronous condition handlers that intercept runtime events and jump to error-handling paragraphs. Execution flow can bypass normal sequential logic at any point, breaking static topological execution mapping.
 
----
+* **3. Macro Substitution (`COPY_REPLACING` - `HIGH`)**
+  * **Regex Pattern:** `\bCOPY\s+[\'"]?[A-Z0-9\-]+[\'"]?\s+REPLACING\b`
+  * **Architectural Impact:** Identifies macro substitution within copybooks, flagging potential drift between static source text and compiled execution logic.
 
-### 🌌 Powered by the blAST Engine
+### Integrity Verification Workflow
+During analysis pipelines, the detector (`scan_system_limits`) evaluates each file and reports structural integrity:
+* **Clean Status:** If no anomalies are detected, the analyzer reports that the target codebase is 100% statically deterministic.
+* **Violation Reporting:** If anomalies are detected, the detector formats warnings containing target file name, line number, severity level (`CRITICAL` / `HIGH`), and rule description. These findings are passed to downstream task generators or audit reports to flag files requiring architectural review before modernization.
 
-This documentation is part of the [GitGalaxy Ecosystem](https://github.com/squid-protocol/gitgalaxy), an AST-free, LLM-free heuristic knowledge graph engine.
+## Pipeline Integration
+**Inputs:** Unprocessed legacy source files (COBOL).
+**Outputs:** Structural anomaly reports, integrity verification statuses.
+**Dependencies:** Downstream dependency mappers and task forges rely on this component's output to determine safe execution paths.
 
-* 🪐 **[Explore the GitHub Repository](https://github.com/squid-protocol/gitgalaxy)** for code, tools, and updates.
-* 🔭 **[Visualize your own repository at GitGalaxy.io](https://gitgalaxy.io/)** using our interactive 3D WebGPU dashboard.
+**Flow:**
+Raw COBOL Source -> System Limits Reporter -> Integrity Reports & Anomaly Flags
 
+## Tradeoffs
+* **Regex Scanning vs Abstract Syntax Tree (AST):** The system chooses strict regular expressions over a full AST parser for speed and fault tolerance on incomplete or malformed legacy files, rejecting a heavy compiler front-end. This sacrifices deep semantic understanding for rapid heuristic pattern matching.
+* **Binary Severity Categorization:** Grouping limits strictly into `CRITICAL` or `HIGH` rejects a granular risk scoring system, ensuring modernization pipelines fail quickly and explicitly on any `CRITICAL` finding rather than relying on arbitrary thresholds.
+
+## Limitations
+* Regular expressions may misidentify text inside string literals if not properly bounded.
+* Does not automatically repair or refactor the flagged non-deterministic limits.
+
+## Performance Notes
+Operates at $O(N)$ time complexity relative to the number of lines in the source file, allowing for rapid scanning across massive codebases without significant memory overhead.
+
+## Future Work
+* Integration with a full language server or AST parser to eliminate false positives in string literals and comments.
+* Expansion of rulesets to detect dynamic SQL injection patterns.
+
+## Related Components
+* Autonomous Agent Remediation Task Generator

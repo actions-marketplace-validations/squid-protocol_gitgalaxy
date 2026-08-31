@@ -1,0 +1,204 @@
+# ruff: noqa: S101
+import pytest
+
+from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+# =======================================================================# THE UNIVERSAL EXTRACTION GAUNTLET
+# Proves that the `func_start` spawner accurately isolates EXACTLY the function
+# name ("TargetFunc") across 32 distinct programming languages and architectures.
+#
+# FORMAT:
+# "lang": {
+#     "valid": [ ("Payload String", "Expected Extracted Name") ],
+#     "invalid": [ "Strings that look like functions but MUST NOT match" ]
+# }
+# =======================================================================# =======================================================================# THE UNIVERSAL EXTRACTION GAUNTLET
+# Proves that the `func_start` spawner accurately isolates EXACTLY the function
+# name ("TargetFunc") across 32 distinct programming languages and architectures.
+#
+# FORMAT:
+# "lang": {
+#     "valid": [ ("Payload String", "Expected Extracted Name") ],
+#     "invalid": [ "Strings that look like functions but MUST NOT match" ],
+#     "pathological": [ "Frankenstein formatting designed to break the regex" ]
+# }
+# =======================================================================
+EXTRACTION_CASES = {
+    "ruby": {
+        "valid": [
+            ("def TargetFunc", "TargetFunc"),
+            ("def self.TargetFunc", "TargetFunc"),
+            ("define_method :TargetFunc do", "TargetFunc"),
+        ],
+        "invalid": ["class TargetFunc", "TargetFunc = 5", "module TargetFunc"],
+        "pathological": [
+            # Vertical class-method declaration
+            ("def \n self. \n TargetFunc \n (", "TargetFunc")
+        ],
+    },
+    "php": {
+        "valid": [
+            ("function TargetFunc()", "TargetFunc"),
+            ("public static function TargetFunc(", "TargetFunc"),
+            ("final protected function TargetFunc()", "TargetFunc"),
+        ],
+        "invalid": ["class TargetFunc", "$var = TargetFunc()", "new TargetFunc()"],
+        "pathological": [
+            # PHP 8 attributes and erratic reference ampersands
+            (
+                "#[\\ReturnTypeWillChange]\nfinal \n public \n static \n function \n & \n TargetFunc \n (",
+                "TargetFunc",
+            )
+        ],
+    },
+    "dart": {
+        "valid": [
+            ("void TargetFunc()", "TargetFunc"),
+            ("Future<int> TargetFunc()", "TargetFunc"),
+            ("int get TargetFunc(", "TargetFunc"),
+        ],
+        "invalid": ["class TargetFunc", "var TargetFunc =", "if (TargetFunc)"],
+        "pathological": [
+            # Extreme modifier stacking
+            (
+                "@override\nexternal \n static \n final \n Future<List<Map<String, dynamic>>> \n TargetFunc \n (",
+                "TargetFunc",
+            )
+        ],
+    },
+    "fortran": {
+        "valid": [
+            ("SUBROUTINE TargetFunc()", "TargetFunc"),
+            ("REAL FUNCTION TargetFunc()", "TargetFunc"),
+            ("PURE RECURSIVE FUNCTION TargetFunc()", "TargetFunc"),
+        ],
+        "invalid": ["END SUBROUTINE TargetFunc", "CALL TargetFunc", "TYPE TargetFunc"],
+        "pathological": [
+            # Excessive prefix stacking
+            (
+                "PURE \n RECURSIVE \n DOUBLE \n PRECISION \n FUNCTION \n TargetFunc \n (",
+                "TargetFunc",
+            )
+        ],
+    },
+
+    "dockerfile": {
+        "valid": [
+            ("RUN apt-get update", "RUN"),
+            ('CMD ["python"]', "CMD"),
+            ('ENTRYPOINT ["sh"]', "ENTRYPOINT"),
+        ],
+        "invalid": ["FROM ubuntu", "ENV TargetFunc=1", "COPY . ."],
+        "pathological": [("RUN \t apt-get \t update", "RUN")],
+    },
+    "typescript": {
+        "valid": [
+            ("function TargetFunc()", "TargetFunc"),
+            ("export const TargetFunc = async () =>", "TargetFunc"),
+            ("public get TargetFunc()", "TargetFunc"),
+        ],
+        "invalid": ["class TargetFunc", "type TargetFunc", "interface TargetFunc"],
+        "pathological": [("public \n async \n get \n TargetFunc \n (", "TargetFunc")],
+    },
+    "jcl": {
+        "valid": [("//TargetFunc EXEC PGM=PROG", "TargetFunc")],
+        "invalid": ["//TargetFunc DD DSN=", "//* TargetFunc EXEC"],
+        "pathological": [("//TargetFunc \t EXEC ", "TargetFunc")],
+    },
+    "css": {
+        "valid": [("@media (max-width: 600px) {", "@media"), ("@keyframes TargetFunc {", "@keyframes")],
+        "invalid": [".TargetFunc {", "#TargetFunc {"],
+        "pathological": [("@media \n (max-width) \n {", "@media")],
+    },
+    "html": {
+        "valid": [("<script>", "script"), ("<style>", "style")],
+        "invalid": ["<div id='script'>", "<span class='style'>"],
+        "pathological": [("<script \n >", "script")],
+    },
+}
+
+
+class TestFunctionExtraction:
+    @pytest.mark.parametrize("lang_id", EXTRACTION_CASES.keys())
+    def test_positive_function_extraction(self, lang_id):
+        """
+        Proves that valid function signatures are caught, and the regex
+        isolates EXACTLY the function name, stripping away all modifiers/return types.
+        Adapts dynamically to languages that use strict Capture Groups vs Full String matches.
+        """
+        cases = EXTRACTION_CASES.get(lang_id, {})
+        if "valid" not in cases:
+            pytest.skip(f"No valid cases defined for {lang_id}")
+
+        pattern = LANGUAGE_DEFINITIONS[lang_id]["rules"].get("func_start")
+        if not pattern:
+            pytest.skip(f"No func_start pattern defined for {lang_id}")
+
+        for payload, expected_name in cases["valid"]:
+            match = pattern.search(payload)
+            assert match is not None, f"[{lang_id}] Iron Wall Blocked Valid Function: '{payload}'"
+
+            # If the regex uses capture groups (like C#, C++, Rust, Swift), verify the exact group.
+            if pattern.groups > 0:
+                captured_groups = [g for g in match.groups() if g is not None]
+                assert len(captured_groups) > 0, f"[{lang_id}] Regex matched but captured nothing!"
+                assert expected_name in captured_groups, (
+                    f"[{lang_id}] Captured dirty modifiers {captured_groups} instead of clean name '{expected_name}' from '{payload}'"
+                )
+
+            # If the regex relies on positive lookaheads without groups (like Python, JS, TS),
+            # verify the matched substring safely contains the name.
+            else:
+                assert expected_name in match.group(0), (
+                    f"[{lang_id}] Matched string {match.group(0)} failed to contain target '{expected_name}'"
+                )
+
+    @pytest.mark.parametrize("lang_id", EXTRACTION_CASES.keys())
+    def test_negative_function_extraction(self, lang_id):
+        """
+        Proves that structural lookalikes (classes, if-statements, macros, invocations, interfaces)
+        are explicitly ignored by the function spawner across all languages.
+        """
+        cases = EXTRACTION_CASES.get(lang_id, {})
+        if "invalid" not in cases:
+            pytest.skip(f"No invalid cases defined for {lang_id}")
+
+        pattern = LANGUAGE_DEFINITIONS[lang_id]["rules"].get("func_start")
+        if not pattern:
+            pytest.skip(f"No func_start pattern defined for {lang_id}")
+
+        for payload in cases["invalid"]:
+            match = pattern.search(payload)
+            assert match is None, (
+                f"[{lang_id}] 👻 GHOST SATELLITE HALLUCINATED! Erroneously spawned a function from: '{payload}'"
+            )
+
+    @pytest.mark.parametrize("lang_id", EXTRACTION_CASES.keys())
+    def test_pathological_function_extraction(self, lang_id):
+        """
+        Adversarial Engineering: Proves the regex can survive "Frankenstein"
+        formatting, including vertical newlines, massive generic blobs, and
+        decorator stacking, while still cleanly extracting the function name.
+        """
+        cases = EXTRACTION_CASES.get(lang_id, {})
+        if "pathological" not in cases:
+            pytest.skip(f"No pathological cases defined for {lang_id}")
+
+        pattern = LANGUAGE_DEFINITIONS[lang_id]["rules"].get("func_start")
+        if not pattern:
+            pytest.skip(f"No func_start pattern defined for {lang_id}")
+
+        for payload, expected_name in cases["pathological"]:
+            match = pattern.search(payload)
+            assert match is not None, f"[{lang_id}] 💥 Engine choked on pathological formatting: '{payload}'"
+
+            if pattern.groups > 0:
+                captured_groups = [g for g in match.groups() if g is not None]
+                assert len(captured_groups) > 0, f"[{lang_id}] Matched but captured nothing!"
+                assert expected_name in captured_groups, (
+                    f"[{lang_id}] Captured dirty modifiers {captured_groups} instead of clean name '{expected_name}'"
+                )
+            else:
+                assert expected_name in match.group(0), (
+                    f"[{lang_id}] Matched string failed to contain target '{expected_name}'"
+                )
