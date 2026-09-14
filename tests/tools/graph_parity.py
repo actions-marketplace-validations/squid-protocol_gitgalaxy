@@ -30,7 +30,13 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-from gitgalaxy.core.graph_engine import GraphIndex, pagerank
+from gitgalaxy.core.graph_engine import (
+    GraphIndex,
+    articulation_point_count,
+    closeness_and_path_length,
+    nodes_in_cycles,
+    pagerank,
+)
 
 try:
     import networkx as nx
@@ -53,12 +59,51 @@ class Metric:
     places: int
 
 
+def _reachable_pair_path_length(graph: Any) -> Optional[float]:
+    """#3037's tailored definition: mean hops over every ordered pair (A, B) where A reaches B; None if none."""
+    hops = pairs = 0
+    for source in graph:
+        for target, distance in nx.single_source_shortest_path_length(graph, source).items():
+            if target != source:
+                hops += distance
+                pairs += 1
+    return hops / pairs if pairs else None
+
+
 METRICS: dict[str, Metric] = {
     "pagerank": Metric(
         oracle_mode="strict",
         native=lambda index: dict(zip(index.nodes, pagerank(index))),
         oracle=lambda graph: nx.pagerank(graph, weight="weight"),
         places=6,  # pagerank_score is stored at 6 dp
+    ),
+    "closeness": Metric(
+        oracle_mode="strict",
+        native=lambda index: dict(zip(index.nodes, closeness_and_path_length(index)[0])),
+        oracle=nx.closeness_centrality,
+        places=6,  # closeness_score
+    ),
+    "avg_path_length": Metric(
+        oracle_mode="tailored",  # networkx's own call is the largest undirected component
+        native=lambda index: closeness_and_path_length(index)[1],
+        oracle=_reachable_pair_path_length,
+        places=4,  # repo_data.network_avg_path_length
+    ),
+    "cyclic_density": Metric(
+        oracle_mode="strict",
+        native=lambda index: nodes_in_cycles(index) / len(index.nodes) if index.nodes else None,
+        oracle=lambda graph: (
+            sum(len(c) for c in nx.strongly_connected_components(graph) if len(c) > 1) / len(graph)
+            if len(graph)
+            else None
+        ),
+        places=4,  # repo_data.network_cyclic_density
+    ),
+    "articulation_points": Metric(
+        oracle_mode="strict",
+        native=articulation_point_count,
+        oracle=lambda graph: len(list(nx.articulation_points(graph.to_undirected()))),
+        places=0,  # a count: exact
     ),
 }
 
@@ -148,7 +193,7 @@ def main() -> int:
     nodes, edges = scan_graph(args.db)
     index_ms = _best_ms(lambda: GraphIndex(nodes, edges), args.repeat)
     print(f"graph: V={len(nodes)} E={len(edges)}  index build {index_ms:.2f} ms\n")
-    print(f"{'metric':<12} {'oracle':<9} {'parity':<7} {'max |diff|':>11} {'native ms':>10} {'networkx ms':>12}")
+    print(f"{'metric':<16} {'oracle':<9} {'parity':<7} {'max |diff|':>11} {'native ms':>10} {'networkx ms':>12}")
 
     index = GraphIndex(nodes, edges)
     graph = to_networkx(nodes, edges)
@@ -161,7 +206,7 @@ def main() -> int:
         native_ms = _best_ms(lambda: metric.native(index), args.repeat)
         oracle_ms = _best_ms(lambda: metric.oracle(graph), args.repeat)
         print(
-            f"{name:<12} {metric.oracle_mode:<9} {'OK' if parity.equal else 'FAIL':<7} {diff:>11} "
+            f"{name:<16} {metric.oracle_mode:<9} {'OK' if parity.equal else 'FAIL':<7} {diff:>11} "
             f"{native_ms:>10.2f} {oracle_ms:>12.2f}"
         )
     return 1 if failed else 0

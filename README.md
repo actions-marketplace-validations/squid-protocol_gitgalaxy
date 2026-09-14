@@ -425,10 +425,11 @@ current commands and configuration.
 
 A plain `pip install gitgalaxy` pulls in nothing, for environments where
 every third-party package is a supply-chain question. Scans still run: every
-structural signal, dependency edge, in/out-degree count and PageRank / blast
-radius is measured exactly as in full precision (PageRank is computed natively).
-What needs the optional engines is betweenness/closeness and repo-topology
-metrics (`networkx`), token mass and read cost (`tiktoken`), ML threat
+structural signal, dependency edge, in/out-degree count, PageRank / blast
+radius, closeness, average path length, cyclic density and articulation
+points is measured exactly as in full precision (these are computed natively).
+What needs the optional engines is betweenness, modularity and assortativity
+(`networkx`), token mass and read cost (`tiktoken`), ML threat
 classification (`xgboost`/`pandas`/`numpy`) and YAML config/OpenAPI parsing
 (`pyyaml`). A metric that was not computed is reported as absent (`n/a` /
 NULL), never as a zero. Each output says when a scan ran in this mode, and

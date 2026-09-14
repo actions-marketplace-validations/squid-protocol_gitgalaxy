@@ -9,7 +9,15 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional
 
-from gitgalaxy.core.graph_engine import GraphIndex, pagerank
+from gitgalaxy.core.graph_engine import (
+    GraphIndex,
+    WorkBudget,
+    WorkBudgetExceeded,
+    articulation_point_count,
+    closeness_and_path_length,
+    nodes_in_cycles,
+    pagerank,
+)
 from gitgalaxy.standards.analysis_lens import RECORDING_SCHEMAS
 from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
 
@@ -27,6 +35,14 @@ CASE_INSENSITIVE_IMPORT_LANGS = frozenset(
 # lib/helper.js. Anchored and bounded by the input's own length; no
 # backtracking risk (single non-overlapping alternative, fixed-width group).
 LEADING_RELATIVE_MARKER = re.compile(r"^(?:\.{1,2}/)+")
+
+# #3037: the deterministic work budget for the hop-count path metrics (closeness
+# and average path length), counted in incoming edges scanned across every file's
+# breadth-first search. 50M is about 3 s of pure-Python search; past it both
+# metrics are None ("not computed"), never 0.0. It replaced node-count cutoffs --
+# closeness above 1,500 files, path length above 5,000 -- that skipped the
+# 2,817-file language-crucible graph, whose searches take under 2 ms.
+PATH_METRICS_WORK_BUDGET = 50_000_000
 
 
 def _without_extension(path_str: str) -> str:
@@ -373,8 +389,8 @@ class NetworkRiskSensor:
     ) -> dict[str, Any]:
         """
         One file's `network_metrics`, shared by both graph builders. #3027: a
-        metric that was not computed (no networkx for betweenness/closeness,
-        closeness skipped above 1,500 nodes, a failed computation) is None, never
+        metric that was not computed (no networkx for betweenness, closeness
+        past its #3037 work budget, a failed computation) is None, never
         a 0.0 placeholder -- a 0.0 reads as a measurement and every consumer drew
         conclusions from it (a "Containment (Low Risk)" verdict, zero-score
         bottleneck rankings, zeroed archetype features).
@@ -450,6 +466,35 @@ class NetworkRiskSensor:
             self.logger.warning(f"PageRank failed to converge, leaving it unset (None): {e}")
             return {}
 
+    def _path_metrics(self, index: GraphIndex) -> tuple[dict[str, Optional[float]], Optional[float]]:
+        """
+        #3037: per-file closeness and the repo's average path length, from one
+        native search in both modes (see graph_engine.closeness_and_path_length),
+        so the two modes produce the same values. Computed at every graph size;
+        past PATH_METRICS_WORK_BUDGET both are None ("not computed"), never 0.0.
+        """
+        try:
+            closeness, avg_path_length = closeness_and_path_length(index, WorkBudget(PATH_METRICS_WORK_BUDGET))
+        except WorkBudgetExceeded as e:
+            self.logger.info(f"Closeness / avg path length past their work budget, leaving them unset (None): {e}")
+            return dict.fromkeys(index.nodes), None
+        return dict(zip(index.nodes, closeness)), avg_path_length
+
+    @staticmethod
+    def _cycle_metrics(index: GraphIndex) -> dict[str, Optional[float]]:
+        """
+        #3035: cyclic density (the share of files on a dependency cycle) and the
+        articulation-point count, native in both modes, O(N + E) with no budget
+        needed. None for a graph with no files, as the networkx path left them.
+        """
+        n = len(index.nodes)
+        if n == 0:
+            return {"cyclic_density": None, "articulation_points": None}
+        return {
+            "cyclic_density": round(nodes_in_cycles(index) / n, 4),
+            "articulation_points": articulation_point_count(index),
+        }
+
     def build_dependency_graph(self, parsed_files: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """
         Builds the directed graph and calculates multi-dimensional risk vectors.
@@ -481,15 +526,18 @@ class NetworkRiskSensor:
 
         # =========================================================================
         # 3. NETWORK MATHEMATICS (Dependency Blast Radius & Centrality)
-        # DEFENSIVE DESIGN: Centrality algorithms (Betweenness/Closeness) scale non-linearly
-        # at O(V^3). For massive monolithic repositories (>1500 nodes), we MUST implement
-        # strict sampling or bypasses, otherwise the CI/CD pipeline will hit a timeout deadlock.
-        # PageRank is safe as it uses iterative convergence.
+        # DEFENSIVE DESIGN: networkx's betweenness scales non-linearly, so above
+        # 500 nodes it is sampled, otherwise the CI/CD pipeline would hit a
+        # timeout deadlock.
         # =========================================================================
-        # PageRank is the native implementation in BOTH modes (see _native_pagerank),
-        # computed outside the networkx block so a centrality failure can't take it down.
+        # PageRank, closeness, avg path length, cyclic density and articulation
+        # points are native in BOTH modes (see _native_pagerank, _path_metrics,
+        # _cycle_metrics), computed outside the networkx block so a centrality
+        # failure can't take them down.
         index = self._graph_index(parsed_files, edges)
         pagerank = self._native_pagerank(index)
+        closeness, avg_path_length = self._path_metrics(index)
+        cycle_metrics = self._cycle_metrics(index)
 
         try:
             # Force a maximum sample size of 100 nodes for any graph > 500 nodes.
@@ -498,21 +546,9 @@ class NetworkRiskSensor:
             # completely different sample and report different bottleneck files.
             k_val = min(len(G.nodes()), 100) if len(G.nodes()) > 500 else None
             betweenness = nx.betweenness_centrality(G, k=k_val, weight="weight", seed=42 if k_val is not None else None)
-
-            # Closeness Centrality has no built-in sampling. Hard bypass at 1500 nodes.
-            # #3027: bypassed means NOT computed -- None, not a 0.0 that reads as
-            # "maximally peripheral" to every downstream ranking.
-            closeness: dict[str, Optional[float]]
-            if len(G.nodes()) > 1500:
-                self.logger.debug("Graph too massive for exact Closeness Centrality. Leaving unset (None).")
-                closeness = dict.fromkeys(G.nodes())
-            else:
-                closeness = nx.closeness_centrality(G)
-
         except Exception as e:
-            self.logger.warning(f"Centrality math failed, leaving betweenness/closeness unset (None): {e}")
+            self.logger.warning(f"Centrality math failed, leaving betweenness unset (None): {e}")
             betweenness = dict.fromkeys(G.nodes())
-            closeness = dict.fromkeys(G.nodes())
 
         in_degrees = dict(G.in_degree())
         out_degrees = dict(G.out_degree())
@@ -552,9 +588,11 @@ class NetworkRiskSensor:
         macro_metrics: dict[str, Optional[float]] = {
             "modularity": None,
             "assortativity": None,
-            "cyclic_density": None,
-            "avg_path_length": None,
-            "articulation_points": None,
+            # #3035: native (see _cycle_metrics).
+            "cyclic_density": cycle_metrics["cyclic_density"],
+            # #3037: native, mean hops over directed reachable pairs (see _path_metrics).
+            "avg_path_length": None if avg_path_length is None else round(avg_path_length, 4),
+            "articulation_points": cycle_metrics["articulation_points"],
         }
 
         if len(G) > 0:
@@ -590,30 +628,8 @@ class NetworkRiskSensor:
                 except Exception as e:
                     self.logger.debug(f"Assortativity computation failed, leaving unset (None): {e}")
 
-                # C. Cyclic Density (Circular Dependencies / Dependency Loops)
-                try:
-                    sccs = list(nx.strongly_connected_components(G))
-                    nodes_in_cycles = sum(len(c) for c in sccs if len(c) > 1)
-                    macro_metrics["cyclic_density"] = round(nodes_in_cycles / len(G), 4)
-                except Exception as e:
-                    self.logger.debug(f"Cyclic density computation failed, leaving unset (None): {e}")
-
-                # D. Average Shortest Path (Coupling Distance)
-                try:
-                    if len(U) > 5000:
-                        self.logger.debug("Graph too massive for Avg Path Length. Leaving unset (None).")
-                    else:
-                        largest_cc = max(nx.connected_components(U), key=len)
-                        subgraph = U.subgraph(largest_cc)
-                        macro_metrics["avg_path_length"] = round(nx.average_shortest_path_length(subgraph), 4)
-                except Exception as e:
-                    self.logger.debug(f"Avg shortest path computation failed, leaving unset (None): {e}")
-
-                # E. Articulation Points (Fragmentation Risk)
-                try:
-                    macro_metrics["articulation_points"] = len(list(nx.articulation_points(U)))
-                except Exception as e:
-                    self.logger.debug(f"Articulation points computation failed, leaving unset (None): {e}")
+                # C-E. Cyclic density, avg path length and articulation points are
+                # native (#3035, #3037), set above.
 
             except Exception as e:
                 self.logger.warning(f"Macro network math failed: {e}")
@@ -623,8 +639,9 @@ class NetworkRiskSensor:
 
     def _fallback_build_graph(self, parsed_files: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         self.logger.warning(
-            "[!] 'networkx' not found. Operating in Zero-Dependency Mode: degree counts and PageRank are computed "
-            "natively; betweenness, closeness and repo topology are not computed (None)."
+            "[!] 'networkx' not found. Operating in Zero-Dependency Mode: degree counts, PageRank, closeness, avg path "
+            "length, cyclic density and articulation points are computed natively; betweenness, modularity and "
+            "assortativity are not computed (None)."
         )
 
         in_degrees = {f.get("path", ""): 0 for f in parsed_files}
@@ -645,17 +662,21 @@ class NetworkRiskSensor:
             in_degrees[dst] = in_degrees.get(dst, 0) + 1
         self._publish_edges(edges)
 
-        # #3027: the same native PageRank the DiGraph path uses -- PageRank needs
-        # nothing but the edge list. Betweenness/closeness stay None: networkx
-        # samples 100 nodes at random above 500 files (#3031).
-        pagerank = self._native_pagerank(self._graph_index(parsed_files, edges))
+        # #3027/#3035/#3037: the same native PageRank, closeness, avg path length,
+        # cyclic density and articulation points the DiGraph path uses -- they
+        # need nothing but the edge list. Betweenness stays None until it is
+        # native too (#3038).
+        index = self._graph_index(parsed_files, edges)
+        pagerank = self._native_pagerank(index)
+        closeness, avg_path_length = self._path_metrics(index)
+        cycle_metrics = self._cycle_metrics(index)
 
         for f in parsed_files:
             path = f.get("path", "")
             if "telemetry" not in f:
                 f["telemetry"] = {}
             f["telemetry"]["network_metrics"] = self._network_metrics(
-                f, pagerank.get(path), None, None, in_degrees.get(path, 0), out_degrees.get(path, 0)
+                f, pagerank.get(path), None, closeness.get(path), in_degrees.get(path, 0), out_degrees.get(path, 0)
             )
             f["telemetry"]["popularity"] = in_degrees.get(path, 0)
 
@@ -665,8 +686,8 @@ class NetworkRiskSensor:
         macro_metrics: dict[str, Optional[float]] = {
             "modularity": None,
             "assortativity": None,
-            "cyclic_density": None,
-            "avg_path_length": None,
-            "articulation_points": None,
+            "cyclic_density": cycle_metrics["cyclic_density"],
+            "avg_path_length": None if avg_path_length is None else round(avg_path_length, 4),
+            "articulation_points": cycle_metrics["articulation_points"],
         }
         return parsed_files, macro_metrics
