@@ -583,7 +583,10 @@ class RecordKeeper:
                 raw_state_unreferenced INTEGER DEFAULT 0,
                 {", ".join(risk_cols)},
                 {", ".join(hit_cols)},
-                {", ".join(tier_cols)}
+                {", ".join(tier_cols)},
+                mitigation_telemetry TEXT,
+                doc_umbrella REAL DEFAULT 0.0,
+                raw_imports TEXT
             )
         """)
 
@@ -592,6 +595,27 @@ class RecordKeeper:
         # CREATE TABLE IF NOT EXISTS above is a no-op for it; heal the new
         # fam_*/pct_fam_*/pct_vec_*/rel_* columns in with guarded ALTERs.
         _ensure_columns(cursor, "file_data", tier_cols)
+
+        # #3220: mitigation_telemetry is the detector's proximity-correlation tally
+        # (mitigated_danger / amplified_cascading_flux ...) that re-weights
+        # cognitive_load / safety_score / state_flux in the score layer. It was never
+        # persisted, so a delta scan's rehydrated files lost the amplification and those
+        # three signals drifted. Persist it as JSON so StateRehydrator can restore an
+        # exact score input. Guarded-ALTER heal for pre-existing DBs, same as above.
+        _ensure_columns(cursor, "file_data", ["mitigation_telemetry TEXT"])
+
+        # #3220: doc_umbrella (the documentation shield in meta["metadata"]) dampens
+        # risk_documentation in _calc_documentation. It is a parse-time value never
+        # persisted, so rehydrated files defaulted it to 0.0 and risk_documentation
+        # drifted. Persist it so the rehydrator can restore the exact shield.
+        _ensure_columns(cursor, "file_data", ["doc_umbrella REAL DEFAULT 0.0"])
+
+        # #3220: raw_imports (the file's pre-resolution import target strings) is what
+        # the graph resolver turns into edges. rehydrated files had it emptied, so the
+        # delta graph missed every edge FROM an unchanged file -> in-degree (popularity)
+        # of widely-imported headers was undercounted and risk_api_exposure drifted.
+        # Persist the strings (JSON) so the rehydrator can feed the resolver exactly.
+        _ensure_columns(cursor, "file_data", ["raw_imports TEXT"])
 
         # gitgalaxy#2985: the same guard, now over hit_cols. SIGNAL_SCHEMA grows
         # (it gained sec_db_hooks/sec_amplified_sql_injection here), and the
@@ -637,12 +661,19 @@ class RecordKeeper:
                 is_public INTEGER DEFAULT 0,
                 is_documented INTEGER DEFAULT 0,
                 {", ".join(hit_cols)},
+                impact REAL DEFAULT 0.0,
                 FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
             )
         """)
 
         # gitgalaxy#2985: function_data's half of the hit_cols heal.
         _ensure_columns(cursor, "function_data", hit_cols)
+
+        # #3220: func["impact"] (round(magnitude,1)) is a parse-time per-function
+        # structural weight _calc_verification reads to size untested impact. It was
+        # never persisted, so rehydrated functions defaulted it to 0.0 and
+        # risk_verification drifted. Persist it so a delta rehydrate reproduces it.
+        _ensure_columns(cursor, "function_data", ["impact REAL DEFAULT 0.0"])
 
         # DEFENSIVE GUARD: Indexes to Prevent Cascade Delete Hangs
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_class_file_id ON class_data(file_id);")
@@ -1288,6 +1319,20 @@ class RecordKeeper:
             row_data.extend(pct_vec_values.get(r, 0.0) for r in self.RISK_SCHEMA)
             row_data.append(rel_values.get("guard_balance_ratio", 0.0))
             row_data.append(rel_values.get("alloc_cleanup_pairing", 0.0))
+            # #3220: persist the proximity-mitigation tally so a delta rehydrate can
+            # restore the exact score-layer weighting (json, deterministic key order).
+            row_data.append(json.dumps(file_data.get("mitigation_telemetry") or {}, sort_keys=True))
+            # #3220: persist the documentation shield so a delta rehydrate reproduces
+            # risk_documentation exactly.
+            row_data.append(float((file_data.get("metadata") or {}).get("doc_umbrella", 0.0) or 0.0))
+            # #3220: persist raw_imports so a delta rehydrate rebuilds the dependency
+            # graph (popularity/pagerank/api_exposure) exactly. Entries are usually import
+            # strings but can be (module, alias) TUPLES, so don't sort (mixed str/tuple is
+            # unorderable) and encode tuples as lists; the rehydrator restores them. Order
+            # is irrelevant -- it round-trips into a set.
+            row_data.append(
+                json.dumps([list(x) if isinstance(x, tuple) else x for x in (file_data.get("raw_imports") or [])])
+            )
 
             # #3183 (B1): accumulate the row and precompute its AUTOINCREMENT id
             # (assigned in list order by the executemany after the loop) instead
@@ -1343,8 +1388,10 @@ class RecordKeeper:
                         (int(func.get("token_mass")) if func.get("token_mass") is not None else None),
                         int(bool(func.get("is_public", False))),
                         int(bool(func.get("is_documented", False))),
+                        *func_hits,
+                        # #3220: trailing impact column (matches the INSERT list below).
+                        round(float(func.get("impact", 0.0) or 0.0), 1),
                     ]
-                    + func_hits
                 )
 
         # #3183 (B1): flush file_data then class_data in FK-safe order (parents
@@ -1380,7 +1427,7 @@ class RecordKeeper:
                     {", ".join([f"fam_{fam}" for fam in self.SURFACE_FAMILIES])},
                     {", ".join([f"pct_fam_{fam}" for fam in self.SURFACE_FAMILIES])},
                     {", ".join([f"pct_vec_{r.replace('-', '_')}" for r in self.RISK_SCHEMA])},
-                    rel_guard_balance, rel_alloc_cleanup
+                    rel_guard_balance, rel_alloc_cleanup, mitigation_telemetry, doc_umbrella, raw_imports
                 ) VALUES ({file_placeholders})
             """,  # noqa: S608
                 all_file_rows,
@@ -1405,7 +1452,7 @@ class RecordKeeper:
             cursor.executemany(
                 f"""
                 INSERT INTO function_data
-                (file_id, parent_class_id, func_name, complexity, loc, start_line, args, usage_status, keyword_density, func_archetype, func_z_score, docstring, calls_out_to, token_mass, is_public, is_documented, {", ".join([self.SHORT_KEY_MAP.get(h, h) for h in self.SIGNAL_SCHEMA])})
+                (file_id, parent_class_id, func_name, complexity, loc, start_line, args, usage_status, keyword_density, func_archetype, func_z_score, docstring, calls_out_to, token_mass, is_public, is_documented, {", ".join([self.SHORT_KEY_MAP.get(h, h) for h in self.SIGNAL_SCHEMA])}, impact)
                 VALUES ({func_placeholders})
             """,  # noqa: S608
                 all_func_rows,
@@ -1488,43 +1535,43 @@ class RecordKeeper:
         net_avg_path_length = net_macro.get("avg_path_length")
         net_articulation_points = net_macro.get("articulation_points")
 
-        repo_row_data = (
-            [
-                repo_name,
-                commit_date,
-                commit_hash,
-                total_files,
-                total_unparsable,
-                agg_total_loc,
-                agg_coding_loc,
-                agg_func_count,
-                total_classes,
-                agg_doc_files,
-                agg_build_files,
-                agg_config_files,
-                agg_test_files,
-                typosquat_count,
-                macro_info.get("name", "Unclassified"),
-                None if macro_info.get("z_score") is None else float(macro_info["z_score"]),
-                round(avg_encapsulation, 3),
-                round(avg_imports, 3),
-                net_modularity,
-                net_assortativity,
-                net_cyclic_density,
-                net_avg_path_length,
-                net_articulation_points,
-                edges_unrecorded,
-                int(audits.get("api_mapper", {}).get("shadow_count", 0)),
-                int(audits.get("xray", {}).get("anomalies_found", 0)),
-                int(audits.get("firewall", {}).get("imports_unknown", 0)),
-                1 if session_meta.get("zero_dependency_mode") else 0,
-                json.dumps(session_meta["missing_dependencies"], sort_keys=True)
-                if "missing_dependencies" in session_meta
-                else None,
-            ]
-            + agg_hits
-            + [repo_composition_str, repo_comp_archetype, repo_comp_z]
-        )
+        repo_row_data = [
+            repo_name,
+            commit_date,
+            commit_hash,
+            total_files,
+            total_unparsable,
+            agg_total_loc,
+            agg_coding_loc,
+            agg_func_count,
+            total_classes,
+            agg_doc_files,
+            agg_build_files,
+            agg_config_files,
+            agg_test_files,
+            typosquat_count,
+            macro_info.get("name", "Unclassified"),
+            None if macro_info.get("z_score") is None else float(macro_info["z_score"]),
+            round(avg_encapsulation, 3),
+            round(avg_imports, 3),
+            net_modularity,
+            net_assortativity,
+            net_cyclic_density,
+            net_avg_path_length,
+            net_articulation_points,
+            edges_unrecorded,
+            int(audits.get("api_mapper", {}).get("shadow_count", 0)),
+            int(audits.get("xray", {}).get("anomalies_found", 0)),
+            int(audits.get("firewall", {}).get("imports_unknown", 0)),
+            1 if session_meta.get("zero_dependency_mode") else 0,
+            json.dumps(session_meta["missing_dependencies"], sort_keys=True)
+            if "missing_dependencies" in session_meta
+            else None,
+            *agg_hits,
+            repo_composition_str,
+            repo_comp_archetype,
+            repo_comp_z,
+        ]
 
         repo_placeholders = ",".join(["?"] * len(repo_row_data))
         cursor.execute(
