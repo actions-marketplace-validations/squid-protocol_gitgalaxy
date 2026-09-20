@@ -101,6 +101,44 @@ def _ensure_columns(cursor: sqlite3.Cursor, table: str, col_defs: list[str]) -> 
                 raise
 
 
+def _insert_per_file_child(
+    cursor: sqlite3.Cursor,
+    parsed_files: list,
+    path_to_file_id: dict,
+    repo_name: str,
+    commit_hash: str,
+    table: str,
+    columns: tuple,
+    payload_key: str,
+    to_row,
+) -> None:
+    """Insert a per-file fact-channel child table (#3200/#3201/#3246).
+
+    A per-file fact rides on the file's own `payload_key` list and cascade-deletes
+    with file_data (no cross-file resolution, unlike call_site_data). Each row is
+    `(repo_name, commit_hash, file_id, *to_row(item))`; `columns` names the columns
+    AFTER those three standard ones. See `gitgalaxy/core/how_to_add_a_fact_channel.md`.
+
+    `table`/`columns` are module-internal literals (never user input); SQLite has
+    no parameterized syntax for identifiers, same as the CREATE TABLE f-strings
+    elsewhere in this module.
+    """
+    rows: list[tuple] = []
+    for file_data in parsed_files:
+        file_id = path_to_file_id.get(file_data.get("path", ""))
+        if file_id is None:
+            continue
+        rows.extend((repo_name, commit_hash, file_id, *to_row(item)) for item in file_data.get(payload_key, []) or [])
+    if not rows:
+        return
+    all_columns = ("repo_name", "commit_hash", "file_id", *columns)
+    placeholders = ", ".join(["?"] * len(all_columns))
+    cursor.executemany(
+        f"INSERT INTO {table} ({', '.join(all_columns)}) VALUES ({placeholders})",  # noqa: S608 -- identifiers are module constants
+        rows,
+    )
+
+
 class FolderStats(TypedDict):
     """Accumulator shape for the folder-level rollup below -- without this,
     the mixed int/float/list values collapse to "object" under mypy, which
@@ -414,7 +452,9 @@ class RecordKeeper:
         including the ones that resolved to nothing, which is the whole point
         of the table -- and `invocation_edges` becomes edge_data rows with
         edge_kind 'call'/'exec'. The COBOL dataset bindings ride along on each
-        file's own `dataset_bindings` and become dataset_data.
+        file's own `dataset_bindings` and become dataset_data, and the DATA
+        DIVISION item tree + FD record layouts (#3246) ride along on each file's
+        own `record_layouts` and become record_data.
 
         Both default to None, so a caller predating #3200 writes no boundary
         rows rather than empty ones.
@@ -807,6 +847,41 @@ class RecordKeeper:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_dataset_file_id ON dataset_data(file_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_dataset_dd_name ON dataset_data(dd_name);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_dataset_snapshot ON dataset_data(repo_name, commit_hash);")
+
+        # #3246: the DATA DIVISION item tree and FD record layouts -- the last
+        # structural datum the forge parsers owned and the DB did not carry. One
+        # row per data description entry, in source order; the tree is rebuilt by
+        # the reader (galaxy_ir.py) from `ordinal`/`parent_ordinal`, the same way
+        # a flat function_data list rebuilds nothing more than it has to. A
+        # per-file fact like dataset_data (no cross-file resolution), so it hangs
+        # off file_data with the same cascade-delete. `fd_name` is the FILE
+        # SECTION `FD`/`SD` a `01` record binds to (NULL in WORKING-STORAGE /
+        # LINKAGE); `section` is the owning DATA DIVISION section.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS record_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT,
+                commit_hash TEXT,
+                file_id INTEGER,
+                section TEXT,
+                fd_name TEXT,
+                ordinal INTEGER,
+                parent_ordinal INTEGER,
+                level_number INTEGER,
+                item_name TEXT,
+                pic TEXT,
+                usage TEXT,
+                occurs_min INTEGER,
+                occurs_max INTEGER,
+                occurs_depending_on TEXT,
+                redefines TEXT,
+                value_literal TEXT,
+                line_number INTEGER,
+                FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_file_id ON record_data(file_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_snapshot ON record_data(repo_name, commit_hash);")
 
         # #2908 Phase 2: per-unit is_public/is_documented (function_data.
         # docs/risk_documentation_contract.md). Auto-heal for a pre-#2908
@@ -1678,38 +1753,71 @@ class RecordKeeper:
                     call_rows,
                 )
 
-        # #3201: the dataset bindings, taken from each file's own payload
-        # because they are a per-file fact with no cross-file resolution step.
-        dataset_rows: list[tuple] = []
-        for file_data in parsed_files:
-            dataset_file_id = path_to_file_id.get(file_data.get("path", ""))
-            if dataset_file_id is None:
-                continue
-            dataset_rows.extend(
-                (
-                    repo_name,
-                    commit_hash,
-                    dataset_file_id,
-                    binding.get("step_name"),
-                    binding.get("internal_name"),
-                    binding.get("assign_name"),
-                    binding.get("dd_name"),
-                    ",".join(binding.get("modes") or []) or None,
-                    binding.get("dsn"),
-                    int(binding.get("line", 0) or 0),
-                )
-                for binding in file_data.get("dataset_bindings", []) or []
-            )
-        if dataset_rows:
-            cursor.executemany(
-                """
-                INSERT INTO dataset_data (
-                    repo_name, commit_hash, file_id, step_name, internal_name,
-                    assign_name, dd_name, access_modes, dsn, line_number
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                dataset_rows,
-            )
+        # #3201: the dataset bindings -- a per-file fact channel (no cross-file
+        # resolution, unlike call_site_data above).
+        _insert_per_file_child(
+            cursor,
+            parsed_files,
+            path_to_file_id,
+            repo_name,
+            commit_hash,
+            "dataset_data",
+            ("step_name", "internal_name", "assign_name", "dd_name", "access_modes", "dsn", "line_number"),
+            "dataset_bindings",
+            lambda b: (
+                b.get("step_name"),
+                b.get("internal_name"),
+                b.get("assign_name"),
+                b.get("dd_name"),
+                ",".join(b.get("modes") or []) or None,
+                b.get("dsn"),
+                int(b.get("line", 0) or 0),
+            ),
+        )
+
+        # #3246: the DATA DIVISION item tree + FD record layouts -- the same
+        # per-file fact-channel shape as the dataset bindings above.
+        _insert_per_file_child(
+            cursor,
+            parsed_files,
+            path_to_file_id,
+            repo_name,
+            commit_hash,
+            "record_data",
+            (
+                "section",
+                "fd_name",
+                "ordinal",
+                "parent_ordinal",
+                "level_number",
+                "item_name",
+                "pic",
+                "usage",
+                "occurs_min",
+                "occurs_max",
+                "occurs_depending_on",
+                "redefines",
+                "value_literal",
+                "line_number",
+            ),
+            "record_layouts",
+            lambda it: (
+                it.get("section"),
+                it.get("fd_name"),
+                int(it.get("ordinal", 0) or 0),
+                it.get("parent_ordinal"),
+                int(it.get("level", 0) or 0),
+                it.get("name"),
+                it.get("pic"),
+                it.get("usage"),
+                it.get("occurs_min"),
+                it.get("occurs_max"),
+                it.get("occurs_depending_on"),
+                it.get("redefines"),
+                it.get("value"),
+                int(it.get("line", 0) or 0),
+            ),
+        )
 
         # 3. REPO DATA INSERTION
         class_start_idx = self.SIGNAL_SCHEMA.index("class_start") if "class_start" in self.SIGNAL_SCHEMA else -1
