@@ -30,39 +30,35 @@ DOCKERFILE_RULES = LANGUAGE_DEFINITIONS["dockerfile"]["rules"]
 _DOCKERFILE_DEEP_CASES = [
     # --- branch ---
     ("branch", "RUN command1 \\\n && command2", "ENV MY_VAR=iffy"),
-    ("branch", "RUN if [ -z \"$foo\" ]; then \\", "RUN echo diff"),
-    ("branch", "RUN while true; do sleep 1; done", "LABEL specific=\"value\""),
+    ("branch", 'RUN if [ -z "$foo" ]; then \\', "RUN echo diff"),
+    ("branch", "RUN while true; do sleep 1; done", 'LABEL specific="value"'),
     ("branch", "RUN command || exit 1", "RUN echo '|'"),
-    ("branch", "RUN case \"$1\" in start) ;; esac", "ENV casey=1"),
-
+    ("branch", 'RUN case "$1" in start) ;; esac', "ENV casey=1"),
     # --- args ---
     ("args", "ARG VERSION=latest", "ENV ARG=1"),
     ("args", "ARG \\\n NAME=value", "RUN echo ARG"),
     ("args", "  arg   foo", "ARG"),  # ARG with no name is invalid/should not match
     ("args", "ARG\t_my_arg", "ARGH=1"),
     ("args", "ARG\\\nNAME", "RUN ARG=1"),
-
     # --- func_start ---
-    ("func_start", "CMD[\"executable\"]", "FROM ubuntu"),
+    ("func_start", 'CMD["executable"]', "FROM ubuntu"),
     ("func_start", "RUN\\\n apt-get update", "RUNNING_CMD=yes"),
-    ("func_start", "ENTRYPOINT \\\n [\"/bin/sh\"]", "# RUN apt-get"),
+    ("func_start", 'ENTRYPOINT \\\n ["/bin/sh"]', "# RUN apt-get"),
     ("func_start", "HEALTHCHECK --interval=5m CMD curl", "RUN=foo"),
-    ("func_start", "  cMd [\"executable\"]", "FROM\\\nubuntu"),
-
+    ("func_start", '  cMd ["executable"]', "FROM\\\nubuntu"),
     # --- class_start ---
     ("class_start", "FROM ubuntu", "FROM_IMAGE=ubuntu"),
     ("class_start", "FROM \\\n ubuntu", "RUN echo FROM"),
     ("class_start", "FROM\\\nscratch", "# FROM ubuntu"),
     ("class_start", "  from   ubuntu", "FROM"),
     ("class_start", "FROM --platform=linux/amd64 ubuntu", "ENFROM=1"),
-
     # --- structural_boundaries ---
     ("structural_boundaries", "WORKDIR /app", "RUN echo WORKDIR"),
-    ("structural_boundaries", "USER root", "CMD [\"USER\", \"root\"]"),
-    ("structural_boundaries", "VOLUME [\"/data\"]", "ENV VOLUME=1"),
+    ("structural_boundaries", "USER root", 'CMD ["USER", "root"]'),
+    ("structural_boundaries", 'VOLUME ["/data"]', "ENV VOLUME=1"),
     ("structural_boundaries", "STOPSIGNAL SIGKILL", "RUN STOPSIGNAL=1"),
-    ("structural_boundaries", "SHELL [\"/bin/bash\"]", "RUN SHELL=1"),
-    ("structural_boundaries", "LABEL version=\"1.0\"", "RUN LABEL=1"),
+    ("structural_boundaries", 'SHELL ["/bin/bash"]', "RUN SHELL=1"),
+    ("structural_boundaries", 'LABEL version="1.0"', "RUN LABEL=1"),
 ]
 
 
@@ -80,9 +76,9 @@ _DOCKERFILE_SIMPLE_CASES = [
     ("high_risk_execution", "RUN rm -rf /", "RUN rm -rf /app/tmp"),
     ("io", "COPY . .", "WORKDIR /app"),
     ("api", "EXPOSE 8080", "WORKDIR /app"),
-    ("state_mutation", "ENV NODE_ENV production", "ARG NODE_ENV"),
+    ("state_mutation", "RUN export NODE_ENV=production", "ENV NODE_ENV production"),  # #2765: ENV is `globals`
     ("dead_code", "# RUN old-command", "# just a note"),
-    ("doc", 'LABEL maintainer="dev@example.com"', "LABEL env=prod"),
+    ("doc", 'LABEL description="dev image"', "LABEL env=prod"),  # #2882 C4: maintainer= is ownership's alone
     ("test", "RUN pytest tests/", "RUN echo done"),
     # --- PHASE 3 ---
     ("concurrency", "RUN make -j4", "RUN echo hi"),
@@ -116,7 +112,7 @@ _DOCKERFILE_SIMPLE_CASES = [
     ("sync_locks", "RUN flock /var/lock/mylock.lock echo done", "RUN echo done"),
     ("immutability_locks", "FROM alpine@sha256:" + "a" * 64, "FROM node:latest"),
     ("cleanup", "RUN apt-get clean", "RUN apt-get update"),
-    ("encapsulation", "FROM golang:1.22 AS builder", "FROM golang:1.22"),
+    # encapsulation is None since #2766 -- a build-stage alias is not name visibility.
     ("listeners", "EXPOSE 443", "WORKDIR /app"),
     ("test_skip", "RUN npm test || true", "RUN npm test"),
     # --- HYBRID ---
@@ -537,24 +533,22 @@ def test_dockerfile_spec_exposure_nested_bracket_no_functional_bug():
     assert len(pattern.findall(nested)) == 1
 
 
-def test_dockerfile_globals_and_state_mutation_intentional_double_classification():
+def test_dockerfile_env_is_globals_not_state_mutation_2765():
     """
-    Ambiguity sweep: `globals` and `state_mutation` both fire on the same
-    `ENV NAME value` line (both anchor `^[ \\t]*ENV[ \\t]+[a-zA-Z0-9_]+`).
-    Confirmed genuine, intentional double-classification, not a bug: an
-    `ENV` instruction is simultaneously a global-state declaration
-    (globals) AND a state mutation that permanently alters the image layer
-    (state_mutation) -- both are structurally true at once, the same
-    accepted double-classification shape used elsewhere in this codebase
-    (e.g. JS's arrow-function call matching both comprehensions and
-    closures).
+    #2765 (state_mutation contract, count contract corollary 4): `ENV NAME value`
+    declares a build-time global and is the `globals` rule's token; it is not
+    also a write. This reverses the earlier "intentional double-classification"
+    reading, which charged every Dockerfile one state_mutation per ENV line and
+    put the corpus's a.dockerfile at 2 against a planted 0. What a Dockerfile
+    writes is the shell payload of a RUN step (`export X=`).
     """
     globals_ = DOCKERFILE_RULES["globals"]
     state_mutation = DOCKERFILE_RULES["state_mutation"]
 
     env_line = "ENV APP_ENV=production"
     assert globals_.search(env_line)
-    assert state_mutation.search(env_line)
+    assert not state_mutation.search(env_line)
+    assert state_mutation.search("RUN export COUNTER=1")
 
     # ARG is deliberately excluded from both (build-time only, not a persisted global).
     arg_line = "ARG APP_ENV=production"
@@ -631,3 +625,53 @@ def test_dockerfile_updated_signatures_redos_immunity():
 
     # class_start: test long strings of continuations
     assert_redos_immune(class_start, "FROM " + "\\\n" * 20000, timeout_sec=3.0)
+
+
+def test_dockerfile_io_cleanup_ownership_regression():
+    """#2675: `io`'s bare package-manager names also matched their own
+    cleanup subcommands (`apt-get clean`, `yum clean all`), which touch no
+    network and no external file -- `cleanup` already owns those exact
+    phrases. Now requires a non-clean subcommand. probe_cleanup in
+    c.dockerfile (`apt-get clean` + `yum clean all`) contributed the entire
+    +2 over the planted value.
+    """
+    io = DOCKERFILE_RULES["io"]
+    cleanup = DOCKERFILE_RULES["cleanup"]
+
+    assert not io.search("RUN apt-get clean"), "apt-get clean must NOT count as io"
+    assert cleanup.search("RUN apt-get clean"), "apt-get clean must still count as cleanup"
+
+    assert not io.search("RUN yum clean all"), "yum clean all must NOT count as io"
+    assert cleanup.search("RUN yum clean all"), "yum clean all must still count as cleanup"
+
+    assert not io.search("RUN apk cache clean"), "apk cache clean must NOT count as io"
+    assert cleanup.search("RUN apk cache clean"), "apk cache clean must still count as cleanup"
+
+    # legitimate io tokens (real installs/fetches) must still be counted
+    assert io.search("RUN wget https://example.com/file"), "wget must still count as io"
+    assert io.search("RUN curl -O https://example.com/file"), "curl must still count as io"
+    assert io.search("COPY . /app"), "COPY must still count as io"
+    assert io.search("ADD . /app"), "ADD must still count as io"
+    assert io.search("RUN git clone https://example.com/repo"), "git clone must still count as io"
+    assert io.search("RUN pip install requests"), "pip install must still count as io"
+    assert io.search("RUN npm install"), "npm install must still count as io"
+
+
+_DOCKERFILE_IO_INSTALL_CLEAN_ROWS = [
+    ("RUN apt-get update && apt-get install -y git", 2),
+    ("RUN apk add --no-cache curl", 2),
+    ("RUN yum install -y vim", 1),
+    ("RUN dnf install -y vim", 1),
+    ("RUN apt-get clean", 0),
+    ("RUN yum clean all", 0),
+    ("RUN apk cache clean", 0),
+]
+
+
+@pytest.mark.parametrize("payload,expected_count", _DOCKERFILE_IO_INSTALL_CLEAN_ROWS)
+def test_dockerfile_io_install_clean_row_counts_regression(payload, expected_count):
+    """#2675's verification table: install rows keep their full count,
+    clean rows drop to zero once `io` requires a non-clean subcommand.
+    """
+    io = DOCKERFILE_RULES["io"]
+    assert len(io.findall(payload)) == expected_count, f"{payload!r} expected {expected_count} io matches"

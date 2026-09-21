@@ -57,9 +57,14 @@ DEFINITION: dict[str, Any] = {
         # non-word, so the leading \b could never match once `@` was
         # preceded by anything else non-word (a space, line start) --
         # meaning these 3 alternatives never actually matched real code.
-        "branch": re.compile(
-            r"\b(if|else|switch|case|default|for|while|do|break|continue|return|goto)\b|@(try|catch|finally)\b|&&|\|\||\?"
-        ),
+        # #2545: `return` removed from branch -- was phantom-counting every early-return
+        # method as a branch with no real decision point. C, objc's own base language,
+        # doesn't count `return` either (though it does count `goto`, kept here to match).
+        # `return` moves to `structural_boundaries` below instead, matching the convention
+        # java/c/rust/go/csharp/kotlin/apex/powershell/zig all use -- not just deleted,
+        # since objc had no other rule tracking it. Corpus impact: objective-c branch 18
+        # (planted 3, +260%) -> exact.
+        "branch": re.compile(r"\b(if|else|switch|case|default|for|while|do)\b|&&|\|\||\?"),
         # 2. args: Parameters / Coupling. Captures method parameters (colons), C-style args, and Blocks (^).
         "args": re.compile(
             # =====================================================================
@@ -123,7 +128,64 @@ DEFINITION: dict[str, Any] = {
             # documented, pipeline-shielded limitation, the same shape as
             # the pre-existing comment/string-lookalike one just below in
             # this same file's test suite.
-            r"((?:(?:[a-zA-Z_]\w{0,80}[ \t\n]*)?:\s*\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\)\s*[a-zA-Z_]\w*[ \t\n]*|[a-zA-Z_]\w{0,80}[ \t\n]*:\s*[a-zA-Z_]\w*[ \t\n]*)+)|\^[ \t]*([a-zA-Z_]\w*\s*)?(\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\))|(?!(?:if|for|while|switch|catch|return|sizeof)\b)\b([a-zA-Z_]\w*)[ \t\n]*(\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\))[ \t\n]*(?:\{|;)",
+            #
+            # #2773: both arms were counting CALL SITES, not declared
+            # parameters -- `args` counts the parameters a callable
+            # DECLARES (docs/args_rule_contract.md), and a call consumes a
+            # parameter surface rather than publishing one. Measured over
+            # the code stream of language-crucible/data/objective-c
+            # (worldwideweb), classified against a tree-sitter `objc`
+            # parse of the same stream: 378 hits, only 101 of them real
+            # declarations (26.7% precision).
+            #   * The colon-selector arm matched every Objective-C MESSAGE
+            #     SEND -- `[store setVersion:ANCHOR_CURRENT_VERSION]`,
+            #     `[list objectAt:i]` -- because a send is lexically
+            #     identical to the untyped `label:name` parameter shape
+            #     (#1335). 120 of the 277 false hits, plus 3 ternaries
+            #     (`cond ? MIN_HEIGHT : maxY`) and both `@interface
+            #     Anchor:Object` superclass colons. Fixed by requiring the
+            #     span to lead with a real method-declaration head,
+            #     `^[-+]` plus an optional return type -- the one context
+            #     a keyword-message SIGNATURE can appear in and a send
+            #     never can (a send always leads with `[`). This also
+            #     closes the string-literal hole the issue asked for a
+            #     negative test on: prism strips comments, but not
+            #     strings, so `@"status: ok"` used to be an `args` hit.
+            #   * The plain C arm accepted ANY `name(...)` followed by
+            #     `{`/`;`, so every bare call statement -- `free(conn);`,
+            #     `abort();`, `printf("...", x);` -- scored an argument.
+            #     146 of the false hits. Fixed by demanding the same
+            #     structural proof c/cpp's own args rules demand: the
+            #     parameter list must OPEN with a type token, and (unlike
+            #     c/cpp, which stop at the type) that type must be
+            #     followed by a parameter NAME or a `*`/`&` -- without the
+            #     name requirement `StrAllocCopy(Address, tag);` still
+            #     read as typed, since `Address` satisfies the PascalCase
+            #     typedef fallback all three rules share.
+            # After both: 378 -> 101 hits, 100 of them real declarations
+            # (the 101st is a method definition tree-sitter itself
+            # mis-parses). The only real declaration dropped is
+            # `page_width()` -- an empty parameter list, i.e. no parameter
+            # surface to count, exactly as c/cpp already treat it.
+            # arm 1 -- a keyword-message method SIGNATURE: the `-`/`+` lead (with
+            # func_start's own optional macro/`__attribute__` prefix and an optional
+            # `(return type)`) is what separates a declaration from a message send.
+            r"^[ \t]*(?:[A-Z_0-9]+[ \t]+|__attribute__[ \t]*\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\)[ \t]+)*"
+            r"[-+][ \t\n]*(?:\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\)[ \t\n]*)?"
+            r"((?:(?:[a-zA-Z_]\w{0,80}[ \t\n]*)?:\s*\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\)\s*[a-zA-Z_]\w*[ \t\n]*"
+            r"|[a-zA-Z_]\w{0,80}[ \t\n]*:\s*[a-zA-Z_]\w*[ \t\n]*)+)|"
+            # arm 2 -- a block literal's own parameter list, `^(int x){ ... }`.
+            r"\^[ \t]*([a-zA-Z_]\w*\s*)?(\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\))|"
+            # arm 3 -- a plain C function declaration/definition. The parameter list
+            # must open with a type token AND that token must be followed by a
+            # parameter name or a `*`/`&`, which is what makes it a declaration
+            # rather than a call whose first argument happens to be capitalised.
+            r"(?!(?:if|for|while|switch|catch|return|sizeof)\b)\b([a-zA-Z_]\w*)[ \t\n]*"
+            r"(\(\s*(?:(?:const|volatile|__strong|__weak|__unsafe_unretained|_Nullable|_Nonnull)\s+)*"
+            r"(?:void\s*\)|(?:int|char|void|float|double|long|short|unsigned|signed|struct|enum|union"
+            r"|id|BOOL|SEL|IMP|Class|instancetype|_*[A-Z]\w*|[a-z_]\w*_t|[a-z_]\w*)\b"
+            r"[ \t\n]*[*&]*[ \t\n]*[a-zA-Z_]\w*(?:[^)(]|\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\))*\)))"
+            r"[ \t\n]*(?:\{|;)",
             re.M,
         ),
         # Which `args` capture-group index represents an objc
@@ -137,8 +199,11 @@ DEFINITION: dict[str, Any] = {
         # 3. linear: Sequential I/O & Network Boundaries. Structural boundaries defining interface, implementation, and memory types.
         # BUG FIX: the 8 @-prefixed alternatives never matched -- same
         # \b-before-@ shape as branch's fix above.
+        # #2545: `return` added here (moved out of `branch` above) -- matches the
+        # java/c/rust/go/csharp/kotlin/apex/powershell/zig convention of tracking `return`
+        # as a structural boundary, not a branch.
         "structural_boundaries": re.compile(
-            r"@(interface|implementation|protocol|end|synthesize|dynamic|class|import)\b|\b(typedef|struct|enum|union|__block|__weak|__strong)\b"
+            r"@(interface|implementation|protocol|end|synthesize|dynamic|class|import)\b|\b(typedef|struct|enum|union|__block|__weak|__strong|return|break|continue|goto)\b"
         ),
         # 4. func_start: Executable Logic Anchors. Anchors executable logic.
         # The Critical Fix: Compiled with re.M and optional return types for TBL / NeXTSTEP syntax
@@ -159,7 +224,7 @@ DEFINITION: dict[str, Any] = {
         # (`extern void foo(T x);`, whose leading token is always a type/modifier, never a
         # keyword) are unaffected.
         "func_start": re.compile(
-            r"^[ \t]*(?:[A-Z_0-9]+\s+|__attribute__\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s+)*[-+][ \t\n]*(?:\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\)[ \t\n]*|(?:[a-zA-Z_]\w*[ \t\n]+){1,3})?([a-zA-Z_]\w*)(?=[ \t\n]*(?:__attribute__\s*\([^()]*(?:\([^()]*\)[^()]*)*\)|[A-Z_0-9]+(?:\([^)]*\))?)*[ \t\n]*[:\{;]|$)|"
+            r"^[ \t]*(?:[A-Z_0-9]+\s+|__attribute__\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s+)*[-+][ \t\n]*(?:\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\)[ \t\n]*|(?:[a-zA-Z_]\w*[ \t\n]+){1,3})?([a-zA-Z_]\w*)(?=[ \t\n]*(?:__attribute__\s*\([^()]*(?:\([^()]*\)[^()]*)*\)|\([^)]*\)|[A-Z_0-9])*[ \t\n]*[:\{;]|$)|"
             r"^[ \t]*(?:(?:static|inline|extern|__attribute__\s*\([^()]*(?:\([^()]*\)[^()]*)*\)|template\s*<[^>]*>)[ \t\n]+)*"
             r"(?!(?:if|for|while|switch|return|else|case|default|do|break|continue|goto|sizeof|catch)\b)"
             r"(?:(?:\b[a-zA-Z_]\w*\b|extern\s+\"C\")[ \t\n]*(?:\*[ \t\n]*)*)+([a-zA-Z_]\w*)(?=[ \t\n]*\()",
@@ -174,9 +239,8 @@ DEFINITION: dict[str, Any] = {
         # 6. safety: Defensive Programming. ARC memory qualifiers and Cocoa/NeXT Assertions.
         # BUG FIX: @try/@catch/@finally never matched -- same \b-before-@
         # shape as branch's fix above.
-        "safety": re.compile(
-            r"@(try|catch|finally)\b|\b(__weak|__strong|__auto_type|NSAssert|NSParameterAssert|NSError|nil|Nil)\b"
-        ),
+        # C4: bare nil is every null literal. C1: NSError is a type name. ARC qualifiers stay: zeroing weak refs are a runtime crash-prevention mechanism (C5 note).
+        "safety": re.compile(r"@(try|catch|finally)\b|\b(__weak|__strong|__auto_type|NSAssert|NSParameterAssert)\b"),
         # 7. safety_neg: Safety Bypasses. Bypassing ARC, raw void pointers, and dangerous dynamic selectors.
         # BUG FIX: `void\s*\*` (trailing \b after a literal `*`) and
         # `performSelector:` (trailing \b after a literal `:`) only
@@ -190,21 +254,68 @@ DEFINITION: dict[str, Any] = {
             r"\b(__unsafe_unretained|unsafe_unretained|id)\b|void\s*\*|performSelector:|!\s*[;,\]\)\.]|#pragma\s+clang\s+diagnostic\s+ignored"
         ),
         # 8. danger: High-Risk Execution. Process killers.
-        "high_risk_execution": re.compile(r"\b(abort|exit)\b"),
+        # #2878 contract C1b: system( and NSTask run a program (c parity; call form, C2).
+        "high_risk_execution": re.compile(r"\b(abort|exit)\b|\bsystem\s*\(|\bNSTask\b"),
         # 9. io: I/O & Network Boundaries. Disk, Network, and URL fetching (Includes NeXTSTEP NX prefixes & TBL WWW wrappers).
         "io": re.compile(
             r"\b(NSFileHandle|NSFileManager|NSURLSession|NSURLConnection|NSData|NXNetPath|NXSocket|NXStream|NXFile|HTLoad|HyperText|HTGet|socket|connect|send|recv)\b"
         ),
         # 10. api: Public Surface Area. Exposed interface/C-level exports and Interface Builder hooks.
-        "api": re.compile(r"\b(FOUNDATION_EXPORT|UIKIT_EXTERN|OBJC_EXPORT|extern)\b|@(property)\b|IBOutlet|IBAction"),
+        # BUG FIX #2730 (api contract): Objective-C's primary way of making a
+        # method visible outside its file is declaring it in an `@interface`
+        # -- a `-`/`+` method line terminated by `;` rather than a `{` body.
+        # None of the C-level export macros above can see it, so a header's
+        # entire published method list measured 0. The type-cast shape
+        # (`\([ \t]*[A-Za-z_]...\)` then an identifier) is required so a
+        # wrapped arithmetic continuation line (`+ ((slot/10)%3)* 40;`) cannot
+        # match. Needs re.M for the new `^` anchor (Rule 13).
+        # #2940 (contract corollary 3): the method DEFINITION counts too -- the
+        # same line shape ending in `{` instead of `;`. Objective-C has no
+        # method-level visibility at all, so every method a file implements is
+        # dispatchable from outside it: the definition is the public-by-default
+        # marker exactly as C's column-0 function declarator (#2907), matlab's
+        # column-0 `function` and abap's `FORM` are. A file carrying both the
+        # `@interface` declaration and the `@implementation` definition of one
+        # method counts it twice -- the matlab order of approximation, accepted
+        # by the contract; the per-unit `is_public` name-set union (#2908)
+        # dedupes at the unit level. Same-line brace only, mirroring the
+        # same-line `;` the declaration form already requires.
+        "api": re.compile(
+            r"\b(FOUNDATION_EXPORT|UIKIT_EXTERN|OBJC_EXPORT|extern)\b|@(property)\b|IBOutlet|IBAction|"
+            r"^[ \t]*[-+][ \t]*\([ \t]*[A-Za-z_][\w \t*<>,]{0,120}\)[ \t]*[A-Za-z_]\w*[^;{\n]{0,300}[;{]",
+            re.M,
+        ),
         # 11. flux: State Mutation. State mutation (Property setters and raw assignments).
-        "state_mutation": re.compile(r"\b(?:self\.)?[a-zA-Z_]\w*[ \t]*=|\[self\s+set[A-Z]\w*:|(?:\+\+|--)"),
+        "state_mutation": re.compile(
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            r"(?:^|[;{}(),])[ \t]*\**[A-Za-z_]\w*(?:(?:\.|->)[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*[ \t]*(?:[-+*/%&|^]|<<|>>)?=(?![=])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_(*]"
+            r"|\[\s*(?:self|_?[a-zA-Z]\w*)\s+set[A-Z]\w*:",
+            re.M,
+        ),
         # 12. dead_code (Commented Logic / Deprecated Trails) Commented out structural code.
         "dead_code": re.compile(
             r"//[ \t]*(?:@interface|@implementation|\[|if|NSLog|- \()|/\*[ \t]*(?:@interface|@implementation|\[|if|NSLog|- \()"
         ),
         # 13. doc: Structured Documentation. Structured documentation (Includes NeXT style).
-        "doc": re.compile(r"/\*\*|///|/\*!|@param|@return|@brief|@discussion"),
+        # BUG FIX #2672: `/**`/`/*!`, `///` and the doc tags (`@param`,
+        # `@brief`, ...) were independent alternatives, so one doc comment
+        # counted doc proportional to its tag density. Block form first for
+        # both the standard and NeXT-style (`/*!`) openers (bounded
+        # 0,15000 chars non-greedy span, the #2658 shape), then the
+        # line-marker form so `/// @param x` is one hit per line, not two;
+        # bare tags stay last so a tag outside any doc comment still
+        # counts. No corpus movement -- the rosetta corpus only plants one
+        # of {marker, tag} for this language.
+        "doc": re.compile(
+            r"/\*\*[\s\S]{0,15000}?\*/|/\*![\s\S]{0,15000}?\*/|///[^\n]*|@param|@return|@brief|@discussion"
+        ),
         # 14. test: Testing & Assertions. Unit testing framework markers (OCUnit/XCTest).
         "test": re.compile(
             r"\b(XCTest|XCTestCase|XCTAssert[A-Za-z]*|SenTestCase|STAssert[A-Za-z]*)\b|\b(?:setUp|tearDown)\s*\("
@@ -229,7 +340,11 @@ DEFINITION: dict[str, Any] = {
         # match once flanked by anything else non-word (a space,
         # semicolon, line start). Split them out of the shared wrapper.
         "globals": re.compile(
-            r"\b(extern|NSUserDefaults|NXDefaults|NXApp)\b|\[UIApplication\s+sharedApplication\]|\[NSWorkspace\s+sharedWorkspace\]"
+            # #2858 contract: `extern`/`static` on a data declaration is a
+            # program-lifetime binding (`static NSString *const kKey = @"k";`);
+            # on a prototype it is linkage, not state (corollary 4).
+            r"\b(?:extern(?![ \t]*\")|static)\b(?![^;=\n({]{0,200}\()"
+            r"|\b(?:NSUserDefaults|NXDefaults|NXApp)\b|\[UIApplication\s+sharedApplication\]|\[NSWorkspace\s+sharedWorkspace\]"
         ),
         # 19. decorators: Decorators / Annotations. Attributes and Property decorators.
         "decorators": re.compile(r"\b__attribute__\s*\(\([^)]*\)\)|@property\s*\([^)]+\)"),
@@ -263,7 +378,11 @@ DEFINITION: dict[str, Any] = {
         # BUG FIX: `@author` (leading \b before non-word `@`) and
         # `Author:` (trailing \b after non-word `:`) never matched --
         # same shape as branch's @try fix above.
-        "ownership": re.compile(r"\b(?:Created by|Copyright|Tim Berners-Lee)\b|@author|\bAuthor:", re.I),
+        # #2882 contract: C1 a person's name (`Tim Berners-Lee`) is not a rule; C2 `Copyright` out; Xcode's dated `Created by X on <date>` is the colon-less form kept
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|\\author[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*//+[ \t]*Created[ \t]+by[ \t]+(\S[^\n]*?)[ \t]+on[ \t]+\d[^\n]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         "planned_debt": GLOBAL_PLANNED_DEBT,
         "fragile_debt": GLOBAL_FRAGILE_DEBT,
@@ -320,7 +439,9 @@ DEFINITION: dict[str, Any] = {
         # 45. immutability_locks (Immutability Constraints) Immutability.
         "immutability_locks": re.compile(r"\b(const|readonly|immutable)\b"),
         # 46. cleanup (Resource Cleanup / Teardown) Resource release (Crucial for MRC NeXT era).
-        "cleanup": re.compile(r"\b(dealloc|release|autorelease|free|NX_FREE)\b"),
+        "cleanup": re.compile(
+            r"(?<![-+] )(?<!\))\b(dealloc|release|autorelease|free|NX_FREE)\b"
+        ),  # #2888 C1: `- free` and `- (void)free` declare; `[super free]` and free(x) are sites
         # 47. encapsulation Hiding logic from the application.
         # BUG FIX: the leading \b before `@` never matched (same shape as
         # branch's fix above). The trailing \b is fine as-is (each
@@ -335,6 +456,12 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"\b(XCTSkip|xit|xdescribe)\b"),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Objective-C Specifics) ---
+        # auth_middleware (#3004): LocalAuthentication's policy evaluation
+        # (selector-anchored) and the Authorization Services calls.
+        "auth_middleware": re.compile(
+            r"\b(?:canE|e)valuatePolicy:"
+            r"|\bAuthorization(?:Create|CopyRights)[ \t]*\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(NSJSONSerialization|NSKeyedUnarchiver|NSKeyedArchiver|NSXMLParser|NSPropertyListSerialization)\b"
         ),
@@ -343,5 +470,9 @@ DEFINITION: dict[str, Any] = {
             r"\b(NSDate|NSDateFormatter|NSTimer|CFAbsoluteTimeGetCurrent|NSDateComponents)\b"
         ),
         "ipc_rpc_bridges": re.compile(r"\b(NSXPCConnection|NSTask|NSPipe|NSURLConnection|NSURLSession|NSMachPort)\b"),
+        # system_config_mutation (#3084): contract-level absence. no dedicated
+        # config-mutation form -- same file-I/O reasoning as c; NSUserDefaults
+        # is the app's own state.
+        "system_config_mutation": None,
     },
 }

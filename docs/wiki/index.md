@@ -29,8 +29,9 @@ If you are tasked with breaking apart 40-year-old IBM monoliths without using an
 If you want to understand the mathematics driving the engine and the empirical proofs that validate our AST-free approach:
 * 🔬 [The blAST Paradigm (Heuristics vs. ASTs vs. LLMs)](01-03-the-blast-paradigm.md)
 * ⚖️ [Claim 10: The Heuristic vs. AST Paradigm](03-10-claim-10-ast-vs-heuristic-parsing.md)
+* 🔎 [Claim 11: Multi-Signal Language Detection (Inference With Provenance)](03-11-claim-11-multi-signal-detection.md)
 * 🛡️ [Claim 8: Empirical Validation of AST-Free Parsing (The Gauntlets)](03-08-claim-8-empirical-validation-of-ast-free-parsing.md)
-* 📐 [The 13-Point Risk Exposure Equations](08-01-methodology.md)
+* 📐 [The 13-Point Structural Surface Profile](08-01-methodology.md) — formerly "Risk Exposure"; see [the vector reference & validation record](../vectors.md) for why the `risk_` framing was retired
 
 ---
 
@@ -68,11 +69,13 @@ This is a curated subset for first-time visitors, not the complete page list -- 
 * [03-03: Claim 3 - Taxonomy Map](03-03-claim-3-taxonomy-map.md)
 * [03-04: Claim 4 - Comparing Languages](03-04-claim-4-comparing-languages.md)
 * [03-05: Claim 5 - File Archetypes](03-05-claim-5-file-archetypes.md)
+* [03-05b: Composition Archetypes (function → file → repo)](03-05b-composition-archetypes.md)
 * [03-06: Claim 6 - Keyword Fingerprinting](03-06-claim-6-keyword-fingerprinting.md)
 * [03-07: Claim 7 - Doom Comparisons](03-07-claim-7-doom-comparisons.md)
 * [03-08: Claim 8 - AST-Free Empirical Validation](03-08-claim-8-empirical-validation-of-ast-free-parsing.md)
 * [03-09: Claim 9 - Universal Logic Extraction](03-09-claim-9-universal-logic-extraction.md)
 * [03-10: Claim 10 - AST vs Heuristic Paradigm](03-10-claim-10-ast-vs-heuristic-parsing.md)
+* [03-11: Claim 11 - Multi-Signal Language Detection](03-11-claim-11-multi-signal-detection.md)
 * [03-20: Future Outlooks](03-20-future-outlooks.md)
 
 ### Pipeline & Architecture
@@ -120,7 +123,8 @@ This is a curated subset for first-time visitors, not the complete page list -- 
 * [07-11: Sequence Affinity](07-11-sequence-affinity.md)
 * [07-12: Miscellaneous Equations](07-12-misc-equations.md)
 
-### Mathematical Physics (Risk Exposures)
+### Mathematical Physics (Structural Surface Profile)
+*Formerly "Risk Exposures." These 13 per-file vectors measure structural **surface area and activity**, not defect probability — the temporal-crucible validation ([#2982](https://github.com/squid-protocol/gitgalaxy/issues/2982)) found they do not predict defects, so the `risk_` framing was retired ([#2991](https://github.com/squid-protocol/gitgalaxy/issues/2991)). Full reference and evidence: [vectors.md](../vectors.md).*
 * [08-01: Methodology](08-01-methodology.md)
 * [08-02: Sub Equations](08-02-sub-equations.md)
 * [08-03: Transforming Regex Counts](08-03-transforming-regex-counts.md)

@@ -147,8 +147,8 @@ def test_groovy_signature_positive_and_negative(signature, positive, negative):
     assert pattern is not None, f"groovy's {signature!r} rule is unexpectedly None"
     assert pattern.search(positive), f"groovy {signature!r} failed to match its own documented positive case"
     if negative is not None:
-        assert not pattern.search(negative), (
-        )
+        assert not pattern.search(negative), ()
+
 
 _GROOVY_DEEP_CASES = [
     # (signature, positive snippet, text expected to NOT match / None to skip)
@@ -158,28 +158,28 @@ _GROOVY_DEEP_CASES = [
     ("branch", "def a = b ?: c", "String type"),
     ("branch", "switch(x) { case 1: break }", "def list = [1, 2]"),
     ("branch", "for (String s in list) {", "def map = [a: 1]"),
-
     # args: complex generic types, string method names, intermixed annotations
-    ("args", "public static final Map<String, List<Tuple2<Integer, String>>> complexArgMethod(int x, List<String> y) {", "if (Map<String) {"),
-    ("args", "def \"a method with spaces in its name\"(int x) {", "def \"not a method\" = 1"),
+    (
+        "args",
+        "public static final Map<String, List<Tuple2<Integer, String>>> complexArgMethod(int x, List<String> y) {",
+        "if (Map<String) {",
+    ),
+    ("args", 'def "a method with spaces in its name"(int x) {', 'def "not a method" = 1'),
     ("args", "public @CompileStatic final void foo(int x) {", "if (x > 0) {"),
     ("args", "def foo(int x, \n String y) {", "while (x) {"),
-    ("args", "abstract def \"test case\"(String input)", "synchronized(lock) {"),
-
+    ("args", 'abstract def "test case"(String input)', "synchronized(lock) {"),
     # func_start: generics, string names, intermixed annotations
     ("func_start", "public <T extends Number> void process(T t) {", "class List<T> {"),
-    ("func_start", "def \"a method with spaces\"() {", "String x = 1"),
+    ("func_start", 'def "a method with spaces"() {', "String x = 1"),
     ("func_start", "@Test\n@Timeout(value = 1)\ndef testMethod() {", "class Foo {"),
     ("func_start", "public @CompileStatic def myMethod() {", "def var = 1"),
     ("func_start", "abstract Map<String, Integer> calculateTotals(List<Item> items)", "if (items) {"),
-
     # class_start: sealed, non-sealed, intermixed annotations
     ("class_start", "abstract sealed class Shape permits Circle, Square {", "def abstract() {}"),
     ("class_start", "final @CompileStatic class Optimizer {", "def foo() {}"),
     ("class_start", "@Entity\npublic class User {", "def class_name = 1"),
     ("class_start", "public non-sealed class MyClass {", "public void method() {}"),
     ("class_start", "protected @Deprecated abstract sealed class Internal {", "String x = 1"),
-
     # structural_boundaries: includes sealed, permits, non-sealed
     ("structural_boundaries", "sealed class MyClass {", "int x = 1"),
     ("structural_boundaries", "abstract sealed class Shape permits Circle, Square {", "if (Circle) {"),
@@ -187,6 +187,7 @@ _GROOVY_DEEP_CASES = [
     ("structural_boundaries", "package com.example.foo", "int package_name = 1"),
     ("structural_boundaries", "import static org.junit.Assert.*", "int import_value = 2"),
 ]
+
 
 @pytest.mark.parametrize("signature,positive,negative", _GROOVY_DEEP_CASES)
 def test_groovy_signature_deep_positive_and_negative(signature, positive, negative):
@@ -456,14 +457,17 @@ def test_groovy_closures_redos_immunity():
     """
     pattern = GROOVY_RULES["closures"]
 
-    # _best_of_timing (min-of-5) instead of a single perf_counter() sample
-    # per size -- see the explicit_casts test above for why.
-    timings = [_best_of_timing(pattern, "{" + " " * n) for n in (2000, 4000, 8000, 16000, 32000)]
-
     assert_redos_immune(pattern, "{" + " " * 100000, timeout_sec=3.0)
 
-    for earlier, later in zip(timings, timings[1:]):
-        assert later < max(earlier * 2.5, 0.01), f"closures scaling regressed toward O(n^2): {timings}"
+    # #2901: a geometric-scaling loop over
+    #   timings = [_best_of_timing(pattern, ...) for n in (2000 .. 32000)]
+    # used to assert `later < max(earlier * 2.5, 0.01)` here. Removed as
+    # redundant AND unstable: the assert_redos_immune() call above already
+    # pins the same property on the same shipped pattern as an ABSOLUTE
+    # bound, in an isolated process, on a 100k payload -- a strictly
+    # stronger and deterministic check. The ratio form compared sub-100ms
+    # wall-clock samples on shared runners; the comment this replaces
+    # recorded it going red on macos-3.10 under contention.
 
     # Realistic closures must still match after the fix.
     assert pattern.search("list.each { it }")
@@ -491,20 +495,17 @@ def test_groovy_spec_exposure_quadratic_blowup_redos_regression():
     """
     pattern = GROOVY_RULES["spec_exposure"]
 
-    # _best_of_timing (min-of-5) instead of a single perf_counter() sample
-    # per size -- see explicit_casts's own test earlier in this file for
-    # why (this exact test failed in CI this way on macos-3.10 during
-    # #770's PR: [0.0007, 0.0014, 0.0036, 0.0064, 0.0202]s, tripping the
-    # 0.02s floor on the last size by a hair under runner contention).
-    timings = [_best_of_timing(pattern, "[SPEC-" + "1" * n) for n in (2000, 4000, 8000, 16000, 32000)]
-
     assert_redos_immune(pattern, "[SPEC-" + "1" * 100000, timeout_sec=3.0)
 
-    # Generous ceiling (real O(n^2) is ~4x/doubling): absorbs scheduler
-    # noise under a full-suite parallel run while still catching a
-    # regression back to catastrophic backtracking.
-    for earlier, later in zip(timings, timings[1:]):
-        assert later < max(earlier * 3.0, 0.02), f"spec_exposure scaling regressed toward O(n^2): {timings}"
+    # #2901: a geometric-scaling loop over
+    #   timings = [_best_of_timing(pattern, ...) for n in (2000 .. 32000)]
+    # used to assert `later < max(earlier * 3.0, 0.02)` here. Removed as
+    # redundant AND unstable: the assert_redos_immune() call above already
+    # pins the same property on the same shipped pattern as an ABSOLUTE
+    # bound, in an isolated process, on a 100k payload -- a strictly
+    # stronger and deterministic check. The ratio form compared sub-100ms
+    # wall-clock samples on shared runners; the comment this replaces
+    # recorded it going red on macos-3.10 under contention.
 
     assert pattern.search("[SPEC-123] audit trail"), "realistic spec tag regressed"
     assert pattern.search("[audit] traceability tag"), "realistic audit tag regressed"
@@ -711,7 +712,7 @@ def test_groovy_func_start_markup_builder_dsl_call_false_positive_regression():
         'button(name: "clear", type: "submit", class: "jenkins-button") {',
         "timeout(time: 6, unit: 'HOURS') {",
         "withChecks(name: 'Tests', includeStage: true) {",
-        "a(href: \"newJob\", class: \"content-block__link\") {",
+        'a(href: "newJob", class: "content-block__link") {',
     ]
     for snippet in dsl_builder_calls:
         assert not func_start.search(snippet), f"func_start incorrectly matched a DSL builder call: {snippet!r}"
@@ -725,3 +726,164 @@ def test_groovy_func_start_markup_builder_dsl_call_false_positive_regression():
         "func_start should still match a bare constructor whose default value is a ternary "
         "(space-before-colon), only the tight `key:` named-arg shape is excluded"
     )
+
+
+def test_groovy_func_start_paren_less_builder_call_false_positive_regression():
+    """
+    #2558: found while investigating #2530 -- once that fix correctly excluded
+    `button(...) { ... }` as a DSL builder call, `raw _("Dismiss")` (nested inside
+    it) was no longer absorbed inside the (incorrectly detected) enclosing match's
+    span, so it surfaced as its own top-level func_start hit.
+
+    `raw _("Dismiss")` is Groovy's optional-parens sugar for `raw(_("Dismiss"))` --
+    a paren-less call to a builder method (`raw`), passing the result of `_(...)`
+    (the standard Jenkins/Groovy-view l10n idiom for a resource-bundle message
+    lookup) -- not a declaration. Branch 1 (the >=1-prefix-token branch) treated
+    the bare identifier `raw` as a plausible type/modifier prefix, then captured
+    `_` as the "function name" since `_(` immediately satisfied branch 1's lenient
+    lookahead (unlike branch 2, branch 1 requires neither a matching close-paren
+    nor a trailing `{`).
+
+    Fix: a real declaration is never named the single character `_` (that name is
+    reserved, in practice, for this exact l10n call idiom), so `_` was added to
+    branch 1's existing name-exclusion lookahead -- same reasoning already used to
+    exclude "def" as a bogus captured name. Confirmed via a full corpus scan
+    (language-crucible groovy/, 305 files) that this removes exactly this shape
+    (3 occurrences across 3 jenkins_view_groovy/ files, including this issue's own
+    file) and nothing else -- zero matches added or removed anywhere in the rest
+    of the corpus.
+    """
+    func_start = GROOVY_RULES["func_start"]
+
+    paren_less_builder_calls = [
+        'raw _("Dismiss")',
+        'p _("blurb")',
+        'h1 _("Title")',
+    ]
+    for snippet in paren_less_builder_calls:
+        assert not func_start.search(snippet), (
+            f"func_start incorrectly matched a paren-less builder call as a declaration: {snippet!r}"
+        )
+
+    # The exact corpus shape: nested inside a builder block, on its own line.
+    nested_in_builder_block = 'button(name: "clear", type: "submit") {\n    raw _("Dismiss")\n}'
+    for match in func_start.finditer(nested_in_builder_block):
+        assert match.group(1) != "_" and match.group(2) != "_", (
+            f"func_start still captured '_' as a function name inside a builder block: {match.group(0)!r}"
+        )
+
+    # Real declarations -- plain, modifier-prefixed, and with generics -- must
+    # still match after the fix.
+    assert func_start.search("def foo(x) { }")
+    match = func_start.search("String bar(int y) { }")
+    assert match and match.group(1) == "bar"
+    match = func_start.search("static void baz() { }")
+    assert match and match.group(1) == "baz"
+    match = func_start.search("public abstract <T extends Number> List<T> process(T t) { }")
+    assert match and match.group(1) == "process"
+
+    # #2530's sibling shape (named-argument-map builder call) must still be
+    # excluded -- this fix must not weaken that one.
+    assert not func_start.search('div(class: "empty-state-block") {')
+    assert not func_start.search('button(name: "clear", type: "submit", class: "jenkins-button") {')
+
+
+def test_groovy_func_start_statement_keyword_as_prefix_false_positive_regression():
+    """
+    #2676: found while gathering evidence for #2558 -- branch 1 (the
+    >=1-prefix-token branch) already excludes statement keywords (`new`,
+    `return`, `throw`, ...) from being captured as the function *name*, but
+    nothing stopped them being consumed as a *prefix token* instead. Since
+    the bare-identifier prefix alternative was unguarded, `return`/`throw`/
+    `new` satisfy the prefix and the *next* identifier becomes the "function
+    name" -- `throw new IllegalArgumentException(msg)` misread as a
+    declaration named `IllegalArgumentException`, `return acceptOrReject(x)`
+    as one named `acceptOrReject`. The paren-less-call-with-`new`-argument
+    shape from #2558 (`specInfo.addInterceptor new I(cfg)`,
+    `addresses new LinkedList()`) is the same mechanism with a non-keyword
+    leading token. Fix: guard the bare-identifier prefix alternative with
+    the same statement-keyword negative lookahead already used for the name
+    capture. Full-corpus scan (language-crucible groovy/, 305 files):
+    968 -> 885 (-83) branch-1 matches, all 83 genuine non-declarations;
+    rosetta groovy func_start stays 13.
+    """
+    func_start = GROOVY_RULES["func_start"]
+
+    statement_keyword_false_positives = [
+        "throw new IllegalArgumentException(msg)",
+        "return acceptOrReject(x)",
+        "specInfo.addInterceptor new I(cfg)",
+        "addresses new LinkedList()",
+    ]
+    for snippet in statement_keyword_false_positives:
+        assert not func_start.search(snippet), (
+            f"func_start incorrectly matched a statement-keyword-as-prefix false positive: {snippet!r}"
+        )
+
+    # Real declarations -- plain, modifier-prefixed, generic-return-typed --
+    # must still match after the fix.
+    assert func_start.search("def foo(x) { }")
+    match = func_start.search("String bar(int y) { }")
+    assert match and match.group(1) == "bar"
+    match = func_start.search("static void baz() { }")
+    assert match and match.group(1) == "baz"
+    match = func_start.search("abstract Map<String, Integer> calculateTotals(List<Item> items)")
+    assert match and match.group(1) == "calculateTotals"
+
+    # #2530's named-argument-map builder call and #2558's paren-less `_(...)`
+    # lookup idiom must stay excluded -- this fix must not weaken either.
+    assert not func_start.search('div(class: "empty-state-block") {')
+    assert not func_start.search('raw _("Dismiss")')
+
+
+def test_groovy_doc_block_counts_once_regression():
+    """
+    #2672: `/\\*\\*` and its tags (`@param`, `@return`, ...) were independent
+    alternatives, so one groovydoc block counted doc=2 -- the #2658 shape.
+    Pair the block into a single bounded (0,15000 chars) non-greedy span so
+    it counts once, regardless of how many tags it carries.
+    """
+    doc = GROOVY_RULES["doc"]
+
+    block = "/**\n * @param argv probe input\n */\n"
+    assert len(doc.findall(block)) == 1, "a single groovydoc block must count once, not once per tag"
+
+    two_blocks = "/**\n * @param argv probe input\n */\ndef f() {}\n/**\n * @return again\n */\n"
+    assert len(doc.findall(two_blocks)) == 2, "two separate groovydoc blocks must still count as 2"
+
+
+def test_groovy_doc_bare_tag_outside_block_still_counts_regression():
+    """#2672: a tag outside any groovydoc block must still count."""
+    doc = GROOVY_RULES["doc"]
+    assert doc.search("@deprecated outside any doc block")
+    assert doc.search("@see SomeClass")
+
+
+def test_groovy_doc_block_redos_immune_regression():
+    """#2672 ReDoS probe: an unterminated `/**` must fail closed quickly, not hang."""
+    assert_redos_immune(GROOVY_RULES["doc"], "/**" + "x" * 200000, timeout_sec=3.0)
+
+
+def test_groovy_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    A bare `public` counted the word in prose and string literals.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = GROOVY_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search('public static void setText(Element e, String v) {'), 'public method'
+
+    # Not declarations -- must not match.
+    assert not api.search('log.warn("Could not open the public key ring.")'), 'keyword in a string'
+
+    # ReDoS detonation on a modifier run that never reaches a declaration.
+    assert_redos_immune(api, "public " + "static " * 20000 + "@", timeout_sec=3.0)

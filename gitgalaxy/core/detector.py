@@ -15,12 +15,23 @@
 # galaxyscope:ignore sec_high_risk_execution
 
 import bisect
+import functools
 import logging
 import math
 import re
 import time
 from typing import Any, ClassVar, Optional, TypedDict, cast
 
+from gitgalaxy.core.network_risk_sensor import CASE_INSENSITIVE_IMPORT_LANGS
+from gitgalaxy.core.rule_prefilter import (
+    Gate as RulePrefilterGate,
+)
+from gitgalaxy.core.rule_prefilter import (
+    build_line_gate,
+    derive_literal_gate,
+    fold_haystack,
+    line_gated_finditer,
+)
 from gitgalaxy.core.spatial_correlation import (
     apply_amplifier_correlations,
     apply_dampener_correlations,
@@ -29,7 +40,10 @@ from gitgalaxy.core.spatial_correlation import (
     correlate_signals as _correlate_signals_impl,
 )
 from gitgalaxy.standards.analysis_lens import RECORDING_SCHEMAS
-from gitgalaxy.standards.language_standards import HTML_NONEXECUTABLE_SCRIPT_TAG, LENS_CONFIG
+from gitgalaxy.standards.language_standards import (
+    COMPILED_HANDSHAKE_REGISTRY,
+    HTML_NONEXECUTABLE_SCRIPT_TAG,
+)
 
 HAS_TIKTOKEN = False
 try:
@@ -49,6 +63,12 @@ def get_token_mass(text: str) -> Optional[int]:
     if HAS_TIKTOKEN:
         return len(ENCODER.encode(text, disallowed_special=()))
     return None
+
+
+# The language-agnostic indentation signatures coding_analysis tallies per
+# segment (#3069: compiled once instead of a re-cache lookup per segment).
+_INDENT_TABS_PATTERN = re.compile(r"^\t+(?=\S)", flags=re.MULTILINE)
+_INDENT_SPACES_PATTERN = re.compile(r"^[ ]{2,}(?=\S)", flags=re.MULTILINE)
 
 
 # ==============================================================================
@@ -79,12 +99,49 @@ class _ClassInfoWithBounds(ClassInfo, total=False):
     _end_line: int
 
 
+# #2908 Phase 2, D3: the header-anchor window for `is_documented`. A
+# doc-rule match's END line must land within [start_line - ABOVE, start_line]
+# to count -- widened to [start_line - ABOVE, start_line + BODY] (capped at
+# end_line) for the docstring-position family (see
+# _DOCSTRING_POSITION_LANGS), whose real doc text sits just inside the body
+# rather than immediately above the header. ABOVE=5 tolerates a decorator/
+# annotation stack between a preceding doc comment and the header it
+# documents; BODY=2 tolerates a `def foo(\n    args,\n):` multi-line
+# signature before a below-header docstring opens.
+_DOC_ANCHOR_LINES_ABOVE = 5
+_DOC_ANCHOR_BODY_LINES = 2
+
+# The below-header docstring-position family: exactly the languages
+# `_extract_documentation_tether`'s "Harvest Below" branch scans (detector.py,
+# near its `lang_id in (...)` check). Duplicated as a module constant here
+# (rather than imported from that method) because the tether's own tuple is
+# inline and untouched by #2908 D3 -- the slicer's `docstring` field stays
+# exactly as it was.
+_DOCSTRING_POSITION_LANGS = ("python", "embedded_python", "matlab", "ruby", "elixir")
+
+
 class FunctionNode(TypedDict, total=False):
     """Metadata for a surgically extracted functional logic block."""
 
     name: str
     parent_class_name: str
     usage_status: int
+
+    # #2908 Phase 2: per-unit public/documented flags feeding the
+    # risk_documentation score contract (docs/risk_documentation_contract.md).
+    # is_public is the union of the api-header match (A), the export-list
+    # name set (B), and the Contextual Baseline Fix's healed-orphan credit
+    # (C, applied in galaxyscope.py). is_documented is a header-anchored
+    # `doc`-rule match -- NOT the `docstring` field (D3).
+    is_public: bool
+    is_documented: bool
+
+    # #2691: True for the slicer's synthetic buckets ("__global_context__" and
+    # friends), which hold a file's top-level statements. Their signals are real
+    # and still count at file level; the flag exists so per-function POPULATION
+    # statistics (functions_found, and every average taken over it) can leave out
+    # the entries that are not functions.
+    is_synthetic_slice: bool
 
     # Dual-Key mapping to ensure compatibility with all pipeline versions
     semantic_type: str
@@ -171,6 +228,7 @@ class ScopeParsingRegistry:
         "mysql": "sql",
         "psql": "sql",
         "sqlite": "sql",
+        "db2_sql": "sql",
         "visualbasic": "vb",
         "vba": "vb",
     }
@@ -427,6 +485,35 @@ class ScopeParsingRegistry:
 # needs the same kind of per-language hardening pass
 # epic #813 already did for func_start/args/class_start's OWN extraction
 # gauntlets -- tracked as a follow-up (#1295), not attempted wholesale here.
+# #1295: languages permanently OUT OF SCOPE for named class extraction, whatever
+# their own `class_start` rule matches. Their rule targets something that is not an
+# OOP-shaped entity at all, so the `class_data` schema it would populate
+# (`class_name`, `inheritance_parents`, `method_count`, `state_entanglement` --
+# record_keeper.py) has nowhere to put a real answer: every row would carry
+# `method_count=0`/`inheritance_parents=[]` forever. css's rule matches *selectors*
+# (`.foo`, `#bar`); html's matches a curated risk-relevant TAG list (`form`, `table`,
+# `svg`, custom elements) chosen for attack surface, not for class-likeness. The full
+# reasoning, and the instruction to re-derive from it rather than re-open the question
+# cold, is tests/extraction/how_to_extend_class_start_named_extraction.md's "Decided:
+# not extending css or html" section.
+#
+# This gate exists because the decision was documented but never *enforced*, and so was
+# silently reversed: #1824 (a css `class_start` REGEX improvement) added "css" to the
+# allowlist below five days after the decision was written, with no mention of it, and
+# css's crucible `found_classes` went 0 -> 90 in the same commit. Nothing caught it --
+# the two tools that reconcile class extraction (tree_sitter_accuracy_audit.py,
+# tri_comparison_chart.py) each force css/html's class panels to N/A *for this very
+# decision*, so the one place the reversal would have shown up was already blind to it.
+# Both now import this set instead of keeping their own copy, and
+# `test_class_extraction_scope_decision_is_enforced` fails if a language is ever added
+# to the allowlist without removing it here.
+#
+# The numeric `class_start` SIGNAL is deliberately NOT affected: the decision says so in
+# as many words ("unaffected by this decision and stays exactly as-is for both
+# languages"). css still counts 1 class_start for `.rosetta-risk {`, and that count still
+# feeds the risk equations -- what it must not do is claim a selector is a named class.
+_CLASS_EXTRACTION_OUT_OF_SCOPE_LANGS = frozenset({"css", "html"})
+
 _CLASS_START_NAMED_EXTRACTION_LANGS = frozenset(
     {
         # #1904: ABAP can't go through this epic's own documented
@@ -455,6 +542,11 @@ _CLASS_START_NAMED_EXTRACTION_LANGS = frozenset(
         # list stayed empty regardless of struct_class_start's own accurate count.
         "embedded_python",
         "jcl",
+        # gitgalaxy#3077: bms's class_start regex extracts the DFHMSD mapset
+        # name (`CUSTSET DFHMSD TYPE=...` -> "CUSTSET", TYPE=FINAL excluded) --
+        # the generic fallback regex (class|struct|interface|trait|enum) can
+        # never match HLASM macro syntax, the jcl/dockerfile shape above.
+        "bms",
         # #1858: cobol's own class_start regex already matches PROGRAM-ID/CLASS-ID/
         # INTERFACE-ID/FACTORY/OBJECT correctly and identically to universal-ctags'
         # independent reading (verified directly, e.g. cics-banking-sample-application-
@@ -470,12 +562,25 @@ _CLASS_START_NAMED_EXTRACTION_LANGS = frozenset(
         "cobol",
         "cpp",
         "csharp",
-        "css",
+        # #2511: db2_sql's class_start extracts CREATE TABLE / VIEW / TABLESPACE
+        # names (schema-qualified, optionally double-quoted -- the quote pair is
+        # stripped below, sqlite's shape). Like sqlite/cobol/jcl it is a
+        # tree-sitter-blind language, verified against planted corpus programs
+        # rather than tree_sitter_accuracy_audit.py. Without this entry the
+        # generic fallback regex (class|struct|interface|trait|enum) can never
+        # match CREATE TABLE, so the named class list would stay permanently
+        # empty despite db2_sql's own regex working.
+        "db2_sql",
         "dart",
         "fortran",
         "go",
         "groovy",
         "haskell",
+        # #2503: hlasm's class_start extracts the DSECT name (`WSAREA DSECT`
+        # -> "WSAREA") -- the generic fallback regex (class|struct|interface|
+        # trait|enum) can never match HLASM syntax, the bms/jcl shape above.
+        # Tree-sitter-blind; verified against planted corpus programs.
+        "hlasm",
         "java",
         "javascript",
         "kotlin",
@@ -496,8 +601,16 @@ _CLASS_START_NAMED_EXTRACTION_LANGS = frozenset(
         "objective-c",
         "perl",
         "php",
+        # #2502: pli's class_start is DEFINE STRUCTURE / DEFINE ORDINAL with the name
+        # in group 1; the generic fallback (`class|struct|...`) can never match it.
+        "pli",
         "powershell",
         "python",
+        # #2504: rexx's class_start is ooRexx's `::CLASS name` with the name in
+        # group 1; the generic fallback (`class|struct|...`, lowercase-only, no
+        # `::` anchor) can never match the directive form. Tree-sitter-blind;
+        # verified against planted corpus programs.
+        "rexx",
         "ruby",
         "rust",
         "scala",
@@ -525,6 +638,26 @@ _CLASS_START_NAMED_EXTRACTION_LANGS = frozenset(
         "swift",
         "tcl",
         "typescript",
+        # #2644: yacc gets its own `class_start` (`%union`, a grammar's one real
+        # compound-type declaration) in the SAME change that adds this entry, and
+        # the entry is the load-bearing half. A grammar file's embedded C action
+        # code is full of ordinary `struct foo` declarations, so the legacy
+        # generic fallback (`class|struct|interface|trait|enum`) reads them all as
+        # classes: 17 on config.y and 9 on jailparse.y where the honest answer is
+        # 1 each, and 109 across all four real grammar files in the crucible
+        # corpus (gnucobol's 18k-line parser.y alone contributes 56, with no
+        # `%union` and therefore no real class at all). Wiring the rule without
+        # this entry would make yacc WORSE than the `None` it replaced.
+        #
+        # Verified by direct source cross-check rather than
+        # tree_sitter_accuracy_audit.py: yacc is one of the tree-sitter-blind
+        # languages (no grammar available to this repo's tooling), the same
+        # position abap/cobol/jcl/sqlite are in above. Measured: `%union` fires
+        # exactly once in each grammar that has one (config.y:1, jailparse.y:45),
+        # zero times in the two that don't (gnucobol's parser.y/scanner.l use
+        # `%define api.value.type` instead) -- 100% precision, no false positives,
+        # documented in docs/language_status/yacc.md §8.
+        "yacc",
         "zig",
     }
 )
@@ -737,6 +870,18 @@ _ASSEMBLY_DATA_DIRECTIVE_RE = re.compile(
 # physical line (never unbounded input), so this stays a fixed-cost check.
 _DOCKERFILE_HEREDOC_OPENER_RE = re.compile(r"<<-?[ \t]*(?:['\"]?)([A-Za-z_][A-Za-z0-9_]{0,60})(?:['\"]?)[ \t]*$")
 
+# #2863: matches a COBOL `ENTRY` statement at the start of a physical line,
+# tolerating the fixed-format sequence area (cols 1-6) and indicator column
+# (col 7) the same way cobol's own `func_start`/`class_start` patterns do.
+# A paragraph's alternate entry point is declared by an `ENTRY 'NAME' USING
+# ...` statement on the line(s) AFTER the paragraph label -- the label is
+# terminated by its own period, so the declaration is a separate statement --
+# and this is what lets _mode_a_args_window_end reach it without reaching
+# anything else. Deliberately anchored to the line's first token: a `CALL
+# ... USING` (an invocation, which passes arguments rather than declaring
+# them) can never match, which is the distinction the window exists to keep.
+_COBOL_ENTRY_STATEMENT_RE = re.compile(r"^(?:[0-9a-zA-Z \t]{6}[ \-]?)?[ \t]*ENTRY\b", re.IGNORECASE)
+
 
 def _resolve_class_start_match(match: re.Match, groups_count: int) -> tuple[Optional[int], str, list[str]]:
     """Given a `class_start` regex match and its pattern's total capture-group
@@ -798,6 +943,278 @@ _SYNTHETIC_SATELLITE_NAMES = frozenset(
 )
 _SYNTHETIC_SATELLITE_SUFFIXES = ("_[Truncated]", "_[Unterminated]")
 
+# #2691: the subset of the above that may be excluded from the FUNCTION
+# POPULATION -- the placeholder names no real source language can produce, so a
+# row carrying one is never a function anyone wrote. Deliberately NARROWER than
+# `_is_synthetic_satellite_name`, which is right for the orphan/duplicate checks
+# it was written for (#2547) but too broad to count with:
+#   * "Main" collides with an extremely common REAL function name (C's
+#     `int main()`, Go's `func main()`), so excluding it would hide genuine
+#     over/under-detection of literal main functions -- go's found_functions
+#     dropped 897 -> 896 in tree-sitter accuracy when this fix first used the
+#     broad helper, which is exactly that failure;
+#   * a `_[Truncated]`/`_[Unterminated]` suffix marks a real block that hit EOF
+#     unclosed -- a diagnostic signal about real code, not a placeholder.
+# `tests/tools/tree_sitter_accuracy_audit.py`'s `_SYNTHETIC_GG_FUNC_NAMES` made
+# the identical call for the identical reason; this is that list, in the engine.
+_UNCOUNTABLE_SLICE_NAMES = frozenset({"Anonymous_Block", "__global_context__"})
+
+# #2792: the names Mode E (`_slice_by_terminator`) synthesizes for a statement
+# bucket -- "Declarative_Block" (~5176/5265) and "<IGNITER-KEYWORD>_Statement"
+# (~5235). Applied ONLY to a language that actually slices in mode_e, unlike
+# `_is_synthetic_satellite_name`'s use of the same shape: that helper answers
+# "can this be orphaned or duplicated", where a false positive costs nothing,
+# while this one answers "is this one of the file's functions", where a false
+# positive erases a real declaration from the population. `SELECT_Statement` is
+# a perfectly legal identifier in a language that does not slice this way.
+_MODE_E_SYNTHETIC_NAME = re.compile(r"Declarative_Block|[A-Z0-9]+_Statement")
+
+# #2806: the two invocation models a registry may declare through the
+# top-level `invocation_model` key. `by_name` is the default and needs no declaration: the
+# language reaches a callable unit by writing its name, so "no other text names
+# this function" is a question about the code. `positional` says the language
+# has no invoke-by-name form for the units its `func_start` extracts -- JCL's
+# job steps execute in the order they are written and nothing in the language
+# can reference one -- so the `unreferenced_by_name` census is not computed
+# there at all. The set is closed and asserted by
+# `tests/extraction/test_unreferenced_by_name_contract_2806.py`, so a typo in a
+# registry cannot silently mean "by name".
+INVOCATION_BY_NAME = "by_name"
+INVOCATION_POSITIONAL = "positional"
+INVOCATION_MODELS = frozenset({INVOCATION_BY_NAME, INVOCATION_POSITIONAL})
+
+# #3198: a registry may declare the lexical rules its own identifiers follow,
+# through two top-level keys (beside `lexical_family`, never inside `rules` --
+# `language_lens.py` compiles every string value in `rules` into a regex).
+# The `unreferenced_by_name` census asks whether a name occurs outside its own
+# unit, and "occurs" has to mean what the LANGUAGE means by it:
+#   `identifier_case: "insensitive"` -- `perform a-para` names `A-PARA`. COBOL,
+#       and every other case-insensitive language, writes call sites in whatever
+#       case it likes; a case-sensitive test reads them as no reference at all.
+#   `identifier_extra_chars` -- characters that are part of a name beyond `\w`.
+#       COBOL's `-` is the common case: without it the boundary `(?!\w)` lets
+#       `B-PARA-EXIT` count as a mention of `B-PARA`, and a paragraph reads as
+#       referenced because a DIFFERENT paragraph's name starts with its name.
+# Both default to the case-sensitive, `\w`-only reading, so a language that
+# declares neither is unchanged by construction. See
+# `docs/unreferenced_by_name_contract.md`, corollary 7.
+IDENTIFIER_CASE_SENSITIVE = "sensitive"
+IDENTIFIER_CASE_INSENSITIVE = "insensitive"
+IDENTIFIER_CASES = frozenset({IDENTIFIER_CASE_SENSITIVE, IDENTIFIER_CASE_INSENSITIVE})
+
+
+@functools.lru_cache(maxsize=8)
+def _name_token_re(extra_chars: str) -> "re.Pattern[str]":
+    """Compiled whole-identifier-token matcher for a language's declared alphabet."""
+    return re.compile(_name_token_pattern(extra_chars))
+
+
+def _name_token_pattern(extra_chars: str) -> str:
+    r"""The character class of a whole identifier token, `\w` plus any declared extras."""
+    return r"[\w" + "".join(re.escape(c) for c in sorted(set(extra_chars))) + r"]+"
+
+
+# #2904: the export-visibility models a registry may declare through the
+# top-level `export_visibility` key. `standard` is the default and needs no
+# declaration: a symbol an `export`/visibility construct marks is an ordinary
+# public symbol, and an exported-but-uncalled unit is still measured as
+# `unreferenced_by_name` (the #2774 dead-code population). `external_entry_points`
+# says the language's export construct is narrow and curated -- it names the
+# units an EXTERNAL invoker runs (a makefile `.PHONY:` target is invoked by a
+# human typing `make all`, by CI, by a Dockerfile -- never by an in-repo
+# caller or import), so those declared orphans are public surface, not dead
+# weight. galaxyscope.py's Contextual Baseline Fix reads this to give such a
+# unit the same api-surface credit an imported file's orphans get (tier 3),
+# WITHOUT the language ever being imported. Opt-in per language and asserted
+# closed by `tests/core_engine/test_export_visibility_contract_2904.py`, so a
+# typo cannot silently exempt a language from the dead-code census -- and it is
+# deliberately NOT set on languages whose `export` decorates every symbol
+# (JS/TS), where a blanket exemption would blind #2774.
+EXPORT_VISIBILITY_STANDARD = "standard"
+EXPORT_VISIBILITY_EXTERNAL_ENTRY_POINTS = "external_entry_points"
+EXPORT_VISIBILITY_MODELS = frozenset({EXPORT_VISIBILITY_STANDARD, EXPORT_VISIBILITY_EXTERNAL_ENTRY_POINTS})
+
+# #2728: a THIRD family of slicer-synthesized names, distinct from both sets
+# above. Where a language's `func_start` capture group is a closed set of
+# literal keywords -- css `@(media|supports|container|layer|keyframes|
+# -webkit-keyframes)`, dockerfile `(RUN|CMD|ENTRYPOINT|HEALTHCHECK)`, html
+# `(script|style)` -- the "name" the slicer stores is the language's own
+# keyword, not an identifier anyone wrote. Two consequences were measured on the
+# corpus before this existed: dockerfile's four same-bodied `RUN` slices scored
+# `state_slop_duplicates` 1 -- the ONLY nonzero duplicate cell in 46 languages,
+# and a phantom -- and css's three `keyframes` slices cleared each other's
+# orphan flag purely by repeating the keyword.
+#
+# DERIVED from each rule, never hand-listed, so the two cannot drift: a
+# hand-written list would silently rot the moment a language's `func_start`
+# alternation gained a keyword. `_closed_literal_capture` returns the empty set
+# for any rule whose capture can produce an author-written identifier (a
+# character class, a quantifier, anything but a fixed alternation), so a
+# language only opts in by having a rule that provably cannot.
+#
+# Deliberately NOT added to `_UNCOUNTABLE_SLICE_NAMES`: that set governs the
+# FUNCTION POPULATION (#2691), and removing css's ~150 at-rule slices from it
+# would take `functions_found` to 0 and make every per-function descriptor
+# undefined for the language -- the markdown/html shape from #2689's bucket A.
+#
+# #2792 RE-TESTED that call rather than inheriting it, and MEASURED the reason to
+# keep it. Excluding a name from the population also drops its row from
+# `function_data`, which is the record `tests/tools/tree_sitter_accuracy_audit.py`
+# compares against the grammar's own nodes -- and on the pinned crucible that
+# takes css from `found_functions: 25 -> 0` and `args_exact_match: 19 -> 0`. No
+# phantom is being retired there: `docs/language_status/css.md` publishes 25/25
+# function precision, "GitGalaxy and tree-sitter agree exactly on every file",
+# because tree-sitter-css has dedicated nodes for exactly these constructs
+# (`media_statement`/`supports_statement`/`keyframes_statement`/`at_rule`). A
+# `@media` block is a real construct GitGalaxy correctly located; only calling it
+# a *function* is arguable, and that argument is about the corpus's
+# cross-language comparison, which keyword-rosetta answers by reporting the cell
+# as incomparable rather than by deleting a true recall claim.
+#
+# Mode E is the opposite case and IS excluded from the population (#2792): no
+# grammar anywhere has a node for "whatever fell between two semicolons".
+_ALTERNATION_ONLY = re.compile(r"[\w@.\-]+(?:\|[\w@.\-]+)*")
+
+
+def _first_capture_source(pattern: str) -> Optional[str]:
+    """Raw source text of `pattern`'s first *capturing* group, or None."""
+    i = 0
+    while i < len(pattern):
+        if pattern[i] == "\\":
+            i += 2
+            continue
+        if pattern[i] == "(" and not pattern.startswith("(?", i):
+            depth, j = 1, i + 1
+            while j < len(pattern) and depth:
+                if pattern[j] == "\\":
+                    j += 2
+                    continue
+                if pattern[j] == "(":
+                    depth += 1
+                elif pattern[j] == ")":
+                    depth -= 1
+                j += 1
+            return pattern[i + 1 : j - 1]
+        i += 1
+    return None
+
+
+def _closed_literal_capture(pattern: str) -> frozenset[str]:
+    """Every name a `func_start` capture can yield, when that set is finite.
+
+    Empty (the safe default) unless the capture is a bare alternation of
+    literals -- one leading `@` and a trailing `\\b` tolerated, since that is
+    how css spells its at-rules. `_extract_name` strips the `@` before storing,
+    so both spellings are returned.
+    """
+    group = _first_capture_source(pattern)
+    if group is None:
+        return frozenset()
+    body = group[1:] if group.startswith("@") else group
+    body = body.replace("(?:", "").replace(")", "").replace("\\b", "")
+    if not _ALTERNATION_ONLY.fullmatch(body):
+        return frozenset()
+    names = set(body.split("|"))
+    return frozenset(names | {"@" + n for n in names})
+
+
+def synthesizes_all_function_names(lang_id: str, rules: dict[str, Any]) -> bool:
+    """True when NO function name this language records can be an identifier.
+
+    Public because keyword-rosetta's bias report reads it (gitgalaxy#2792): a
+    language whose every "function" is a slicer label has no function POPULATION
+    to compare, so `functions_found` is n/a (incomparable) there rather than an
+    honest 0 scored as a -100% outlier against languages that do have functions.
+    Deriving it from the engine rather than hand-listing it on the corpus side is
+    the same doctrine `_registry.risk_dependencies` already follows: an engine
+    refactor then fails loudly instead of leaving a stale map quietly excusing
+    comparable cells.
+
+    Two ways a language qualifies, matching `_is_uncountable_slice`'s families:
+    no `func_start` rule at all (nothing to anchor on -- markdown), or `mode_e`
+    slicing, which never consults `func_start` for a name and labels every bucket
+    after the igniter keyword it matched (sqlite).
+
+    A closed-literal `func_start` (dockerfile `RUN`, css `@media`) is
+    deliberately NOT here. Those names are grammar-recognised constructs
+    GitGalaxy correctly locates -- css scores 25/25 function precision against
+    tree-sitter on exactly them -- so the language does have a population; it is
+    just not a population of *functions* in the sense the other 40 languages
+    mean. That is a comparison question the corpus's own ledger answers, and the
+    cell stays scored here rather than being marked incomparable by an engine
+    fact that does not hold.
+    """
+    if rules.get("func_start") is None:
+        return True
+    return ScopeParsingRegistry.get_mode(lang_id) == "mode_e"
+
+
+def _name_boundary_pattern(func_name: str) -> str:
+    r"""`func_name` with no adjacent word character on either side.
+
+    BUG FIX #2777: this was `r"\b" + re.escape(name) + r"\b"`, and `\b`
+    asserts a `\w`<->`\W` TRANSITION, not "no adjacent word character". When
+    the name itself ends in a non-word character -- ruby `empty?`/`save!`/
+    `name=`, C++ `operator==`, scheme `set!` -- the trailing `\b` demanded that
+    the NEXT character be a word character, which it never is (the name is
+    followed by `(`, `;`, whitespace or EOL). The pattern therefore matched
+    NOTHING, not even the declaration, so `_is_orphan` saw `inside == 0` and
+    `outside == 0`, applied the declaration discount, and returned True
+    unconditionally: 32 of 32 such ruby functions and 12 of 12 such C++ ones
+    were reported dead code in the crucible regardless of use.
+
+    Lookarounds assert the intended thing directly and are exactly equivalent
+    to `\b` for an all-`\w` name, so no currently-correct language moves.
+    """
+    return r"(?<!\w)" + re.escape(func_name) + r"(?!\w)"
+
+
+def _name_boundary_pattern_for(func_name: str, extra_chars: str) -> str:
+    """`_name_boundary_pattern` with a language's declared extra name characters
+    treated as part of a name (#3198): with `-` declared, `B-PARA-EXIT` no longer
+    contains an occurrence of `B-PARA`."""
+    if not extra_chars:
+        return _name_boundary_pattern(func_name)
+    cls = r"\w" + "".join(re.escape(c) for c in sorted(set(extra_chars)))
+    return r"(?<![" + cls + r"])" + re.escape(func_name) + r"(?![" + cls + r"])"
+
+
+# A name that is a single maximal word token. For such names the boundary
+# pattern `(?<!\w)name(?!\w)` matches exactly the `\w+` tokens equal to `name`,
+# so occurrences can be read from a precomputed word-token index instead of
+# rescanning the whole stream. Names with non-word characters (ruby `empty?`,
+# scheme `set!`, C++ `operator==`) do NOT qualify and take the exact fallback.
+_WORD_NAME_RE = re.compile(r"\w+")
+
+# #3182: a name that is a single maximal word-or-hyphen run. The bisect fast
+# path in `_is_orphan` accepts these too, because coding_analysis indexes the
+# segment-aligned hyphenated sub-runs of every `[\w-]+` token (see the
+# `orphan_occ_index` build). A hyphenated func_name reaching `_is_orphan` was,
+# by construction, in that build's `_wanted_hyphen` set -- so either it is a key
+# with exactly its `(?<!\w)name(?!\w)` starts, or it has zero occurrences and
+# `.get()` returns None (the same orphan verdict the boundary-regex fallback
+# reaches). Names with other non-word chars (ruby `empty?`, scheme `set!`,
+# C++ `operator==`) still fail this and take the exact fallback.
+_INDEXABLE_NAME_RE = re.compile(r"[\w-]+")
+
+
+# #2823: one name inside a `_visibility_export_list` region. The region is the
+# text between the export construct's own delimiters, so what separates two
+# names in it is whitespace, a comma, or a nested bracket -- a Haskell list
+# writes `convertWithOpts, handleOptInfo, Opt(..)` and a Scheme one writes
+# `probe-globals probe-test`. Everything else is name, deliberately: only the
+# token's START offset is used, and `_is_orphan` matches the function's real
+# name at that offset itself, so an over-wide token (`Opt(..)`'s `..`, a
+# Haskell `pattern` keyword) costs nothing while an under-wide one would move
+# the offset and stop discounting the export.
+_EXPORT_LIST_NAME = re.compile(r"[^\s,()\[\]{}]+")
+
+
+# #2692: a colon with whitespace on either side marks a type annotation
+# (`Env : Integer`, `x: int`), i.e. ONE parameter -- as opposed to a bare colon
+# inside a Lisp identifier (`foo:bar`), which is just part of the name.
+_ANNOTATED_PARAMETER = re.compile(r"\s:|:\s")
+
 
 def _is_synthetic_satellite_name(name: str) -> bool:
     base = name
@@ -836,6 +1253,12 @@ class StructuralExtractor:
     # Directly mirrors the central registry to prevent schema drift
     UNIVERSAL_METRICS_SCHEMA = RECORDING_SCHEMAS.get("SIGNAL_SCHEMA", [])
 
+    # Languages whose #if/#else preprocessor policy stack is honoured (#1720):
+    # `_build_brace_safe_stream`'s macro shield (function-boundary path) and
+    # `_blank_dead_preproc_branches` (count path, #2814) share this gate so the
+    # two paths can never disagree about which family carries dead branches.
+    _C_FAMILY_MACRO_LANGS = ("c", "cpp", "objective-c", "cs", "swift")
+
     # #1183: this used to be a hand-maintained duplicate of LENS_CONFIG's
     # HANDSHAKE_REGISTRY (gitgalaxy/standards/language_standards.py) that had
     # drifted out of sync -- it dropped the "^[ \t]*...\b" line-anchoring the
@@ -847,15 +1270,12 @@ class StructuralExtractor:
     # re.M is required for the "^" anchor to match at the start of any line
     # rather than only the start of the whole file -- without it, a genuine
     # mid-file "<script>" (the normal case) would never match either.
-    HANDSHAKE_REGISTRY: ClassVar[list[dict[str, Any]]] = [
-        {
-            "trigger": re.compile(h["trigger"], re.I | re.M),
-            "end": re.compile(h["end"], re.I | re.M),
-            "target": h["target"],
-            "pair": h["pair"],
-        }
-        for h in LENS_CONFIG["HANDSHAKE_REGISTRY"]
-    ]
+    # #2848: the compilation itself moved next to the patterns
+    # (_lens_config.COMPILED_HANDSHAKE_REGISTRY) after the flags drifted a
+    # second time -- prism.py and language_lens.py were still compiling their
+    # own copies without re.M, so their partitioners only ever fired on a file
+    # whose first byte opened the block. Entries carry #2549's `open_delimiter`.
+    HANDSHAKE_REGISTRY: ClassVar[list[dict[str, Any]]] = COMPILED_HANDSHAKE_REGISTRY
 
     def __init__(
         self,
@@ -882,6 +1302,21 @@ class StructuralExtractor:
         lang_config: dict[str, Any] = self.languages.get(self.primary_lang_id, {})
         self.primary_rules: dict[str, Any] = lang_config.get("rules", {})
         self.primary_family = lang_config.get("lexical_family", "c_style_comment")
+
+        # #2728: the names this language's own `func_start` can synthesize from a
+        # closed keyword alternation rather than capture from source. Empty for
+        # every language whose rule can produce a real identifier -- see
+        # `_closed_literal_capture`. Computed once here rather than per function.
+        _fs = self.primary_rules.get("func_start")
+        self._keyword_bucket_names: frozenset[str] = (
+            _closed_literal_capture(_fs.pattern) if _fs is not None else frozenset()
+        )
+
+        # #2792: whether this language's scopes are cut by `_slice_by_terminator`,
+        # which never captures a name from source at all -- it names each bucket
+        # after the igniter keyword it matched. Read off the same registry the
+        # slicer dispatches on (~2642), not hand-listed, so the two cannot drift.
+        self._slices_by_terminator: bool = ScopeParsingRegistry.get_mode(self.primary_lang_id) == "mode_e"
 
         # #1949: `END-PERFORM`/`END-IF` were removed entirely -- both are block
         # *closers*, never a real function/paragraph-terminating statement in
@@ -954,6 +1389,63 @@ class StructuralExtractor:
             except ImportError:
                 pass
 
+    def _is_uncountable_slice(self, name: str) -> bool:
+        """True when `name` is a slicer bucket label, never an author's identifier.
+
+        The FUNCTION POPULATION test -- "how many functions does this file have,
+        and what is the average one like". Two families qualify, and both are
+        names the slicer synthesized rather than captured from source:
+
+          * the placeholder names no source language can produce
+            (`_UNCOUNTABLE_SLICE_NAMES`, #2691);
+          * Mode E's per-statement buckets, for a language that actually slices
+            that way -- sqlite `CREATE_Statement`/`Declarative_Block` (#2792).
+            `_slice_by_terminator` never captures a name from source at all: it
+            cleaves on the terminator and labels each bucket after the igniter
+            keyword it matched, so the count scales with statement volume rather
+            than with the program, and six per-function descriptors divided by
+            it (`avg_func_loc`, `avg_func_complexity`, `func_complexity_gini`,
+            `func_internal_density`, `avg_func_args`, `max_func_complexity`).
+            sqlite recorded 31 functions against a 13-function planted program.
+
+        #2728's third family -- the closed-literal keyword buckets, dockerfile
+        `RUN`, css `@media`, html `script` -- is deliberately NOT here, and
+        #2792 re-tested that rather than inheriting it. See `_ALTERNATION_ONLY`'s
+        comment for the measurement: those names are grammar-recognised
+        constructs, so dropping them from the population drops them from
+        `function_data` and takes css from 25/25 function precision to 0.
+
+        Both families were already excluded from the orphan and duplicate checks
+        on this exact reasoning (#2547); only the first was excluded from the
+        population before #2792.
+
+        The slice keeps existing and its signals are still counted at file level:
+        only its membership in the population was ever wrong. Deliberately
+        narrower than `_is_synthetic_satellite_name` -- see
+        `_UNCOUNTABLE_SLICE_NAMES` and `_MODE_E_SYNTHETIC_NAME` for why "Main"
+        and a bare `<KEYWORD>_Statement` shape are not enough on their own.
+        """
+        if name in _UNCOUNTABLE_SLICE_NAMES:
+            return True
+        if not self._slices_by_terminator:
+            return False
+        # The truncation suffixes ARE stripped for the Mode E family and
+        # deliberately NOT for `_UNCOUNTABLE_SLICE_NAMES` above. #2691 kept them
+        # because "Main_[Truncated]" is a real function that ran off the end of
+        # the file -- a diagnostic about real code. A synthesized LABEL has no
+        # such reading: "Declarative_Block_[Unterminated]" is the same bucket
+        # name as "Declarative_Block", and whether the statement was terminated
+        # says nothing about whether anyone wrote an identifier. Left
+        # unstripped, sqlite's `main.sql` kept exactly one phantom function out
+        # of 31, and the count could never reach the honest 0 that lets the cell
+        # be reported as n/a at all (keyword-rosetta#2795 condition 4).
+        base = name
+        for suffix in _SYNTHETIC_SATELLITE_SUFFIXES:
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        return bool(_MODE_E_SYNTHETIC_NAME.fullmatch(base))
+
     def splice(
         self,
         code_stream: str,
@@ -961,8 +1453,19 @@ class StructuralExtractor:
         confidence: float = 1.0,
         profile_regex: bool = False,
         raw_content: str = "",
+        positional_comment_stream: str = "",
     ) -> dict[str, Any]:
-        """Executes the structural regex pass over refracted code streams."""
+        """Executes the structural regex pass over refracted code streams.
+
+        #2908 Phase 2: `positional_comment_stream`, when given, is prism.py's
+        `split_positional_comment_stream` output -- a line-number-aligned
+        counterpart of `comment_stream` (which loses line correspondence by
+        joining every segment's stripped comments into one blob). Used only
+        to anchor `is_documented`'s positional `doc`-rule pass; every
+        existing stream/count above is unchanged. Defaults to "" so callers
+        that don't pass it (tests, manual invocations) behave exactly as
+        before -- the positional pass then just finds no matches.
+        """
         self.raw_content_lines = raw_content.splitlines() if raw_content else []
         regex_telemetry: dict[str, float] = {}
 
@@ -999,7 +1502,6 @@ class StructuralExtractor:
                 "logic_density": 0.0,
                 "sum_fxn_impact": 0.0,
                 "total_control_flow_ratio": 0.0,
-                "raw_imports": [],
                 "metadata": ghost_meta,
             }
 
@@ -1022,7 +1524,6 @@ class StructuralExtractor:
                 "logic_density": 0.0,
                 "sum_fxn_impact": 0.0,
                 "total_control_flow_ratio": 0.0,
-                "raw_imports": [],
                 "metadata": ghost_meta,
             }
 
@@ -1033,7 +1534,6 @@ class StructuralExtractor:
                 "logic_density": 0.0,
                 "sum_fxn_impact": 0.0,
                 "total_control_flow_ratio": 0.0,
-                "raw_imports": [],
                 "metadata": ghost_meta,
             }
 
@@ -1054,6 +1554,97 @@ class StructuralExtractor:
         try:
             line_count = sum(1 for l in code_stream.splitlines() if l.strip())
 
+            # #2774: offsets of every function name a `_visibility_export` rule
+            # captures, computed once per file. `_is_orphan` discounts these so
+            # an export statement stops reading as a call. Languages that do not
+            # declare either rule get an empty set and behave exactly as before.
+            #
+            # #2823: `_visibility_export` captures ONE name per match, which is
+            # the whole export statement for `export -f foo` and its four
+            # siblings but cannot express a Haskell module header, where a
+            # single pair of parens holds an arbitrary number of exported names.
+            # `_visibility_export_list` is the plural form: every capture group
+            # is a REGION holding exported names, and the engine records the
+            # start offset of each name token inside it. Splitting the two keys
+            # rather than generalising the first keeps the exact-capture
+            # languages byte-identical -- assembly's `.global .foo` and ruby's
+            # `module_function :save!` name functions whose first character a
+            # generic tokenizer would not treat as a name start.
+            export_name_starts = frozenset(self._export_declaration_offsets(code_stream))
+
+            # #2908 Phase 2: is_public source B -- the export-list NAME set
+            # (not just offsets). #2915's case-insensitive-import languages
+            # resolve identifiers case-foldedly elsewhere in the pipeline
+            # (network_risk_sensor.py's Contextual Baseline Fix Stage 1c);
+            # the same fold applies here so e.g. cobol's `COPY A.`-style
+            # case-insensitive naming doesn't miss an export declared in a
+            # different case than the function's own header.
+            _fold_names = self.primary_lang_id in CASE_INSENSITIVE_IMPORT_LANGS
+            export_declared_names = {
+                (n.casefold() if _fold_names else n) for n in self._export_declared_names(code_stream)
+            }
+
+            # #2908 Phase 2, D3: the positional `doc`-rule pass. Built from
+            # `positional_comment_stream` (prism.py's line-number-aligned
+            # counterpart of `comment_stream`) rather than `comment_stream`
+            # itself, which loses line correspondence by joining every
+            # segment's stripped comments into one blob (see
+            # docs/risk_documentation_contract.md D3). Records each match's
+            # END line, 1-indexed, corresponding to the original file --
+            # `is_documented` below tests each unit's header window against
+            # this same list. Uses the primary language's own `doc` rule,
+            # matching how `comment_analysis` already reads `self.primary_lang_id`
+            # rather than per-segment rules.
+            #
+            # #2908 Phase 2 follow-up: ALSO scans `code_stream`, not just the
+            # comment surface. `equations["doc"]` (the FILE-LEVEL count
+            # `comment_analysis` feeds) was already the sum of a comment_
+            # stream pass (comment_analysis) AND a code_stream pass --
+            # `coding_analysis`'s own generic per-rule loop runs every rule
+            # in the language's `rules` dict, "doc" included, against each
+            # segment of `code_stream` too, with no comment-vs-code
+            # distinction at all. Confirmed on keyword-rosetta's powershell
+            # main.ps1 (expected_signals.json: `"doc": 1`): its `.SYNOPSIS`
+            # plant line carries no `#`/`<#`/`#>` delimiter at all -- a
+            # genuinely bare, un-commented line -- yet the file's own `doc`
+            # equation already reads 1, entirely from the code_stream pass
+            # (comment_stream never contains it). A positional pass that
+            # only ever looked at the comment surface would then structurally
+            # disagree with the file-level count it is the per-unit form of.
+            # `code_stream` is already line-number-aligned with the original
+            # file for the same reason `positional_comment_stream` is (prism.py
+            # blanks a stripped comment to an equal run of newlines, never
+            # deleting the line break) -- no new stream is needed, just a
+            # second pattern pass over a stream `splice()` already has.
+            doc_positional_end_lines: list[int] = []
+            _doc_pattern = self.languages.get(self.primary_lang_id, {}).get("rules", {}).get("doc")
+            if _doc_pattern is not None:
+                _doc_end_lines: set[int] = set()
+                for _doc_stream in (positional_comment_stream, code_stream):
+                    if not _doc_stream:
+                        continue
+                    _doc_matches = (
+                        _doc_pattern.finditer(_doc_stream)
+                        if hasattr(_doc_pattern, "finditer")
+                        else re.finditer(str(_doc_pattern), _doc_stream)
+                    )
+                    _doc_end_lines.update(_doc_stream.count("\n", 0, m.end()) + 1 for m in _doc_matches)
+                doc_positional_end_lines = sorted(_doc_end_lines)
+
+            # #2806: does this language reach its callable units BY NAME? The
+            # census below is a name-reference test and nothing else can be
+            # built from a single file's text -- so where the language has no
+            # invoke-by-name form at all, the question it answers is not the
+            # question it is read as answering, and the honest count is no
+            # count. A registry declares that with
+            # `invocation_model: "positional"`; every other language keeps the
+            # default and is unchanged by construction. See
+            # `docs/unreferenced_by_name_contract.md`, corollary 4.
+            names_its_callees = (
+                self.languages.get(self.primary_lang_id, {}).get("invocation_model", INVOCATION_BY_NAME)
+                != INVOCATION_POSITIONAL
+            )
+
             # --- EXISTING STRUCTURAL PIPELINE ---
             segments = self._partition_segments(code_stream, self.primary_lang_id)
 
@@ -1070,7 +1661,6 @@ class StructuralExtractor:
             functions, sum_fxn_impact = self._function_slice(
                 segments,
                 segment_spatial_maps,
-                equations,
                 mitigation_telemetry,
                 regex_telemetry if profile_regex else None,
             )
@@ -1091,7 +1681,14 @@ class StructuralExtractor:
             # stays on the legacy fallback until their own class_start is
             # hardened for this use (see the frozenset's comment).
             rules = self.languages.get(self.primary_lang_id, {}).get("rules", {})
-            if "class_start" in rules and rules["class_start"] is None:
+            if (
+                "class_start" in rules and rules["class_start"] is None
+            ) or self.primary_lang_id in _CLASS_EXTRACTION_OUT_OF_SCOPE_LANGS:
+                # No rule at all, or a rule whose matches are not named entities
+                # (#1295: css selectors, html tags -- see
+                # _CLASS_EXTRACTION_OUT_OF_SCOPE_LANGS). Both mean "nothing to put in
+                # class_data", and the second must skip the legacy fallback too rather
+                # than rely on it happening to miss.
                 class_matches = []
                 class_start_groups = 0
             else:
@@ -1142,6 +1739,22 @@ class StructuralExtractor:
                 else self._build_brace_safe_stream(code_stream, self.primary_lang_id)
             )
 
+            # #PERF: the class loop below converts raw string indices to line
+            # numbers. `code_stream.count("\n", 0, idx)` is O(len(code_stream))
+            # per call, so doing it per class was O(classes x filesize) -- part
+            # of the same O(N^2) family as the orphan scan. Precompute the
+            # newline offsets once; each lookup is then an O(log n) bisect.
+            # bisect_left(offsets, idx) == count of "\n" strictly before idx ==
+            # code_stream.count("\n", 0, idx), so `+ 1` still yields the line.
+            _nl_offsets: list[int] = []
+            _p = code_stream.find("\n")
+            while _p != -1:
+                _nl_offsets.append(_p)
+                _p = code_stream.find("\n", _p + 1)
+
+            def _line_at(idx: int) -> int:
+                return bisect.bisect_left(_nl_offsets, idx) + 1
+
             for i, match in enumerate(class_matches):
                 if self.primary_lang_id == "cpp":
                     if not _cpp_class_has_body(code_stream, match.end()):
@@ -1163,8 +1776,10 @@ class StructuralExtractor:
                 # surrounding pair here so the stored name is the bare identifier,
                 # matching how ctags, SQLite itself, and the tri-comparison ledger
                 # refer to the table (`CREATE TABLE "User"` -> `User`).
+                # db2_sql (#2511) reuses the same convention with its one
+                # delimited-identifier style (double quotes only).
                 if (
-                    self.primary_lang_id == "sqlite"
+                    self.primary_lang_id in ("sqlite", "db2_sql")
                     and name
                     and len(name) >= 2
                     and (name[0], name[-1]) in (('"', '"'), ("`", "`"), ("[", "]"))
@@ -1232,8 +1847,9 @@ class StructuralExtractor:
                     )
 
                 # Convert raw string indices to line numbers for spatial bounding
-                start_line = code_stream.count("\n", 0, start_idx) + 1
-                end_line = code_stream.count("\n", 0, end_idx) + 1
+                # (O(log n) bisect over precomputed newline offsets; see _line_at)
+                start_line = _line_at(start_idx)
+                end_line = _line_at(end_idx)
                 # If end_idx sits exactly at the start of a new line (the
                 # indentation resolver's dedent point, or the flat fallback,
                 # both land there by construction) that line belongs to
@@ -1287,8 +1903,17 @@ class StructuralExtractor:
                 del cls["_end_line"]
 
             branch_hits = equations.get("branch", 0)
-            linear_hits = equations.get("structural_boundaries", 0)
-            total_control_flow_ratio = round(branch_hits / max(branch_hits + linear_hits, 1), 3)
+            # #2770: the denominator is coding lines (line_count = non-blank lines of
+            # the comment-stripped code stream), NOT branch + structural_boundaries.
+            # structural_boundaries is an ungoverned per-language vocabulary tally
+            # (45 words in solidity, 16 in shell, 0 in markdown), which made the same
+            # decision density read wildly differently per language -- the corpus's
+            # worst metric at 33% consistency. Lines are the one denominator that
+            # means the same thing in all 46 languages, and the per-FUNCTION Control
+            # Flow Ratio already divides by LOC -- this brings the file-level ratio
+            # into agreement with its own function-level sibling (and with
+            # logic_density just below, which uses the same line_count).
+            total_control_flow_ratio = round(branch_hits / max(line_count, 1), 3)
 
             # Use the newly standardized keys from the updated coding_analysis
             total_signals = sum(equations.values())
@@ -1298,11 +1923,13 @@ class StructuralExtractor:
             import collections
             import hashlib
 
-            # Fast, C-backed word frequency counter for the entire file
-            token_counts = collections.Counter(re.findall(r"\b\w+\b", code_stream))
-
+            # #2727 retired the file-wide token counter that used to live here:
+            # the orphan test is now scoped to each function's own span (see
+            # `_is_orphan`), so a single whole-file frequency table can no longer
+            # answer it.
             orphan_count = 0
             duplicate_count = 0
+            orphan_names: list[str] = []
             func_names = [f.get("name", "") for f in functions]
             func_name_counts = collections.Counter(func_names)
 
@@ -1315,6 +1942,64 @@ class StructuralExtractor:
             # hashing every function body would be wasted work in the common case.
             body_hash_counts: collections.Counter[tuple[str, str]] = collections.Counter()
             func_body_hashes: dict[int, str] = {}
+
+            # #PERF: `_is_orphan` asks "does this name occur outside its own
+            # span?", previously by re-scanning the WHOLE code_stream once per
+            # function -- O(functions x filesize), ~10s on a 1MB generated
+            # header with ~900 functions. Precompute a single whole-file index
+            # of maximal word-token start offsets (ascending, so already sorted)
+            # so each per-function test is an O(log n) bisect. Only names that
+            # are a single \w+ token use it; names with non-word characters
+            # (ruby `empty?`, scheme `set!`, C++ `operator==`) keep the exact
+            # boundary-regex fallback inside `_is_orphan`.
+            # #3198: the language's own identifier lexicon (see
+            # IDENTIFIER_CASE_INSENSITIVE). A language that declares either key
+            # indexes WHOLE tokens of its own alphabet -- so `B-PARA-EXIT` is one
+            # token and contains no occurrence of `B-PARA` -- case-folded when its
+            # names are case-insensitive, so `perform a-para` names `A-PARA`.
+            _lang_def = self.languages.get(self.primary_lang_id, {})
+            _name_extra_chars: str = _lang_def.get("identifier_extra_chars", "") or ""
+            _name_fold_case: bool = _lang_def.get("identifier_case") == IDENTIFIER_CASE_INSENSITIVE
+            _declared_lexicon = bool(_name_extra_chars or _name_fold_case)
+
+            orphan_occ_index: Optional[dict[str, list[int]]] = None
+            if names_its_callees and functions and _declared_lexicon:
+                orphan_occ_index = collections.defaultdict(list)
+                for _m in _name_token_re(_name_extra_chars).finditer(code_stream):
+                    _tok = _m.group()
+                    orphan_occ_index[_tok.casefold() if _name_fold_case else _tok].append(_m.start())
+            elif names_its_callees and functions:
+                orphan_occ_index = collections.defaultdict(list)
+                for _m in re.finditer(r"\w+", code_stream):
+                    orphan_occ_index[_m.group()].append(_m.start())
+                # #3182: hyphenated identifier names (COBOL paragraphs, Lisp/Scheme,
+                # the column_sensitive family) are not single `\w+` tokens, so they
+                # miss the bisect fast path above and fell to `_is_orphan`'s
+                # O(filesize) per-function boundary-regex rescan -- profiled at ~20%
+                # of a COBOL scan. Index the segment-aligned hyphenated sub-runs of
+                # every `[\w-]+` token so those names bisect too. Only the names
+                # actually queried (this file's hyphenated func_names) are stored,
+                # and segment alignment makes `occ_index[name]` exactly the set of
+                # `(?<!\w)name(?!\w)` match starts -- byte-identical to the fallback.
+                _wanted_hyphen = {n for n in func_names if "-" in n}
+                if _wanted_hyphen and not _declared_lexicon:
+                    for _m in re.finditer(r"[\w-]+", code_stream):
+                        _tok = _m.group()
+                        if "-" not in _tok:
+                            continue
+                        _base = _m.start()
+                        _starts = [0]
+                        for _k, _ch in enumerate(_tok):
+                            if _ch == "-":
+                                _starts.append(_k + 1)
+                        _ns = len(_starts)
+                        for _i in range(_ns):
+                            for _j in range(_i + 1, _ns):
+                                _end = _starts[_j + 1] - 1 if _j + 1 < _ns else len(_tok)
+                                _sub = _tok[_starts[_i] : _end]
+                                if _sub in _wanted_hyphen:
+                                    orphan_occ_index[_sub].append(_base + _starts[_i])
+
             for func in functions:
                 func_name = func.get("name", "")
                 if func_name and func_name_counts[func_name] > 1:
@@ -1327,15 +2012,50 @@ class StructuralExtractor:
                     func_body_hashes[id(func)] = body_hash
                     body_hash_counts[(func_name, body_hash)] += 1
 
+            # #perf: is_public-A tests whether an `api` rule fired inside each
+            # unit's <=3-line header window. This scanned the WHOLE api hit list
+            # per function -- O(functions x api_hits) -- e.g. a big C header like
+            # sokol_gfx.h does 928 functions x ~2,700 api lines = 2.5M line
+            # comparisons. Hoist the hits into a set once and probe only the
+            # window's own line numbers (<=3 lookups per function); the
+            # membership result (window intersects api_hits) is identical. The
+            # comparisons were individually cheap, so this is a small win on
+            # today's corpus, but it removes a latent quadratic that scales badly
+            # on files with many functions AND many api hits.
+            _api_line_set = set(threat_locations.get("api") or ())
+
             for func in functions:
                 func_name = func.get("name", "")
                 usage_status = 0  # 0 = Normal
+
+                # #2691: stamp the uncountable-slice verdict onto the record. This
+                # is the one place every function passes through, so downstream
+                # consumers can exclude these from the FUNCTION POPULATION -- "how
+                # many functions does this file have, and what is the average one
+                # like" -- without re-deriving the rule in three files. The slice
+                # keeps existing and its signals are still counted at file level:
+                # only its membership in the population was ever wrong. #2792
+                # added Mode E's statement buckets to the same verdict; see
+                # `_is_uncountable_slice` for which families qualify, and why
+                # this stays narrower than the orphan check's own name test.
+                func["is_synthetic_slice"] = self._is_uncountable_slice(func_name)
 
                 # #2547: synthetic slicer bucket names (Mode D's "__global_context__",
                 # Mode E's "<KEYWORD>_Statement"/"Declarative_Block", etc.) are never
                 # real callable identifiers -- skip them for BOTH the duplicate and
                 # orphan checks below, not just the orphan one.
-                if func_name and not _is_synthetic_satellite_name(func_name):
+                # #2728 extends that to the igniter-keyword buckets the slicer names
+                # after the matched keyword itself (dockerfile `RUN`, css
+                # `keyframes`, html `script`). Same argument, different family: a
+                # keyword cannot be orphaned or duplicated, and counting it as
+                # either measures the slicer's bucketing, not the code. The set is
+                # derived from this language's own `func_start`, so it cannot drift
+                # away from what the slicer actually emits.
+                if (
+                    func_name
+                    and not _is_synthetic_satellite_name(func_name)
+                    and func_name not in self._keyword_bucket_names
+                ):
                     # Check for Duplicates: same name AND materially the same body,
                     # defined multiple times in the same file.
                     if (
@@ -1344,15 +2064,133 @@ class StructuralExtractor:
                     ):
                         usage_status = 2  # 2 = Duplicate
                         duplicate_count += 1
-                    elif len(func_name) > 3 and token_counts[func_name] <= 1:
-                        # If the function name only exists where it was defined, it's an orphan
+                    elif names_its_callees and self._is_orphan(
+                        code_stream,
+                        func,
+                        func_name,
+                        export_name_starts,
+                        orphan_occ_index,
+                        fold_case=_name_fold_case,
+                        extra_name_chars=_name_extra_chars,
+                    ):
+                        # Nothing outside the function's own definition names it.
+                        #
+                        # BUG FIX #2768: a `len(func_name) > 3` conjunct used to
+                        # stand in front of this test. It was a proxy from the
+                        # pre-#2727 implementation, when the test was a
+                        # whole-file token-frequency count and a short name
+                        # (`get`, `run`, `id`) was likely to collide with
+                        # unrelated text. #2754's test is span-scoped and
+                        # boundary-anchored, so a three-character name is
+                        # answered as reliably as a thirty-character one --
+                        # while the guard, being unconditional, meant a function
+                        # named in three characters or fewer could never be
+                        # reported unused in any language: 3.6% of all extracted
+                        # functions corpus-wide, and 29.4% of lua's.
                         orphan_count += 1
+                        orphan_names.append(func_name)
                         usage_status = 1  # 1 = Orphan / Unused
 
                 func["usage_status"] = usage_status
 
+                # --- #2908 Phase 2: is_public (A union B) ---
+                # A. api header match: the language's `api` rule fired on a
+                # line inside this unit's own header window (start_line to
+                # min(start_line+2, end_line), tolerating a multi-line
+                # signature), AND the unit's own name is what that window's
+                # text actually names -- guards against a neighbouring
+                # construct's api hit landing in the window. A unit with no
+                # usable name (synthetic slices) is never public via A.
+                is_public_a = False
+                start_line = func.get("start_line", 0)
+                end_line = func.get("end_line", start_line)
+                if func_name and start_line > 0:
+                    api_window_end = min(start_line + 2, end_line)
+                    if _api_line_set and any(ln in _api_line_set for ln in range(start_line, api_window_end + 1)):
+                        header_lines = self.raw_content_lines[start_line - 1 : api_window_end]
+                        if header_lines and re.search(_name_boundary_pattern(func_name), "\n".join(header_lines)):
+                            is_public_a = True
+
+                # B. export-list name: is_public via B iff unit.name is in
+                # the file's export-declared name set (case-folded for the
+                # #2915 case-insensitive-import languages).
+                is_public_b = bool(func_name) and (
+                    (func_name.casefold() if _fold_names else func_name) in export_declared_names
+                )
+
+                func["is_public"] = is_public_a or is_public_b
+
+                # --- #2908 Phase 2, D3: is_documented ---
+                # A `doc`-rule match whose END line lands in the unit's
+                # header window: [start_line - k, start_line], widened to
+                # [start_line - k, min(start_line + 2, end_line)] for the
+                # docstring-position family. OR (that family only) a
+                # non-empty below-header docstring the positional pass
+                # can't see because it lives in code_stream as a string
+                # literal, not a comment -- see _has_below_position_doc_text.
+                is_documented = False
+                if start_line > 0 and doc_positional_end_lines:
+                    anchor_hi = start_line
+                    if self.primary_lang_id in _DOCSTRING_POSITION_LANGS:
+                        anchor_hi = min(start_line + _DOC_ANCHOR_BODY_LINES, end_line)
+                    anchor_lo = start_line - _DOC_ANCHOR_LINES_ABOVE
+                    lo = bisect.bisect_left(doc_positional_end_lines, anchor_lo)
+                    hi = bisect.bisect_right(doc_positional_end_lines, anchor_hi)
+                    is_documented = hi > lo
+                if not is_documented and start_line > 0:
+                    is_documented = self._has_below_position_doc_text(start_line, self.primary_lang_id)
+
+                func["is_documented"] = is_documented
+
+            # --- #2731: WHICH ORPHANS DID THE api RULE ALREADY COUNT? ---
+            # galaxyscope.py's Contextual Baseline Fix converts an imported
+            # file's orphans into API exposure. A function that is BOTH declared
+            # public AND uncalled was counted twice by that conversion -- once by
+            # the language's own `api` rule at its declaration, once as a
+            # converted orphan -- which is the common shape in library code,
+            # where the exported functions are exactly the ones with no in-repo
+            # caller. Count the overlap here (the orchestrator has no code text)
+            # and let the conversion credit only the remainder.
+            #
+            # The test is by NAME, not by span: an orphan's name occurs exactly
+            # once in the whole file (that is what the census above just proved),
+            # so a name appearing on a line the api rule matched can only be its
+            # own declaration -- no false positives are possible. Span
+            # containment would be both looser and tighter than that: looser
+            # because a long body can hold an unrelated api hit (C matches every
+            # non-static local declaration), tighter because the marker can sit
+            # outside the slicer's own span (JS/TS `export` precedes start_idx,
+            # php's span starts a line early, a java `@Test` line pulls start_line
+            # a line back off the `public` one).
+            #
+            # BUG FIX #2827: "by name" used to mean tokenizing each api line
+            # with `\b\w+\b` and testing set membership. That tokenizer
+            # cannot produce a token containing `-`, `:`, `.`, `!` or `?`, so
+            # every function whose name holds one (cobol `PROBE-GLOBALS`,
+            # scheme `(export probe-globals)`, powershell `Verb-Noun`, tcl
+            # `::ns::proc`, ruby `save!`) was invisible to the test, the overlap
+            # read 0, and the conversion credited the orphan a second time --
+            # the exact double count #2731 was built to remove, back for every
+            # language whose names are not plain `\w`. Same tokenizer family
+            # as #2754, which fixed the census and left this consumer behind.
+            # The test now searches the orphan's real name, with the same
+            # `_name_boundary_pattern` lookarounds `_is_orphan` uses, over the
+            # api-matched lines -- so both halves of the census agree about
+            # what an occurrence of a name is.
+            api_declared_orphans = 0
+            if orphan_names and threat_locations.get("api"):
+                code_lines = code_stream.splitlines()
+                api_blob = "\n".join(
+                    code_lines[line_no - 1]
+                    for line_no in set(threat_locations["api"])
+                    if 0 < line_no <= len(code_lines)
+                )
+                api_declared_orphans = sum(
+                    1 for name in orphan_names if re.search(_name_boundary_pattern(name), api_blob)
+                )
+
             if orphan_count > 0:
-                equations["orphaned_logic"] = orphan_count
+                equations["unreferenced_by_name"] = orphan_count
             if duplicate_count > 0:
                 equations["duplicate_logic"] = duplicate_count
 
@@ -1362,7 +2200,21 @@ class StructuralExtractor:
             # 0.0 for any file with a single global-state hit. The design_* buckets
             # classify each declared identifier's casing/length for style-consistency
             # and outlier signal.
-            for decl_match in self._var_decl_pattern.finditer(code_stream):
+            # #perf: _var_decl_pattern requires a bare `=` and never spans a
+            # newline, so a line with no `=` can never match -- yet the greedy
+            # `[^=\n]{0,80}` prefix backtracked across every such line before
+            # failing, which profiling put at ~a quarter of splice() on large
+            # TypeScript files. Skip `=`-less lines with a cheap membership test.
+            # `.match` per line is identical to the original re.M `^`-anchored
+            # finditer (the pattern anchors at line start and yields at most one
+            # match per line, in line order), so every equations count is
+            # byte-for-byte unchanged.
+            for _line in code_stream.split("\n"):
+                if "=" not in _line:
+                    continue
+                decl_match = self._var_decl_pattern.match(_line)
+                if decl_match is None:
+                    continue
                 equations["core_var_decl"] += 1
                 identifier = decl_match.group(1)
 
@@ -1393,6 +2245,19 @@ class StructuralExtractor:
                     round((file_token_mass / 1000000) * 3.00, 5) if file_token_mass is not None else None
                 ),
                 "threat_locations": threat_locations,
+                # #2731: how many of `unreferenced_by_name`'s functions the `api` rule
+                # already counted as public surface. Consumed by galaxyscope.py's
+                # Contextual Baseline Fix; never a signal in its own right.
+                "api_declared_orphans": api_declared_orphans,
+                # #2904: does this file's language declare its export construct to
+                # name EXTERNAL entry points (a `.PHONY:` target), not ordinary
+                # public symbols? Read from the closed `export_visibility` registry
+                # key, mirroring how `invocation_model` is consumed above. Consumed
+                # by the Contextual Baseline Fix's tier-3 branch; never a signal.
+                "exports_are_external_entry_points": (
+                    self.languages.get(self.primary_lang_id, {}).get("export_visibility", EXPORT_VISIBILITY_STANDARD)
+                    == EXPORT_VISIBILITY_EXTERNAL_ENTRY_POINTS
+                ),
             }
             if profile_regex:
                 result_payload["regex_telemetry"] = regex_telemetry
@@ -1409,7 +2274,6 @@ class StructuralExtractor:
                 "logic_density": 0.0,
                 "sum_fxn_impact": 0.0,
                 "total_control_flow_ratio": 0.0,
-                "raw_imports": [],
                 "metadata": ghost_meta,
             }
 
@@ -1548,19 +2412,32 @@ class StructuralExtractor:
 
         doc_buffer: list[str] = []
 
+        from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
         # 1. Harvest Above (C, Java, JS, Rust, Go, PHP, C#)
         for j in range(i - 1, max(-1, i - 15), -1):
             prev = self.raw_content_lines[j].strip()
             if not prev:
                 continue
+
+            # Step over decorators/pragmas safely before they are accidentally matched as comments
+            is_decorator = False
+            if prev.startswith("@") or prev.startswith("["):
+                is_decorator = True
+            elif lang_id in LANGUAGE_DEFINITIONS:
+                dec_regex = LANGUAGE_DEFINITIONS[lang_id].get("rules", {}).get("decorators")
+                if dec_regex and dec_regex.search(prev):
+                    is_decorator = True
+
+            if is_decorator:
+                continue
+
             if (
                 prev.startswith(("#", "//", "/*", "*", "///", "--", "<!--", "dnl", ";", "%"))
                 or prev.endswith("*/")
                 or prev.endswith("#>")
             ):
                 doc_buffer.insert(0, prev)
-            elif prev.startswith("@") or prev.startswith("["):  # Step over decorators safely
-                continue
             else:
                 break
 
@@ -1595,6 +2472,86 @@ class StructuralExtractor:
 
         return "\n".join(doc_buffer)[:2000]  # Cap at 2000 chars to prevent DB bloat
 
+    # Markers a below-header line can open that are genuinely invisible to
+    # the positional `doc`-rule pass: a string-literal docstring
+    # (`"""`/`'''`, live in code_stream, never in a comment stream at all)
+    # or ruby's `=begin` block (not a single-line comment, so
+    # `_strip_single_line_comments_positional`'s line_exclusive handling
+    # never sees it either). Deliberately narrower than
+    # `_extract_documentation_tether`'s own "Harvest Below" marker set,
+    # which also opens on `#`/`%` -- both real single-line comments every
+    # docstring-position language (python/embedded_python/matlab/ruby are
+    # all `line_exclusive`) already exposes to the positional pass, so a
+    # `#`/`%` line is measured by the actual `doc` rule there, not
+    # rubber-stamped true just for existing. Confirmed via the corpus probe:
+    # without this narrowing, python's planted `# HACK: ...` comment (the
+    # exact false-positive docs/risk_documentation_contract.md S1 names as
+    # why `is_documented` must not read `docstring` directly) counted as
+    # documented.
+    _BELOW_POSITION_DOC_MARKERS = ('"""', "'''", "=begin")
+
+    def _has_below_position_doc_text(self, start_line: int, lang_id: str) -> bool:
+        """Did the docstring-position family's own below-header STRING/BLOCK
+        doc text exist -- as opposed to an ordinary comment?
+
+        #2908 Phase 2, D3 fallback: python's real triple-quoted docstring
+        lives in `code_stream` as a string literal, not a comment, so the
+        positional `doc`-rule pass (built from a comment-preserving stream)
+        cannot see it there -- confirmed in `splice()`. The decided fallback
+        is narrow: for the docstring-position family ONLY, a below-header
+        line opening one of `_BELOW_POSITION_DOC_MARKERS` also sets
+        `is_documented`. This does NOT replicate
+        `_extract_documentation_tether`'s "Harvest Below" branch verbatim --
+        that branch also opens on `#`/`%`, which is a real, positionally-
+        visible comment already covered by path A whenever it actually
+        matches the language's `doc` rule; treating "any comment exists
+        here" as sufficient would re-import exactly the per-language bias
+        docs/risk_documentation_contract.md D3 exists to keep out. Also
+        excludes "Harvest Above" entirely, for the same reason.
+        """
+        if lang_id not in _DOCSTRING_POSITION_LANGS:
+            return False
+        if not hasattr(self, "raw_content_lines") or not self.raw_content_lines:
+            return False
+
+        i = start_line - 1
+        if i < 0 or i >= len(self.raw_content_lines):
+            return False
+
+        for j in range(i + 1, min(len(self.raw_content_lines), i + 10)):
+            nxt = self.raw_content_lines[j].strip()
+            if not nxt:
+                continue
+            return nxt.startswith(self._BELOW_POSITION_DOC_MARKERS)
+
+        return False
+
+    def _embedded_payload_start(self, content: str, trigger: dict[str, Any], end_idx: int) -> int:
+        """#2549: where the embedded language's own text begins.
+
+        The handshake's opening delimiter belongs to whichever language wrote
+        it. For the markup handshakes that is the host document (`<script
+        defer>` is html; only what follows the `>` is JavaScript), so the
+        segment boundary moves to the end of the open tag -- otherwise html's
+        `func_start`, whose only anchor is that tag, can never fire once the
+        splitter has run. Everything else -- and any tag this cannot resolve
+        (unterminated, or longer than the lookahead limit) -- keeps the
+        pre-#2549 boundary at the trigger's own start.
+
+        Mirrors `Prism._embedded_payload_start`; the two partitioners are
+        deliberate parallel implementations (same reason `_mask_lua_long_
+        brackets` exists in both), and `tests/core_engine/test_language_lens.py`
+        asserts they stay in step.
+        """
+        open_delimiter = trigger.get("open_delimiter")
+        if open_delimiter is None:
+            return trigger["start"]
+        limit = min(trigger["trigger_end"] + self.HANDSHAKE_LOOKAHEAD_LIMIT, len(content))
+        m = open_delimiter.match(content, trigger["trigger_end"], limit)
+        if m is None or m.end() > end_idx:
+            return trigger["start"]
+        return m.end()
+
     def _partition_segments(self, content: str, primary_id: str) -> list[tuple[str, str, int]]:
         """Splits content into language segments based on handshake triggers."""
         segments = []
@@ -1612,6 +2569,7 @@ class StructuralExtractor:
                 "end_pattern": h["end"],
                 "target": h["target"],
                 "pair": h["pair"],
+                "open_delimiter": h.get("open_delimiter"),
                 "trigger_end": m.end(),
             }
             for h in self.HANDSHAKE_REGISTRY
@@ -1624,11 +2582,6 @@ class StructuralExtractor:
             if t["start"] < last_idx:
                 continue
 
-            if t["start"] > last_idx:
-                chunk = content[last_idx : t["start"]]
-                segments.append((primary_id, chunk, current_line_offset))
-                current_line_offset += chunk.count("\n")
-
             if t["pair"]:
                 open_char, close_char = t["pair"]
                 end_idx = self._find_balanced_end(content, t["start"], open_char, close_char)
@@ -1637,7 +2590,17 @@ class StructuralExtractor:
                 end_match = t["end_pattern"].search(scan_view, pos=t["trigger_end"], endpos=search_limit)
                 end_idx = end_match.end() if end_match else len(content)
 
-            chunk = content[t["start"] : end_idx]
+            # #2549: the opening `<script ...>` / `<style ...>` tag is host
+            # markup and stays in the primary segment, so the host language's
+            # own rules still see it; the embedded segment starts at the `>`.
+            payload_start = self._embedded_payload_start(content, t, end_idx)
+
+            if payload_start > last_idx:
+                chunk = content[last_idx:payload_start]
+                segments.append((primary_id, chunk, current_line_offset))
+                current_line_offset += chunk.count("\n")
+
+            chunk = content[payload_start:end_idx]
             segments.append((t["target"], chunk, current_line_offset))
             current_line_offset += chunk.count("\n")
             last_idx = end_idx
@@ -1753,6 +2716,80 @@ class StructuralExtractor:
         """
         return _correlate_signals_impl(targets, dampeners, max_distance)
 
+    # The three AppSec sensor keys coding_analysis injects into every counts dict
+    # (see below); factored out so `_active_coding_rules` and coding_analysis agree
+    # on exactly which mapped keys are valid.
+    _APPSEC_KEYS = ("memory_scraping", "exfiltration_camouflage", "rce_funnel")
+
+    def _active_coding_rules(
+        self, seg_lang: str
+    ) -> list[tuple[str, Any, str, Optional[RulePrefilterGate], Optional[re.Pattern[str]]]]:
+        """#PERF: the eligible `(rule_name, pattern, mapped_key, gate, line_gate)`
+        rules for a language, computed once and cached. The eligibility tests --
+        skip `_`-prefixed meta keys and falsy/trivial patterns, resolve the
+        CORE_MAPPING key, and drop rules whose mapped key isn't in the counts
+        schema -- depend only on the static ruleset, so caching them removes tens
+        of thousands of redundant `pattern.pattern.replace(...)*3.strip()` calls
+        per scan. An unregistered rule is warned about once here rather than once
+        per file.
+
+        `gate` (#3069) is the rule's required-literal prefilter -- see
+        rule_prefilter.derive_literal_gate for the one-sided contract -- or
+        None for rules with no safe gate. Derived here, at cache fill, because
+        the AST walk costs ~100x a finditer over a small file; per-language
+        once-per-process is the right amortization.
+
+        `line_gate` (#3072) is the candidate-line scanner for rules the
+        registry opts in via `_line_gates` -- see
+        rule_prefilter.build_line_gate -- or None. build_line_gate refusing an
+        opted-in rule (a rule edit broke line-locality) is a lost optimization,
+        never an error: the rule simply runs whole-segment. It is logged at
+        debug because the registry property test in test_line_gates.py is the
+        loud guard for that regression."""
+        cache = self.__dict__.setdefault("_active_rules_cache", {})
+        cached = cache.get(seg_lang)
+        if cached is not None:
+            return cached
+        rules_dict = self.languages.get(seg_lang, {}).get("rules", {})
+        line_gate_names = rules_dict.get("_line_gates") or ()
+        valid_keys = set(self.UNIVERSAL_METRICS_SCHEMA).union(self._APPSEC_KEYS)
+        active: list[tuple[str, Any, str, Optional[RulePrefilterGate], Optional[re.Pattern[str]]]] = []
+        seen_rule_names: set[str] = set()
+        for rule_name, pattern in rules_dict.items():
+            if rule_name.startswith("_") or not pattern:
+                continue
+            mapped_key = self.CORE_MAPPING.get(rule_name, rule_name)
+            if mapped_key not in valid_keys:
+                self.logger.warning(
+                    f"[DIAGNOSTIC] Unregistered rule '{mapped_key}' found in '{seg_lang}'. Ignoring to preserve schema."
+                )
+                continue
+            raw_pat = getattr(pattern, "pattern", str(pattern))
+            clean_pat = raw_pat.replace("(?i)", "").replace("(?m)", "").replace("(?s)", "").strip()
+            if clean_pat in ("", "()", "(?:)", "^", "$"):
+                continue
+            seen_rule_names.add(rule_name)
+            line_gate = None
+            if hasattr(pattern, "finditer"):
+                gate = derive_literal_gate(pattern)
+                if rule_name in line_gate_names:
+                    line_gate = build_line_gate(pattern)
+                    if line_gate is None:
+                        self.logger.debug(
+                            f"[DIAGNOSTIC] '{seg_lang}' declares a _line_gates entry for "
+                            f"'{rule_name}' but the pattern is not line-gateable; running whole-segment."
+                        )
+            else:
+                gate = None
+            active.append((rule_name, pattern, mapped_key, gate, line_gate))
+        for name in line_gate_names:
+            if name not in seen_rule_names:
+                self.logger.warning(
+                    f"[DIAGNOSTIC] '_line_gates' entry '{name}' in '{seg_lang}' names no active rule. Ignoring."
+                )
+        cache[seg_lang] = active
+        return active
+
     def coding_analysis(
         self, segments: list[tuple[str, str, int]], regex_telemetry: Optional[dict] = None
     ) -> tuple[dict[str, int], dict[str, int], list[dict[str, list[int]]], list[str], dict[str, list[int]]]:
@@ -1760,16 +2797,19 @@ class StructuralExtractor:
 
         # --- THE FIX: INJECT APPSEC SENSORS ---
         # Force the new Phase 4 sensors into the schema so the LogicSplicer doesn't ignore them
-        for appsec_key in ["memory_scraping", "exfiltration_camouflage", "rce_funnel"]:
+        for appsec_key in self._APPSEC_KEYS:
             if appsec_key not in counts:
                 counts[appsec_key] = 0
 
+        # The proximity tally (#2813): the five spatial_correlation.py pairs write
+        # ONLY here; the recorded counts stay raw and the score layer applies
+        # these through PROXIMITY_WEIGHTS / weighted_count().
         mitigations: dict[str, int] = {
             "mitigated_danger": 0,
             "mitigated_memory_allocs": 0,
-            "amplified_rce": 0,
             "amplified_race_conditions": 0,
-            "amplified_leaks": 0,
+            "amplified_exfiltration": 0,
+            "amplified_cascading_flux": 0,
         }
         segment_spatial_maps = []
         extracted_parents: list[str] = []
@@ -1779,43 +2819,118 @@ class StructuralExtractor:
             # 1. Grab the language-specific rules
             rules = self.languages.get(seg_lang, {}).get("rules", {}).copy()
 
+            # #2814: blank statically-dead C-family preprocessor branches before
+            # any rule runs, so a hit inside `#if 0` is not counted at file or
+            # function level. Length-preserving, so threat_locations line
+            # numbers and the spatial_map offsets below stay valid. No-op for
+            # non-C-family segments and for unknown/live conditions.
+            seg_code = self._blank_dead_preproc_branches(seg_code, seg_lang)
+
             seg_len = len(seg_code)
+
+            # #PERF: converting each match offset to a line number below used
+            # `seg_code.count("\n", 0, m.start())` -- O(seg_len) per match, so
+            # O(matches x seg_len) per segment (the same O(N^2) family as the
+            # class-loop and orphan scans; ~3.9s on a 1MB single-segment header).
+            # Precompute this segment's newline offsets once; each conversion is
+            # then an O(log n) bisect. bisect_left(offsets, pos) == count of "\n"
+            # strictly before pos == seg_code.count("\n", 0, pos).
+            _seg_nl: list[int] = []
+            _sp = seg_code.find("\n")
+            while _sp != -1:
+                _seg_nl.append(_sp)
+                _sp = seg_code.find("\n", _sp + 1)
+
+            def _seg_line(pos: int, _nl: list[int] = _seg_nl, _offset: int = current_line_offset) -> int:
+                return _offset + bisect.bisect_left(_nl, pos) + 1
+
+            # #2674: a registry may declare `_scope_filters: {rule_name: filter_name}`
+            # for rules whose regex can match a construct that only *sometimes*
+            # means what the rule counts, and where the deciding context is the
+            # ENCLOSING FORM rather than anything a flat pattern can see (scheme's
+            # `(define x v)` is a global at module level and a local binding
+            # inside any lambda/let/procedure body, at identical indentation).
+            # The filter runs over the same segment the regex ran over and only
+            # ever REMOVES matches, so counts, spatial_map and threat_locations
+            # stay mutually consistent. Scans are cached per segment because a
+            # filter's structural pass is independent of which rule asks for it.
+            scope_filters: dict[str, str] = rules.get("_scope_filters") or {}
+            scope_cache: dict[str, set[int]] = {}
 
             # ---> NEW: Spatial Map for this segment <---
             spatial_map: dict[str, list[int]] = {}
 
-            for rule_name, pattern in rules.items():
-                if rule_name.startswith("_"):
-                    continue
+            # #3069: the fold_haystack view backing case-insensitive prefilter
+            # gates. Computed lazily -- only languages with IGNORECASE rules
+            # (cobol/powershell/sql-family, not the c/ts hot path) ever pay
+            # the folding pass, and then only once per segment.
+            seg_fold: Optional[str] = None
 
-                mapped_key = self.CORE_MAPPING.get(rule_name, rule_name)
-
-                if mapped_key not in counts:
-                    self.logger.warning(
-                        f"[DIAGNOSTIC] Unregistered rule '{mapped_key}' found in '{seg_lang}'. Ignoring to preserve schema."
-                    )
-                    continue
-
-                if not pattern:
-                    continue
-
-                raw_pat = getattr(pattern, "pattern", str(pattern))
-                clean_pat = raw_pat.replace("(?i)", "").replace("(?m)", "").replace("(?s)", "").strip()
-                if clean_pat in ("", "()", "(?:)", "^", "$"):
-                    continue
-
+            # #PERF: rule eligibility (skip `_`-meta keys, empty/trivial
+            # patterns, and rules whose mapped key isn't in the counts schema)
+            # depends only on the language's static ruleset, not the file. It used
+            # to re-run for every rule of every file -- recomputing
+            # `pattern.pattern.replace(...)*3.strip()` and the membership tests
+            # tens of thousands of times per scan. Compute it once per language
+            # and cache it (see `_active_coding_rules`).
+            for rule_name, pattern, mapped_key, gate, line_gate in self._active_coding_rules(seg_lang):
                 try:
                     t_rule_start = time.perf_counter()
 
+                    # #3069: the required-literal gate. If none of the rule's
+                    # required literals occur in the segment, the regex cannot
+                    # match (rule_prefilter's one-sided contract), so the
+                    # whole finditer sweep -- the dominant CPU cost on large
+                    # files -- is skipped. The skip must still mirror the
+                    # zero-match bookkeeping below: spatial_map gets its
+                    # empty-list key (spatial_correlation and the rce_funnel
+                    # amplifier do `in spatial_map` presence tests) and the
+                    # telemetry key absorbs the gate-check time so profiling
+                    # attributes the gate's own overhead.
+                    if gate is not None:
+                        gate_literals, gate_needs_fold = gate
+                        if gate_needs_fold:
+                            if seg_fold is None:
+                                seg_fold = fold_haystack(seg_code)
+                            gate_hay = seg_fold
+                        else:
+                            gate_hay = seg_code
+                        if not any(lit in gate_hay for lit in gate_literals):
+                            spatial_map.setdefault(mapped_key, [])
+                            if regex_telemetry is not None:
+                                key = f"{seg_lang}::{rule_name}"
+                                regex_telemetry[key] = regex_telemetry.get(key, 0.0) + (
+                                    time.perf_counter() - t_rule_start
+                                )
+                            continue
+
                     # ---> THE UPGRADE: Spatial Mapping instead of raw counting <---
                     if hasattr(pattern, "finditer"):
-                        matches = list(pattern.finditer(seg_code))
+                        # #3072: rules whose pattern is provably line-local
+                        # (see rule_prefilter.line_gated_finditer's
+                        # equivalence argument) sweep only the runs of lines
+                        # containing a required literal. Same Match objects,
+                        # same order, same offsets -- everything below is
+                        # oblivious to which path produced them. The segment
+                        # gate has already passed by this point; both gates
+                        # coexist (segment gate skips whole files, line gate
+                        # thins the survivors).
+                        if line_gate is not None:
+                            matches = line_gated_finditer(pattern, line_gate, seg_code)
+                        else:
+                            matches = list(pattern.finditer(seg_code))
+                        scope_filter_name = scope_filters.get(rule_name)
+                        if scope_filter_name and matches:
+                            matches = self._apply_scope_filter(
+                                scope_filter_name, seg_lang, rule_name, seg_code, matches, scope_cache
+                            )
                         hit_indices = [m.start() for m in matches]
 
-                        # ---> NEW: Offset to LOC Conversion <---
-                        for m in matches:
-                            line_number = current_line_offset + seg_code.count("\n", 0, m.start()) + 1
-                            threat_locations.setdefault(mapped_key, []).append(line_number)
+                        # ---> Offset to LOC Conversion (#PERF: bind the
+                        # threat_locations list once and extend, instead of a
+                        # setdefault dict lookup per match) <---
+                        if hit_indices:
+                            threat_locations.setdefault(mapped_key, []).extend(_seg_line(idx) for idx in hit_indices)
 
                         # ---> THE LINEAGE EXTRACTOR <---
                         # In a `class Foo extends Bar` shape, group 1 is the name
@@ -1834,12 +2949,26 @@ class StructuralExtractor:
                         matches = list(re.finditer(str(pattern), seg_code))
                         hit_indices = [m.start() for m in matches]
 
-                        # ---> NEW: Offset to LOC Conversion <---
-                        for m in matches:
-                            line_number = current_line_offset + seg_code.count("\n", 0, m.start()) + 1
-                            threat_locations.setdefault(mapped_key, []).append(line_number)
+                        # ---> Offset to LOC Conversion (#PERF: bind the
+                        # threat_locations list once and extend, instead of a
+                        # setdefault dict lookup per match) <---
+                        if hit_indices:
+                            threat_locations.setdefault(mapped_key, []).extend(_seg_line(idx) for idx in hit_indices)
 
                     c = len(hit_indices)
+
+                    # #2804: COBOL's `args` rule captures a whole USING/RETURNING
+                    # operand list in one group, so a bare match count reads
+                    # CLAUSES, not declared parameters -- `USING A, B, C` scored 1,
+                    # the same as `USING A`. Count the operands the clauses actually
+                    # declare instead (a real linkage section passes several). The
+                    # per-clause `hit_indices`/`spatial_map` entries are left as-is
+                    # (they mark WHERE the clauses are, for line locations); only the
+                    # tallied magnitude switches from clause-count to operand-count.
+                    if seg_lang == "cobol" and rule_name == "args" and matches:
+                        c = sum(
+                            self._count_cobol_using_operands(m.group(1) if m.lastindex else m.group(0)) for m in matches
+                        )
 
                     t_elapsed = time.perf_counter() - t_rule_start
 
@@ -1856,7 +2985,7 @@ class StructuralExtractor:
                     counts[mapped_key] += c
                     spatial_map.setdefault(mapped_key, []).extend(hit_indices)
 
-                except Exception as e:
+                except Exception as e:  # per-rule isolation: one rule's regex failure shouldn't abort the remaining rules for this file
                     self.logger.error(
                         f"[DIAGNOSTIC] Regex failure in rule '{rule_name}' for language '{seg_lang}': {e}"
                     )
@@ -1903,9 +3032,10 @@ class StructuralExtractor:
             # galaxyscope.py, against the persisted threat_locations ledger, via
             # spatial_correlation.correlate_against_ledger() (#348).
 
-            # Capture indentation signatures
-            counts["indent_tabs"] += len(re.findall(r"^\t+(?=\S)", seg_code, flags=re.MULTILINE))
-            counts["indent_spaces"] += len(re.findall(r"^[ ]{2,}(?=\S)", seg_code, flags=re.MULTILINE))
+            # Capture indentation signatures (#3069: precompiled -- these two
+            # ran through the re-cache lookup once per segment)
+            counts["indent_tabs"] += len(_INDENT_TABS_PATTERN.findall(seg_code))
+            counts["indent_spaces"] += len(_INDENT_SPACES_PATTERN.findall(seg_code))
             segment_spatial_maps.append(spatial_map)
 
         return counts, mitigations, segment_spatial_maps, extracted_parents, threat_locations
@@ -2281,11 +3411,14 @@ class StructuralExtractor:
         self,
         segments: list[tuple[str, str, int]],
         segment_spatial_maps: list[dict[str, list[int]]],
-        counts: dict[str, int],
         mitigations: dict[str, int],
         regex_telemetry: Optional[dict] = None,
     ) -> tuple[list[FunctionNode], float]:
-        """The Master Routing Dispatcher: Directs the structural signal into the correct integration mode."""
+        """The Master Routing Dispatcher: Directs the structural signal into the correct integration mode.
+
+        Also runs the satellite-scoped proximity correlations once real function
+        boundaries exist. Since #2813 they only tally into `mitigations`; the
+        recorded counts are never edited here."""
         all_satellites: list[FunctionNode] = []
         global_impact = 0.0
 
@@ -2358,6 +3491,28 @@ class StructuralExtractor:
                         # span exactly from its own keyword to the next
                         # RUN/CMD/ENTRYPOINT/HEALTHCHECK match, or EOF.
                         "dockerfile",
+                        # gitgalaxy#3077: bms (#2505) shipped without a routing
+                        # entry, so it fell through to Mode_B_Braces below -- the
+                        # exact abap/dockerfile/jcl/m4 shape yet again -- and 0 of
+                        # its 13 raw DFHMDI matches on the keyword-rosetta shell
+                        # ever reached function_data (functions_found 0, every
+                        # per-function descriptor undefined). HLASM macro source
+                        # has no braces (a `{` can only appear inside an
+                        # INITIAL='...' literal), and Mode A's "greedy to the next
+                        # func_start match" body heuristic is a correct, direct
+                        # fit: maps never nest, so each named DFHMDI's real body
+                        # always ends where the next DFHMDI/DFHMSD statement (or
+                        # EOF) begins.
+                        "bms",
+                        # #2503: hlasm is bms's syntax generalised (bms IS
+                        # HLASM macro source, #3077's entry above) -- no
+                        # braces anywhere (a `{` can only appear inside a
+                        # C'...' literal), and Mode A's "greedy to the next
+                        # func_start match" body heuristic is a correct,
+                        # direct fit: control sections never nest, so each
+                        # named CSECT/RSECT/START's real body always ends
+                        # where the next section statement (or EOF) begins.
+                        "hlasm",
                         # #1975: jcl has no ScopeParsingRegistry entry and no
                         # brace-delimited bodies at all (JCL is fixed-column
                         # mainframe syntax), so it was silently falling through to
@@ -2394,6 +3549,37 @@ class StructuralExtractor:
                         # the trailing `%%`), exactly like COBOL's label-only
                         # paragraphs. `.l`/`.ll` (lex/flex) share this rule set.
                         "yacc",
+                        # #2648: makefile has no ScopeParsingRegistry entry and no
+                        # brace-delimited bodies at all (target recipes are
+                        # tab-indented, no braces at all), so it was silently
+                        # falling through to Mode_B_Braces below -- which only
+                        # "succeeds" when a `{` happens to appear by coincidence.
+                        # This dropped 100% of real matches (0 of 14 raw matches
+                        # reached the named list). Mode A's "greedy to the next
+                        # func_start match" body heuristic is a correct, direct fit.
+                        "makefile",
+                        # #2648: ada has no ScopeParsingRegistry entry and no
+                        # brace-delimited bodies at all (procedures use `is ...
+                        # begin ... end;`, never `{`/`}`), so it was silently
+                        # falling through to Mode_B_Braces below -- which only
+                        # "succeeds" when a `{` happens to appear by coincidence.
+                        # This dropped 100% of real matches (0 of 13 raw matches
+                        # reached the named list). Mode A's "greedy to the next
+                        # func_start match" body heuristic is a correct, direct fit.
+                        "ada",
+                        # #2502: pli is ada's shape -- `label: PROC; ... END label;`, no
+                        # braces and no ScopeParsingRegistry entry, so without this it
+                        # falls through to Mode_B_Braces like ada did before #2648.
+                        # Internal procedures nest, so a nested PROC ends its parent's
+                        # body early; that is the same approximation ada's nested
+                        # subprograms already take.
+                        "pli",
+                        # #2504: rexx is COBOL's own shape -- a subroutine runs from
+                        # its `label:` to its RETURN/EXIT (both already in the shared
+                        # assembly_returns terminator vocabulary) or the next label,
+                        # never a brace. Routines don't nest, so Mode A's greedy
+                        # label-to-label body is the real boundary.
+                        "rexx",
                     ) or family in ("column_sensitive"):
                         mode_name = "Mode_A_Labels"
                         sats, impact = self._slice_by_labels(code, rules, offset, spatial_map)
@@ -2451,8 +3637,8 @@ class StructuralExtractor:
             sat_ranges = sorted(
                 (sat["start_idx"], sat["end_idx"]) for sat in sats if "start_idx" in sat and "end_idx" in sat
             )
-            apply_dampener_correlations(spatial_map, sat_ranges, counts, mitigations)
-            apply_amplifier_correlations(spatial_map, sat_ranges, counts, mitigations)
+            apply_dampener_correlations(spatial_map, sat_ranges, mitigations)
+            apply_amplifier_correlations(spatial_map, sat_ranges, mitigations)
 
             all_satellites.extend(sats)
             global_impact += impact
@@ -2557,6 +3743,37 @@ class StructuralExtractor:
                 registers.add(m.group(4).lower() + "x")
         return len(registers)
 
+    # #2804: the phrase words a COBOL `USING`/`RETURNING` operand list can carry
+    # BETWEEN the clause keyword and each data-name -- `BY REFERENCE`/`BY CONTENT`/
+    # `BY VALUE` passing-mode prefixes. They are not operands and must not be counted
+    # as parameters. See `_count_cobol_using_operands`.
+    _COBOL_ARG_PHRASE_WORDS: ClassVar[frozenset[str]] = frozenset({"BY", "REFERENCE", "CONTENT", "VALUE"})
+
+    def _count_cobol_using_operands(self, captured: str) -> int:
+        """Count the DECLARED PARAMETERS in one COBOL `USING`/`RETURNING` operand
+        list, not the clause itself. COBOL's `args` rule captures the whole
+        comma-or-space-separated operand list of a clause in a single group
+        (`PROCEDURE DIVISION USING A, B, C` and `PROCEDURE DIVISION USING A` both
+        yield exactly one `finditer` match), so the file-level signal -- a bare
+        `len(finditer(...))` -- counted CLAUSES and read a 3-operand linkage the
+        same as a 1-operand one (#2804 Ground 2). Splits the captured list on
+        commas and whitespace and counts the data-name tokens, dropping the
+        `BY REFERENCE`/`BY CONTENT`/`BY VALUE` passing-mode phrase words
+        (`_COBOL_ARG_PHRASE_WORDS`) which sit between the clause keyword and each
+        operand but are not themselves parameters. `USING A, B, C` -> 3,
+        `USING BY REFERENCE A BY CONTENT B` -> 2, `USING ARGV-BLOCK` -> 1, an empty
+        capture -> 0. This is the same "one match, real operand count" shape as
+        `_count_agc_register_args`/`_count_assembly_register_args`, and generalises
+        to real Enterprise COBOL, whose linkage sections routinely pass several
+        operands and previously scored 1."""
+        if not captured:
+            return 0
+        count = 0
+        for token in re.split(r"[,\s]+", captured.strip()):
+            if token and token.upper() not in self._COBOL_ARG_PHRASE_WORDS:
+                count += 1
+        return count
+
     # galaxyscope:ignore sec_high_risk_execution
 
     # #1973/#2483: per-language line-continuation marker used to extend a Mode A
@@ -2564,7 +3781,11 @@ class StructuralExtractor:
     # primary_lang_id. Deliberately NOT a generic "any trailing symbol"
     # rule -- cobol's fixed-format continuation is a column-7 indicator on
     # the CONTINUING line, not a trailing marker on the line before, so
-    # cobol legitimately gets no entry here and stays single-line-only.
+    # cobol legitimately gets no entry here. #2863: that is still correct,
+    # and it is also not the whole story -- a COBOL paragraph declares its
+    # parameters in a separate `ENTRY` statement on the following line, not
+    # in a continuation of the label line, so cobol is routed to
+    # `_cobol_args_window_end` before this map is consulted.
     # jcl's marker is a bare trailing comma: any `//` statement line ending in
     # `,` continues onto the next `//` line by real JCL syntax (no separate
     # indicator column the way cobol/fixed-format languages use) -- this
@@ -2588,7 +3809,11 @@ class StructuralExtractor:
         inside a still-open Dockerfile heredoc body (`<<EOF ... EOF`) --
         stopping at the first line that's neither, which is the real end of
         the label's own signature/statement. A language with no
-        continuation marker (cobol) never extends past its own first line.
+        continuation marker never extends past its own first line -- which
+        is why cobol no longer comes through here at all: its parameter
+        declaration is a separate `ENTRY` statement rather than a
+        continuation of the label line, so it needs a window rule of its own
+        (`_cobol_args_window_end`, #2863) rather than a marker entry.
         For fortran specifically, a blank line, a full `!...` comment line,
         or a C-preprocessor line (`#ifdef`/`#endif`/etc. -- real-world `.F`
         files like WRF's are cpp-preprocessed) carries no continuation
@@ -2608,6 +3833,8 @@ class StructuralExtractor:
         regex backtracking), so a generous cap costs nothing at the common
         (short) case and only matters for genuinely pathological input.
         """
+        if self.primary_lang_id == "cobol":
+            return self._cobol_args_window_end(code, start_idx, hard_limit_idx)
         marker = self._MODE_A_ARGS_CONTINUATION_MARKER.get(self.primary_lang_id)
         is_fortran = self.primary_lang_id == "fortran"
         pos = start_idx
@@ -2653,6 +3880,73 @@ class StructuralExtractor:
             return min(line_end + 1, hard_limit_idx)
         return min(pos, hard_limit_idx)
 
+    # #2863: how many physical lines of leading `ENTRY` statements one COBOL
+    # paragraph may declare before the scan gives up. A paragraph declares one
+    # alternate entry point in practice and a handful at the very most; this is
+    # only here so a pathological file cannot turn a per-label check into a
+    # whole-file walk.
+    _COBOL_ENTRY_SCAN_LINES: ClassVar[int] = 24
+
+    def _cobol_args_window_end(self, code: str, start_idx: int, hard_limit_idx: int) -> int:
+        """Bound a COBOL paragraph's args-search window to the label line PLUS
+        any `ENTRY` statements that immediately follow it (#2863).
+
+        COBOL is the one Mode A language whose parameter declaration cannot sit
+        on the label's own line. A paragraph name is terminated by its own
+        period, so the `ENTRY 'PARA-NAME' USING <linkage-item>` that declares
+        the paragraph's alternate entry point is necessarily a SEPARATE
+        statement on the next line. The generic
+        `_mode_a_args_window_end` walk extends only across a language's
+        line-continuation marker, and cobol correctly has none (its
+        fixed-format continuation is a column-7 indicator on the CONTINUING
+        line, not a trailing marker on the line before), so the window was
+        exactly the label line and the declaration always fell one line
+        outside it -- `hit_vector['args']` counted the clause while the
+        function's own `args` read 0, in the same record.
+
+        Only leading `ENTRY` lines extend the window, and that narrowness is
+        the whole point rather than caution. Measured over the real-world
+        crucible COBOL corpus (570 files, 10155 paragraphs), 158 paragraphs
+        have a `USING`/`RETURNING` somewhere inside their greedy Mode A block
+        and NONE of them is a parameter declaration: 123 are `CALL ... USING`
+        (an invocation -- it passes arguments to a subprogram rather than
+        declaring the paragraph's own), 26 are the program-level `PROCEDURE
+        DIVISION USING` swallowed by a preceding label's greedy block, 3 are
+        `XML PARSE ... RETURNING`, and the rest are `CALL` continuation lines
+        and a `MOVE "USING OPERANDS"` string literal. Widening this window to
+        the block -- the unbounded behaviour #1973/#2483 removed -- would
+        therefore manufacture 158 wrong per-paragraph parameter counts to fix
+        nothing, which is exactly why the bound exists and why `CALL` cannot
+        match `_COBOL_ENTRY_STATEMENT_RE`.
+
+        Blank lines are transparent, for a concrete reason rather than for
+        symmetry with the fortran branch above: `prism` blanks comment lines
+        in place to preserve line numbering, so a banner comment between a
+        paragraph label and its `ENTRY` -- ordinary COBOL house style --
+        reaches this scan as an empty line. Stopping on it would make the fix
+        depend on whether the author commented the paragraph.
+        """
+        window_end = code.find("\n", start_idx)
+        if window_end == -1 or window_end >= hard_limit_idx:
+            return hard_limit_idx
+        window_end += 1
+        scan = window_end
+        for _ in range(self._COBOL_ENTRY_SCAN_LINES):
+            if scan >= hard_limit_idx:
+                break
+            line_end = code.find("\n", scan)
+            if line_end == -1 or line_end >= hard_limit_idx:
+                break
+            line = code[scan:line_end]
+            if not line.strip():
+                scan = line_end + 1
+                continue
+            if _COBOL_ENTRY_STATEMENT_RE.match(line):
+                scan = window_end = line_end + 1
+                continue
+            break
+        return min(window_end, hard_limit_idx)
+
     def _slice_by_labels(
         self,
         code: str,
@@ -2672,6 +3966,17 @@ class StructuralExtractor:
             matches = list(func_start.finditer(code))  # type: ignore[union-attr]
         except Exception:
             return [], 0.0
+
+        # #3197: a `_scope_filters` entry for `func_start` has to reach THIS
+        # consumer too. coding_analysis applies it to the COUNT; the unit list
+        # is built here, and a filter only one of them honours would make
+        # `func_start` and `function_data` disagree about the same file
+        # (the #2753 unfiltered-consumer trap).
+        _fs_filter = (rules.get("_scope_filters") or {}).get("func_start")
+        if _fs_filter and matches:
+            matches = self._apply_scope_filter(_fs_filter, self.primary_lang_id, "func_start", code, matches, {})
+            if not matches:
+                return [], 0.0
 
         # #1918: built once per file, not per function -- ABAP's real parameter
         # declarations live in the DEFINITION section, never in the IMPLEMENTATION body
@@ -2949,9 +4254,22 @@ class StructuralExtractor:
         elif lang_id == "tcl":
             # Tcl has no single-quote string literal syntax (a bare `'` is an ordinary character).
             # Follows perl/powershell convention: redefine combined_pattern to omit single_quote entirely.
+            #
+            # #2763: `//[^\n]*|/\*.*?\*/` was also dropped here -- exactly perl's
+            # #1437 bug, one language over. Tcl's only comment introducer is `#`
+            # (already blanked upstream by prism, so nothing is lost by removing
+            # these), but `//` appears constantly inside real tcl as the scheme
+            # separator of a URL, and shielding from it blanked the REST OF THE
+            # LINE -- including any `}` on it. That silently unbalanced the depth
+            # counter `_find_balanced_end` runs on. Before #2763's slicer fix this
+            # was invisible (a tcl body was never brace-walked at all); with it,
+            # `macports_port_api/portfetch.tcl`'s `bzrfetch` measured loc 515 for a
+            # real 37-line proc, because line 259's `{http://} $env($varname)] != 0`
+            # lost its closing brace to the shield. 14 of 376 crucible procs
+            # over-captured this way; all 14 resolve with the branch removed.
             combined_pattern = (
                 r'""".*?"""|' + csharp_verbatim + r'R"([a-zA-Z0-9_]*)\(.*?\)\1"|'
-                r'"(?:\\.|[^"\\])*"|' + backtick + r"|//[^\n]*|/\*.*?\*/"
+                r'"(?:[^"\\\n]|\n(?![ \t]*proc\b)|\\.)*"|' + backtick
             )
         elif lang_id == "perl":
             # #1437: perl was falling through to the C-family default below, which shields
@@ -3148,7 +4466,7 @@ class StructuralExtractor:
             safe_code = re.sub(combined_pattern, fast_shield, safe_code, flags=re.DOTALL)
 
         # Macro Shields (Strictly Gated to C-Family)
-        if lang_id in ("c", "cpp", "objective-c", "cs", "swift"):
+        if lang_id in self._C_FAMILY_MACRO_LANGS:
             lines = safe_code.splitlines(keepends=True)
             # Per-open-#if branch policy. Each stack entry is a (policy, side)
             # pair where policy is the #if condition's static truth value and
@@ -3236,6 +4554,89 @@ class StructuralExtractor:
             return False
         return None
 
+    def _blank_dead_preproc_branches(self, code: str, lang_id: str) -> str:
+        """
+        Blanks the bodies of statically-dead C-family preprocessor branches
+        (`#if 0`, and the dead side of `#if 1`) so a rule regex in
+        `coding_analysis` never counts a hit inside code the compiler never
+        compiles (#2814). Same length as `code` (blanks -> spaces, newlines
+        preserved) so every offset in `spatial_map` / `threat_locations` and the
+        `_calculate_block_metrics` bisect stays valid.
+
+        Unlike `_build_brace_safe_stream`'s boundary shield this does NOT blank
+        the branch's own `#if/#elif/#else/#endif` markers or any *live*
+        directive line: rules such as cpp `import` (`#include`), csharp
+        `safety_bypasses` (`#pragma warning disable`) and objective-c `import`
+        (`#import`) legitimately match directives, so only the DEAD side may
+        disappear. A directive nested inside an enclosing dead branch (e.g. a
+        dead `#define`) is blanked, because its enclosing frame is dead.
+
+        Policy semantics mirror the boundary shield (#1720): `#if 1` -> `#else`
+        dead, `#if 0` -> first branch dead, unknown (`#if FOO` / `#ifdef` /
+        `#if defined(X)`) -> both branches kept alive and counted.
+        """
+        if lang_id not in self._C_FAMILY_MACRO_LANGS:
+            return code
+
+        lines = code.splitlines(keepends=True)
+        branch_stack: list[tuple[Optional[bool], str]] = []
+        in_multiline_macro = False
+
+        def _blank_line(line: str) -> str:
+            return " " * (len(line) - 1) + "\n" if line.endswith("\n") else " " * len(line)
+
+        def _branch_dead(entry: tuple[Optional[bool], str]) -> bool:
+            policy, side = entry
+            if policy is True:
+                return side == "else"
+            if policy is False:
+                return side == "first"
+            return False
+
+        for i in range(len(lines)):
+            line = lines[i]
+            stripped = line.lstrip()
+
+            if in_multiline_macro:
+                # A dead multi-line macro's continuation lines vanish with the
+                # branch; a live one stays for the rules to read.
+                if any(_branch_dead(e) for e in branch_stack):
+                    lines[i] = _blank_line(line)
+                if not stripped.rstrip(" \t\r\n").endswith("\\"):
+                    in_multiline_macro = False
+                continue
+
+            if stripped.startswith("#"):
+                # Deadness is judged on the stack BEFORE this directive mutates
+                # it, so the markers delimiting the dead branch (and every live
+                # directive) survive, while a non-conditional directive nested
+                # inside an already-dead region is blanked.
+                enclosing_dead = any(_branch_dead(e) for e in branch_stack)
+
+                if re.match(r"#if\b", stripped):
+                    branch_stack.append((self._classify_preproc_condition(stripped[3:].strip()), "first"))
+                elif stripped.startswith("#ifdef ") or stripped.startswith("#ifndef "):
+                    branch_stack.append((None, "first"))
+                elif re.match(r"#elif\b", stripped) and branch_stack:
+                    branch_stack[-1] = (self._classify_preproc_condition(stripped[5:].strip()), "first")
+                elif stripped.startswith("#else") and branch_stack:
+                    policy, _ = branch_stack[-1]
+                    branch_stack[-1] = (policy, "else")
+                elif stripped.startswith("#endif") and branch_stack:
+                    branch_stack.pop()
+
+                if stripped.startswith("#define") and stripped.rstrip(" \t\r\n").endswith("\\"):
+                    in_multiline_macro = True
+
+                if enclosing_dead:
+                    lines[i] = _blank_line(line)
+                continue
+
+            if any(_branch_dead(e) for e in branch_stack):
+                lines[i] = _blank_line(line)
+
+        return "".join(lines)
+
     def _slice_by_braces(
         self,
         code: str,
@@ -3266,7 +4667,8 @@ class StructuralExtractor:
         # instead of a hardcoded lang_id string so any future lisp-family language
         # sharing this integration mode is covered automatically.
         opener, closer = "{", "}"
-        if self.languages.get(lang_id, {}).get("lexical_family") == "recursive_block_lisp":
+        is_lisp = self.languages.get(lang_id, {}).get("lexical_family") == "recursive_block_lisp"
+        if is_lisp:
             opener, closer = "(", ")"
 
         safe_code = self._build_brace_safe_stream(code, lang_id)
@@ -3378,6 +4780,22 @@ class StructuralExtractor:
 
         for match_idx, match in enumerate(matches):
             start_idx = match.start()
+
+            # #2933: scheme's func_start leads with `^[ \t\n]*` under re.M, whose
+            # newline-inclusive class swallows the blank/blanked-comment lines
+            # preceding `(define` -- so `match.start()` lands at the TOP of that
+            # whitespace run (offset 0 for the first form, the inter-definition gap
+            # for later ones), not at the form itself. `block` hides this (it's
+            # `.strip()`ped), but start_line/end_line are counted from this anchor
+            # and come out shifted early for every declaration past the first. The
+            # true form start is the outer paren; advance to the first `(` at/after
+            # the match (the skipped span is pure whitespace, so `block`, the
+            # spatial-map hit-vector, and the args slice are all unaffected). Gated
+            # to the lisp family; C-family declaration anchors must stay put.
+            if is_lisp:
+                lead = safe_code.find("(", start_idx)
+                if lead != -1:
+                    start_idx = lead
 
             if lang_id == "dart" and start_idx < dart_arrow_body_end:
                 continue
@@ -4370,6 +5788,53 @@ class StructuralExtractor:
                     end_idx = term_idx + 1
                 else:
                     continue  # neither a body nor a bodyless `;` terminator ever showed up in the window
+            # #2763: a tcl `proc` has TWO brace groups, not one -- the PARAMETER
+            # LIST (`proc name {a b}`) and then the body (`{ ... }`). The generic
+            # fallback below starts its brace search at `start_idx`, so for tcl it
+            # always found the parameter list and `_find_balanced_end` closed one
+            # character later: every tcl function in every scan recorded `loc` 1,
+            # `complexity` 0 and `struct_branch` 0 (measured: 13/13 functions in
+            # keyword-rosetta/data/tcl, 376/376 in language-crucible/data/tcl).
+            # `func_start` has already consumed the parameter group via its
+            # optional `(?:[ \t\n]+\{...\})?` arm, so `match.end()` is the correct
+            # body anchor, and its trailing lookahead `(?=[ \t\n]*\{|[ \t\n]|$)`
+            # guarantees the next non-space character is either the body brace or
+            # nothing. If that optional arm did NOT match (a parameter list nested
+            # deeper than the arm's four levels, or split by a `\`-continuation,
+            # neither of which `[ \t\n]` spans), `match.end()` sits right after the
+            # name and the search degrades to exactly the old behavior rather than
+            # overshooting.
+            #
+            # DELIBERATELY GATED TO TCL, not applied to the generic `else`. The
+            # blanket form of this change ("search from `match.end()` for every
+            # Mode B language") was measured first and is catastrophic: every
+            # other language reaching the generic fallback either consumes its own
+            # body `{` inside `func_start` or stops before the parameter list, so
+            # moving the anchor skips the real body and grabs the NEXT
+            # declaration's brace. Divergent matches (first `{` from `start_idx`
+            # != first `{` from `match.end()`) across both corpora: c 1756/1756,
+            # cpp 1247/1247, scheme 96/96 (whose opener is `(`), powershell 10,
+            # groovy 11 -- against apex/css/html/php/swift 0. tcl is the only
+            # language in this fallback whose `func_start` consumes a
+            # non-body brace group, so it is the only one the anchor may move for.
+            elif lang_id == "tcl":
+                brace_idx = safe_code.find(opener, match.end(), search_limit)
+                if brace_idx == -1:
+                    # A tcl body does not have to be a brace group at all -- it is
+                    # just another word, and `proc faultsim_test_proc {testrc
+                    # testresult testnfail} $O(-test)` (sqlite/malloc_common.tcl:347)
+                    # passes a VARIABLE as the body. There is no brace after the
+                    # parameter list, so anchoring at `match.end()` finds nothing and
+                    # a bare `continue` here would DROP a real declaration the old
+                    # code kept (as a loc-1 row built from the parameter group).
+                    # Falling back to the old anchor keeps that row byte-identical,
+                    # which makes this fix a strict superset of the previous
+                    # behaviour: every tcl proc either gets a correct body span or
+                    # exactly what it had before, and the function COUNT never moves.
+                    brace_idx = safe_code.find(opener, start_idx, search_limit)
+                    if brace_idx == -1:
+                        continue
+                end_idx = self._find_balanced_end(safe_code, brace_idx, opener, closer)
             else:
                 brace_idx = safe_code.find(opener, start_idx, search_limit)
                 if brace_idx == -1:
@@ -4398,7 +5863,10 @@ class StructuralExtractor:
 
             # #2012: Pattern 2 - constructors with member-initializer-lists overcount.
             # Truncate at the first top-level `:` before the brace to exclude the list.
-            if lang_id in ("c", "cpp") and args_search_text is not None:
+            # The `:` guard (#3174) skips the per-signature char walk for the common
+            # case -- most C/C++ signatures carry no `:` at all, and with none present
+            # the loop's only effect (truncating at a top-level `:`) can never fire.
+            if lang_id in ("c", "cpp") and args_search_text is not None and ":" in args_search_text:
                 depth_paren = depth_angle = 0
                 for i_ch, ch in enumerate(args_search_text):
                     if ch == "(":
@@ -4444,7 +5912,10 @@ class StructuralExtractor:
             # found during review, neither is the shape this fix targets, so
             # both now fall through unchanged to pre-#1837 behavior instead
             # of being newly broken by an overly broad re-slice.
-            if lang_id in ("c", "cpp") and args_search_text is not None:
+            # The `#` guard (#3174) skips the preprocessor-branch finditer for the
+            # common case -- a signature with no `#` can hold no `#else`/`#elif`
+            # line, so the scan below can never match and the re-slice never fires.
+            if lang_id in ("c", "cpp") and args_search_text is not None and "#" in args_search_text:
                 last_branch_end = None
                 for pp_match in re.finditer(r"^[ \t]*#\s*(?:else|elif)\b.*$", args_search_text, re.M):
                     if args_search_text[: pp_match.start()].rstrip().endswith(")"):
@@ -4463,12 +5934,13 @@ class StructuralExtractor:
             if name in known_macro_positions and known_macro_positions[name] < start_idx:
                 continue
 
+            block_nl = block.count("\n")  # #3174: scan the (often large) body once, not twice
             sat, mag = self._calculate_block_metrics(
                 name,
                 block,
-                block.count("\n") + 1,
+                block_nl + 1,
                 current_line_count,
-                current_line_count + block.count("\n"),
+                current_line_count + block_nl,
                 rules,
                 start_idx,
                 end_idx,
@@ -4750,14 +6222,28 @@ class StructuralExtractor:
                 # `safe_code` has strings/comments masked, which is perfect since we don't
                 # want to match an arrow inside a default-value string literal or comment
                 signature_text = safe_code[start_idx:sig_end]
-                if "->" not in signature_text and "⊸" not in signature_text:
+                # #2934 contract (docs/func_start_rule_contract.md, #2856): "no
+                # arrow" is too broad a test for "point-free value binding". A
+                # zero-arg IO action (`entry :: IO ()`, `main :: IO a`) is
+                # arrowless yet opens an executable block under its own name --
+                # the canonical Haskell entry point -- so it must NOT be dropped
+                # like a pure CAF (`defaultKaTeXURL :: Text`). Skip only an
+                # arrowless signature whose return-type head is NOT `IO`; every
+                # true value binding still falls through, IO actions are kept.
+                if (
+                    "->" not in signature_text
+                    and "⊸" not in signature_text
+                    and not self._haskell_arrowless_signature_is_action(signature_text)
+                ):
                     continue
 
             # Extract the raw payload using the ORIGINAL code to retain the exact executable payload
             block = code[start_idx:end_idx].strip()
+            # #2649: YAML GitHub Actions steps (e.g., `- run: pytest`) are overwhelmingly single-line
+            # entities; they must bypass the multi-line floor or they are completely dropped.
             if not block or (
                 len(block.splitlines()) < 2
-                and lang_id not in ("haskell", "python", "embedded_python", "typescript", "javascript")
+                and lang_id not in ("haskell", "python", "embedded_python", "typescript", "javascript", "yaml")
             ):
                 continue
 
@@ -4961,8 +6447,12 @@ class StructuralExtractor:
             if stack_depth == 0:
                 if net_change > 0:
                     satellite_name = self._extract_semantic_name(safe_line, lang_key)
+                    # #2758: index of the line the name was recovered FROM, when
+                    # that is not the opener line itself.
+                    decl_line_idx = None
                     if satellite_name == "Anonymous_Block":
-                        for past_safe in reversed(past_safe_lines):
+                        for past_idx in range(len(past_safe_lines) - 1, -1, -1):
+                            past_safe = past_safe_lines[past_idx]
                             if past_safe.strip():
                                 # #2438: skip a self-contained one-liner
                                 # declaration -- its name belongs to its own node.
@@ -4975,13 +6465,43 @@ class StructuralExtractor:
                                 fallback = self._extract_semantic_name(past_safe, lang_key)
                                 if fallback != "Anonymous_Block":
                                     satellite_name = fallback
+                                    decl_line_idx = past_idx
                                 break
                     current_satellite = [orig_line]
                     is_current_satellite_class = (
                         bool(class_opener_pattern.search(safe_line)) if class_opener_pattern else False
                     )
                     stack_depth += net_change
-                    sat_start_line = current_line_offset + 1
+                    # #2758: anchor the node where it is DECLARED, not where its
+                    # body happens to open. Mode D's openers include the bare
+                    # brace, so a K&R-style declaration (`f_create_role()` on one
+                    # line, `{` on the next -- how curl's own initscript.sh is
+                    # written throughout) reported start_line on the brace. The
+                    # lookback above already had to walk back to find the name;
+                    # it recovered the name and left the position behind.
+                    #
+                    # This moves only the ANCHOR, never the satellite's text:
+                    # `current_satellite` still begins at the opener, so `loc`,
+                    # `args` and the per-function hit_vector are untouched, and
+                    # the declaration line's own keywords stay where they are.
+                    # Safe here specifically because Mode D computes
+                    # `sat_end_line` independently (see below) rather than as
+                    # `start_line + loc - 1` the way the brace/label modes do --
+                    # so the span EXTENDS backwards over the declaration instead
+                    # of sliding one line earlier.
+                    sat_start_line = (
+                        offset + decl_line_idx + 1 if decl_line_idx is not None else current_line_offset + 1
+                    )
+                    # `sat_start_char` deliberately does NOT follow it. The char
+                    # pair is not metadata: `_calculate_block_metrics` slices the
+                    # file's `spatial_map` with `bisect(indices, start_char)`, so
+                    # moving it re-attributes every signal between the
+                    # declaration and the opener into this function. Measured
+                    # when this fix first moved both: `versioned_copy` in
+                    # curl/initscript.sh went from 0 to 36 control-flow branches.
+                    # The line anchor is what the recorders and SARIF report and
+                    # what `spatial_correlation` scopes on; the char pair stays
+                    # the block's own coordinates.
                     sat_start_char = current_char_offset
                 else:
                     global_dust.append(orig_line)
@@ -5451,6 +6971,752 @@ class StructuralExtractor:
             i += 1
         return len(text)
 
+    # ------------------------------------------------------------------
+    # #2674: registry-declared scope filters (see `_scope_filters` in
+    # coding_analysis). Six exist today -- `lisp_body_position` (scheme),
+    # `go_declaration_group` (#2859), `matlab_return_channel`,
+    # `yaml_parameter_block` (#2753), `abap_declaration_statement` (#2824)
+    # and `jcl_instream_payload` (#3010); add new ones here, keyed by the
+    # name a language definition uses, so the registry stays data.
+    # ------------------------------------------------------------------
+
+    # Forms whose body is a LOCAL scope: a `(define ...)` whose nearest
+    # classifying ancestor is one of these is an internal definition (R7RS
+    # 5.3.2 "Internal definitions"), not a global. `define` itself is here
+    # because a define nested inside another define's body is internal by
+    # construction, and every `define-*` form (`define-syntax` templates,
+    # `define-record-type` / nanopass `define-pass` bodies) is treated the
+    # same way in the walk. Unknown heads (`begin`, `if`, a `cond` clause's
+    # own `[...]`, quoted data) are TRANSPARENT: the walk keeps climbing, so a
+    # top-level `(begin (define x 1))` still counts (begin splices into the
+    # enclosing context, R7RS 5.6.1). `let-syntax` / `letrec-syntax` are
+    # transparent too: R6RS 11.18 splices their bodies into the surrounding
+    # context, and Chez's io.ss wraps its whole file in one.
+    _LISP_BODY_FORMS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "lambda",
+            "case-lambda",
+            "let",
+            "let*",
+            "letrec",
+            "letrec*",
+            "let-values",
+            "let*-values",
+            "when",
+            "unless",
+            "cond",
+            "case",
+            "parameterize",
+            "fluid-let",
+            "dynamic-wind",
+            "with-output-language",
+            "meta-cond",
+            "guard",
+            "do",
+            "define",
+        }
+    )
+    # Forms whose body IS the module scope when nothing above them is a body
+    # form: R6RS `library`, Racket `module`, R7RS `define-library`. Chez also
+    # allows `(module ...)` wherever a definition may appear (a LOCAL module),
+    # so one nested inside a lambda/let body is body scope, not module scope.
+    _LISP_MODULE_FORMS: ClassVar[frozenset[str]] = frozenset(
+        {"library", "module", "define-library", "top-level-program"}
+    )
+    # Every token that can open/close a form or hide a paren from the scan.
+    # Comments are already stripped by Prism before coding_analysis, so the
+    # `;` / `#|` branches are defensive only (the scanner is also usable
+    # on raw source). Every alternative is anchored on a distinct first
+    # character and bounded or single-pass, so the tokenizer is linear
+    # (see test_scheme_strict.py's timing check). An unterminated `"` is
+    # swallowed to end of line rather than to end of file so a typo can
+    # only desync one line, not blind the whole scan.
+    _LISP_SCOPE_TOKEN: ClassVar[re.Pattern[str]] = re.compile(
+        r'"(?:\\.|[^"\\])*"'
+        r'|"[^"\n]*'
+        r"|;[^\n]*"
+        r"|#\|"
+        r"|\|#"
+        r"|#\\(?:[a-zA-Z0-9][a-zA-Z0-9-]{0,31}|[^\s])"
+        r"|[()\[\]]",
+        re.S,
+    )
+    _LISP_FORM_HEAD: ClassVar[re.Pattern[str]] = re.compile(r'[ \t\r\n]*([^\s()\[\];"]{1,200})')
+    _LISP_LET_FAMILY: ClassVar[frozenset[str]] = frozenset({"let", "let*", "letrec", "letrec*"})
+
+    # #2654: every MATLAB function declaration, whether or not it declares
+    # outputs. The output list is optional so a `function helper(x)` still
+    # opens a span -- otherwise its body would be scanned as part of the
+    # PRECEDING function's, and a same-named local there could be dropped as
+    # if it were that function's return channel. Both name lists are bounded
+    # (no adjacent unbounded quantifiers), so the scan stays linear.
+    _MATLAB_FUNC_DECL: ClassVar[re.Pattern[str]] = re.compile(
+        r"^[ \t]*function\b"
+        r"(?:[ \t]*(?:\[(?P<outs>[^\]\n]{0,400})\]|(?P<out1>[a-zA-Z_]\w{0,127}))[ \t]*=(?![=]))?",
+        re.M,
+    )
+
+    # #2753: YAML parameter surfaces. A YAML key line means "parameter" or
+    # "ordinary config key" purely by what it is nested under -- `fetch-depth: 0`
+    # is an argument beneath `with:` and a plain setting anywhere else -- so
+    # yaml's `args` rule matches EVERY indented mapping key and this filter keeps
+    # only the ones whose immediate parent is a parameter block:
+    #   * `inputs:` -- DECLARED parameters (`on: workflow_dispatch:` /
+    #     `workflow_call:` inputs, action.yml's top-level `inputs:`);
+    #   * `with:`   -- arguments SUPPLIED to a `uses:` action;
+    #   * `args:`   -- arguments supplied to a module / container entrypoint.
+    # Ansible's own module-parameter surface (the mapping under a bare module
+    # name, `fail:\n  msg: ...`) is deliberately NOT here: it has an unbounded
+    # key vocabulary -- every module name in every collection -- so recognising
+    # it would mean treating "any nested mapping" as a parameter block, which is
+    # the over-claim this rule already had in the other direction. `vars:` is
+    # likewise left out: it is Ansible's variable block (the analogue of yaml's
+    # own `env:`, which `state_mutation` claims), and while `vars:` on
+    # `include_role`/`include_tasks` does pass parameters, nothing on the block
+    # itself distinguishes the two uses.
+    _YAML_PARAMETER_BLOCKS: ClassVar[frozenset[str]] = frozenset({"with", "inputs", "args"})
+    # One mapping-key line. `lead` absorbs any sequence indicators (`- - key:`),
+    # so a key introduced by a dash is measured at its own column exactly as YAML
+    # scopes it. Every quantifier is bounded and anchored on a distinct character
+    # class, so the match is linear in the line length.
+    _YAML_KEY_LINE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^(?P<lead>[ \t]*(?:-[ \t]+)*)(?P<key>[A-Za-z0-9_.-]{1,64}):(?P<value>[ \t].*|)$"
+    )
+
+    # #2824: ABAP statement tokenizer for the `abap_declaration_statement`
+    # filter. Every alternative is anchored on a distinct first character and
+    # bounded to one line (ABAP literals and comments cannot span lines), so
+    # the scan is linear. Comments are already stripped by Prism before
+    # coding_analysis; the comment branches are defensive only, same as the
+    # lisp tokenizer's.
+    _ABAP_STATEMENT_TOKEN: ClassVar[re.Pattern[str]] = re.compile(
+        r"'(?:[^'\n]|'')*'"  # character literal, '' escapes a quote
+        r"|`(?:[^`\n]|``)*`"  # untyped text literal
+        r"|\|(?:\\[^\n]|[^\\|\n])*\|"  # string template; the two alternatives
+        # are disjoint on their first character (backslash vs not), so a run
+        # of backslashes has exactly one parse -- `\\[\\{|}]|[^|\n]` let a
+        # backslash match EITHER arm and backtracked exponentially (CodeQL on
+        # #2886). Consuming `\<any>` over-accepts invalid escapes by design:
+        # the tokenizer only needs the template's span, not its validity.
+        r'|"[^\n]*'  # inline comment to end of line
+        r"|^\*[^\n]*"  # fixed-format full-line comment
+        r"|\.",  # statement terminator
+        re.M,
+    )
+    # The statements that DECLARE a parameter surface (#2824): a subroutine,
+    # function-module, dialog-module or method declaration. The same six
+    # binding keywords on any other statement are a call site passing actuals
+    # (`CALL FUNCTION`/`CALL METHOD`/`CALL BADI`, `PERFORM`,
+    # `RAISE EXCEPTION`, `RECEIVE RESULTS`) or a functional method call on an
+    # assignment -- consumers of a parameter surface, not publishers of one.
+    _ABAP_DECLARATION_OPENERS: ClassVar[frozenset[str]] = frozenset(
+        {"METHODS", "CLASS-METHODS", "FORM", "FUNCTION", "MODULE"}
+    )
+    # First token of a statement; long enough for CLASS-METHODS, bounded so a
+    # pathological run of letters cannot scan far. Whitespace and comment
+    # lines before the opener are skipped in `_abap_statement_opener` -- in
+    # CODE, not in this pattern, because a regex skip loop over them is a
+    # nested quantifier (the #631 ReDoS shape; this file's own detonation
+    # test caught the first draft).
+    _ABAP_STATEMENT_OPENER: ClassVar[re.Pattern[str]] = re.compile(r"[A-Za-z][A-Za-z-]{0,31}")
+
+    def _abap_statement_opener(self, code: str, start: int, end: int) -> Optional[str]:
+        """
+        Upper-cased first token of the statement spanning `code[start:end]`,
+        or None if the span holds no token. Skips whitespace, fixed-format
+        comment lines (`*` in column 1 -- a `*` after leading blanks is a
+        continuation line's multiplication, not a comment) and inline `"`
+        comments; Prism strips comments before coding_analysis, so the skips
+        are defensive, same as the lisp tokenizer's. One forward pass.
+        """
+        pos = start
+        at_line_start = pos == 0 or code[pos - 1] == "\n"
+        while pos < end:
+            ch = code[pos]
+            if ch == "\n":
+                pos += 1
+                at_line_start = True
+                continue
+            if ch in " \t\r":
+                pos += 1
+                at_line_start = False
+                continue
+            if (ch == "*" and at_line_start) or ch == '"':
+                nl = code.find("\n", pos, end)
+                if nl == -1:
+                    return None
+                pos = nl + 1
+                at_line_start = True
+                continue
+            m = self._ABAP_STATEMENT_OPENER.match(code, pos, end)
+            return m.group(0).upper() if m else None
+        return None
+
+    def _abap_declaration_statement_spans(self, code: str) -> list[tuple[int, int]]:
+        """
+        `(start, end)` spans of every ABAP statement whose first token is one
+        of `_ABAP_DECLARATION_OPENERS`. One tokenizer pass, O(len(code)).
+
+        A chained declaration (`METHODS: a IMPORTING ..., b IMPORTING ...`) is
+        one statement with one period, so every clause in the chain lands in
+        its opener's span. A trailing statement with no final period is closed
+        at end-of-code rather than dropped, so a truncated segment can only
+        read like the untruncated one, never lose its last declaration.
+        """
+        spans: list[tuple[int, int]] = []
+        stmt_start = 0
+        for tok in self._ABAP_STATEMENT_TOKEN.finditer(code):
+            if tok.group(0) != ".":
+                continue
+            opener = self._abap_statement_opener(code, stmt_start, tok.start())
+            if opener in self._ABAP_DECLARATION_OPENERS:
+                spans.append((stmt_start, tok.start()))
+            stmt_start = tok.end()
+        if stmt_start < len(code):
+            opener = self._abap_statement_opener(code, stmt_start, len(code))
+            if opener in self._ABAP_DECLARATION_OPENERS:
+                spans.append((stmt_start, len(code)))
+        return spans
+
+    def _yaml_parameter_child_offsets(self, code: str) -> set[int]:
+        """
+        Line-start offsets of the mapping keys whose immediate parent is a
+        `with:` / `inputs:` / `args:` block header. One indentation walk, O(lines).
+
+        Block-scalar bodies are skipped wholesale: a `run: |` step whose shell
+        text happens to contain `with:` and `key: value` lines is text, not
+        structure, and letting it push scopes would invent a parameter block
+        (and then count its "children") out of a heredoc.
+        """
+        keep: set[int] = set()
+        # (indent, opens_a_parameter_block)
+        stack: list[tuple[int, bool]] = []
+        scalar_indent: Optional[int] = None
+        offset = 0
+        for line in code.splitlines(keepends=True):
+            stripped = line.rstrip("\r\n")
+            if not stripped.strip():
+                offset += len(line)
+                continue
+            leading = stripped[: len(stripped) - len(stripped.lstrip(" \t"))]
+            raw_indent = len(leading.expandtabs(8))
+            if scalar_indent is not None:
+                if raw_indent > scalar_indent:
+                    offset += len(line)
+                    continue
+                scalar_indent = None
+            match = self._YAML_KEY_LINE.match(stripped)
+            if match:
+                indent = len(match.group("lead").expandtabs(8))
+                while stack and stack[-1][0] >= indent:
+                    stack.pop()
+                if stack and stack[-1][1]:
+                    keep.add(offset)
+                # A trailing comment is not a value: `with: # inputs for this
+                # action` is still a block header (the authoring style epic
+                # #813/#843 fixed for the old regex). Prism already strips
+                # comments out of the code stream, so this only matters when the
+                # walk is run over raw source.
+                value = match.group("value")
+                hash_idx = value.find("#")
+                if hash_idx != -1:
+                    value = value[:hash_idx]
+                value = value.strip()
+                stack.append((indent, not value and match.group("key").lower() in self._YAML_PARAMETER_BLOCKS))
+                if value[:1] in ("|", ">"):
+                    scalar_indent = indent
+            offset += len(line)
+        return keep
+
+    # #3010: JCL `DD *` / `DD DATA` in-stream payload spans for the
+    # `jcl_instream_payload` filter. The opener is the DD statement line
+    # itself (ddname class includes `.` for the qualified proc-step override
+    # form, `//BIND.SYSTSIN DD *,SYMBOLS=...`); the closer is a bare `/*`
+    # delimiter or the next real `//` control statement (a `//*` comment
+    # inside the span is payload data, not a closer). Both patterns are
+    # single-line, every quantifier bounded to one character class with a
+    # distinct landing site, so the scan is linear.
+    _JCL_DD_INSTREAM_OPEN: ClassVar[re.Pattern[str]] = re.compile(
+        r"^[ \t]*//[A-Za-z0-9_#$@.]*[ \t]+DD[ \t]+(?:\*|DATA\b)", re.I
+    )
+    _JCL_INSTREAM_CLOSE: ClassVar[re.Pattern[str]] = re.compile(r"^[ \t]*//(?!\*)")
+    # A span this long is pathological; cap the scan, not the file (mirrors
+    # the coverage tool's _MAX_PAYLOAD_SPAN_LINES and cobol's _MAX_BLOCK).
+    _JCL_MAX_PAYLOAD_SPAN_LINES: ClassVar[int] = 500
+
+    def _jcl_instream_payload_spans(self, code: str) -> list[tuple[int, int]]:
+        """
+        `(start, end)` offset spans of every JCL `DD *` / `DD DATA` in-stream
+        payload body (#3010). The payload starts on the line AFTER the DD
+        statement and ends at the closing line's start -- or end-of-code for
+        the delimiter-less tail form (legal for `DD *`). Mirrors
+        tests/tools/embedded_verb_coverage.py's `_jcl_instream_verb_hits`
+        walk line for line (same opener, closers and pathology cap), so the
+        engine and its coverage referee always read the same spans. A
+        `DD DATA,DLM=` custom delimiter is not modelled: its payload may
+        legally contain `//`/`/*` lines, which close the span early here --
+        an undercount only, never a false positive. One pass, O(len(code)).
+        """
+        spans: list[tuple[int, int]] = []
+        lines = code.splitlines(keepends=True)
+        i, total = 0, len(lines)
+        offset = 0
+        while i < total:
+            line = lines[i]
+            offset += len(line)
+            i += 1
+            if not self._JCL_DD_INSTREAM_OPEN.match(line):
+                continue
+            start = offset
+            span_lines = 0
+            while i < total and span_lines < self._JCL_MAX_PAYLOAD_SPAN_LINES:
+                line = lines[i]
+                if line.strip() == "/*" or self._JCL_INSTREAM_CLOSE.match(line):
+                    break
+                offset += len(line)
+                i += 1
+                span_lines += 1
+            spans.append((start, offset))
+        return spans
+
+    def _apply_scope_filter(
+        self,
+        filter_name: str,
+        seg_lang: str,
+        rule_name: str,
+        code: str,
+        matches: list[re.Match[str]],
+        cache: dict[str, set[int]],
+    ) -> list[re.Match[str]]:
+        """
+        Drop the matches of `rule_name` that the named structural filter
+        rejects. Returns `matches` untouched (with a diagnostic) for a filter
+        name the engine doesn't implement, so a registry typo can only ever
+        restore the pre-filter count, never zero a metric.
+        """
+        if filter_name == "lisp_body_position":
+            if filter_name not in cache:
+                cache[filter_name] = self._lisp_module_level_define_offsets(code)
+            keep = cache[filter_name]
+            kept: list[re.Match[str]] = []
+            for m in matches:
+                # The rules that opt in all begin `^[ \t]*\(` so the first "("
+                # inside the match is the define's own opening paren.
+                paren = code.find("(", m.start(), m.end())
+                if paren != -1 and paren in keep:
+                    kept.append(m)
+            return kept
+        if filter_name == "go_declaration_group":
+            if filter_name not in cache:
+                cache[filter_name] = self._go_declaration_group_member_offsets(code)
+            keep = cache[filter_name]
+            kept = []
+            for m in matches:
+                # The over-matching arm is `^[ \t]+<ident>` -- an indented line
+                # start. Only those need the structural test; the column-0
+                # `var`/`const` arm (its first char is not whitespace) and the
+                # mid-line `os.*` arm (does not start at a line boundary) are kept
+                # unconditionally, so the filter can only ever drop group-member
+                # candidates that are not in fact group members.
+                start = m.start()
+                is_line_start = start == 0 or code[start - 1] == "\n"
+                indented_candidate = is_line_start and start < len(code) and code[start] in " \t"
+                if not indented_candidate or start in keep:
+                    kept.append(m)
+            return kept
+        if filter_name == "yaml_parameter_block":
+            if filter_name not in cache:
+                cache[filter_name] = self._yaml_parameter_child_offsets(code)
+            keep = cache[filter_name]
+            kept = []
+            for m in matches:
+                # The rule that opts in is `^`-anchored, so a match starts at its
+                # own line's first character -- the same offset the walk keys on.
+                if m.start() in keep:
+                    kept.append(m)
+            return kept
+        if filter_name == "abap_declaration_statement":
+            # #2824 (args contract corollary 1): keep only the parameter-binding
+            # clauses owned by a declaration statement. Not memoized through
+            # `cache`: it holds offset SETS and this filter needs spans; `args`
+            # is the only rule that opts in, so the scan runs once per segment
+            # either way.
+            spans = self._abap_declaration_statement_spans(code)
+            starts = [s for s, _ in spans]
+            kept = []
+            for m in matches:
+                i = bisect.bisect_right(starts, m.start()) - 1
+                if i >= 0 and m.start() < spans[i][1]:
+                    kept.append(m)
+            return kept
+        if filter_name == "matlab_return_channel":
+            if filter_name not in cache:
+                cache[filter_name] = self._matlab_return_channel_offsets(code)
+            drop = cache[filter_name]
+            kept = []
+            for m in matches:
+                # The assignment alternative is `^[ \t]*` anchored, so its
+                # identifier is the line's first non-space character; the
+                # `clear`/`clearvars` alternative is unanchored and can only
+                # start further in, which is what keeps a `out = 1; clear y`
+                # line from losing its cleanup hit along with its binding.
+                idx = m.start()
+                while idx < len(code) and code[idx] in " \t":
+                    idx += 1
+                if idx not in drop:
+                    kept.append(m)
+            return kept
+        if filter_name == "cobol_sentence_start":
+            # #3197: keep only the paragraph/section headers that begin a new
+            # SENTENCE. A COBOL header can only appear where the previous
+            # sentence has ended, so the last line of a multi-line statement
+            # (`DISPLAY 'x: '` / `WS-COUNT.`) is not a paragraph, however it is
+            # indented. Anchoring on Area A instead would be wrong: real
+            # paragraphs sit in Area B in accepted source (a compiler warns and
+            # carries on), measured on language-crucible v1.3.0.
+            if filter_name not in cache:
+                cache[filter_name] = self._cobol_sentence_start_offsets(code)
+            keep = cache[filter_name]
+            return [m for m in matches if m.start() in keep]
+        if filter_name == "jcl_instream_payload":
+            # #3010: keep high_risk_execution's BIND-branch hits only when
+            # they fall inside a DD */DD DATA in-stream payload span. Only
+            # BIND-shaped matches are candidates -- the PGM= branch's matches
+            # are kept unconditionally, so this filter can never move the
+            # #2751 executor counts. Not memoized through `cache` (it holds
+            # offset SETS and this needs spans); high_risk_execution is the
+            # only rule that opts in, so the walk runs once per segment
+            # either way, same trade as the abap branch above.
+            spans = self._jcl_instream_payload_spans(code)
+            starts = [s for s, _ in spans]
+            kept = []
+            for m in matches:
+                if not m.group(0).lstrip(" \t").upper().startswith("BIND"):
+                    kept.append(m)
+                    continue
+                idx = bisect.bisect_right(starts, m.start()) - 1
+                if idx >= 0 and m.start() < spans[idx][1]:
+                    kept.append(m)
+            return kept
+        self.logger.warning(
+            f"[DIAGNOSTIC] Unknown scope filter '{filter_name}' declared for '{seg_lang}::{rule_name}'. Ignoring."
+        )
+        return matches
+
+    def _go_declaration_group_member_offsets(self, code: str) -> set[int]:
+        """
+        Line-start offsets of the direct members of every top-level Go
+        `var (` / `const (` declaration group (#2859).
+
+        A group's members are indented, so the column-0 `var`/`const` anchor
+        cannot see them, and an indented `x = 1` is indistinguishable from a
+        struct-literal field or a function-body statement without knowing the
+        enclosing form. This walks the bracket structure -- skipping strings,
+        runes and comments so their brackets never count -- and records the
+        start offset of every physical line whose immediately enclosing bracket
+        is a top-level `var (` / `const (` paren (not a nested `{...}` struct or
+        array literal, not a function body). The globals rule's over-matching
+        `^[ \t]+<ident>` arm keeps only the matches whose line start is in this
+        set; a struct-literal member (`x = Foo{ ... }`) keeps its own member
+        line but its indented field lines fall under the `{` frame and drop.
+
+        Group-open parens are found up front: a `(` that closes a column-0
+        `var`/`const` line. Every other bracket pushes an opaque frame. Linear
+        in len(code): one tokenizer pass, one bracket stack.
+        """
+        group_open = {m.end() - 1 for m in re.finditer(r"^(?:var|const)[ \t]*\(", code, re.M)}
+        if not group_open:
+            return set()
+        members: set[int] = set()
+        stack: list[bool] = []  # True == this open bracket is a var/const group paren
+        n = len(code)
+        i = 0
+        at_new_line = True
+        while i < n:
+            c = code[i]
+            if at_new_line:
+                # Start of a physical line: a member iff the innermost open
+                # bracket is a var/const group paren.
+                if stack and stack[-1]:
+                    members.add(i)
+                at_new_line = False
+            if c == "\n":
+                at_new_line = True
+                i += 1
+                continue
+            if c == '"':  # interpreted string
+                i += 1
+                while i < n and code[i] != '"':
+                    i += 2 if code[i] == "\\" else 1
+                i += 1
+                continue
+            if c == "`":  # raw string literal (may span lines)
+                i += 1
+                while i < n and code[i] != "`":
+                    i += 1
+                i += 1
+                continue
+            if c == "'":  # rune literal
+                i += 1
+                while i < n and code[i] != "'":
+                    i += 2 if code[i] == "\\" else 1
+                i += 1
+                continue
+            if c == "/" and i + 1 < n and code[i + 1] == "/":
+                while i < n and code[i] != "\n":
+                    i += 1
+                continue
+            if c == "/" and i + 1 < n and code[i + 1] == "*":
+                i += 2
+                while i + 1 < n and not (code[i] == "*" and code[i + 1] == "/"):
+                    i += 1
+                i += 2
+                continue
+            if c in "({[":
+                stack.append(c == "(" and i in group_open)
+            elif c in ")}]" and stack:
+                stack.pop()
+            i += 1
+        return members
+
+    # #3197: a COBOL line whose content is only one of these keywords plus its
+    # period is a header paragraph whose OPERAND is written on the next line
+    # (`PROGRAM-ID.` / `COACTUPC.`, `DATE-COMPILED.` / `Today.`,
+    # `OBJECT-COMPUTER.` / `XXXXX083.`). The period ends a sentence, so the
+    # operand would otherwise read as a paragraph header. Confirmed on
+    # aws-mainframe-modernization-carddemo and the crucible's NIST CCVS85 set.
+    _COBOL_OPERAND_ON_NEXT_LINE: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:PROGRAM-ID|CLASS-ID|FUNCTION-ID|METHOD-ID|AUTHOR|INSTALLATION|DATE-WRITTEN|DATE-COMPILED"
+        r"|SECURITY|REMARKS|SOURCE-COMPUTER|OBJECT-COMPUTER)\.$",
+        re.I,
+    )
+    # A fixed-format sequence area: six digits, or six blanks. Free-format
+    # source has real content in those columns (`PROCEDURE DIVISION.` at
+    # column 1), and its first six characters match neither.
+    _COBOL_SEQUENCE_AREA: ClassVar[re.Pattern[str]] = re.compile(r"^(?:[0-9]{6}|[ ]{6})")
+
+    def _cobol_sentence_start_offsets(self, code: str) -> set[int]:
+        """Line-start offsets in `code` where a new COBOL sentence may begin.
+
+        A paragraph or section header is only a header where the previous
+        sentence has ended, which is what separates a real one from the last
+        line of a multi-line statement or data description (#3197). The scan is
+        format-independent: it reads each line's content area (dropping a
+        fixed-format sequence area and anything past column 72, the
+        identification area) and asks whether it ends in a period.
+
+        `func_start` is `^`-anchored under re.M, so a match starts exactly at
+        one of these line offsets.
+        """
+        starts: set[int] = set()
+        opens_sentence = True  # the first line of the stream
+        pos = 0
+        for line in code.splitlines(keepends=True):
+            if opens_sentence:
+                starts.add(pos)
+            stripped = line.rstrip("\r\n")
+            content = stripped[:72] if len(stripped) > 72 else stripped
+            if self._COBOL_SEQUENCE_AREA.match(content):
+                indicator = content[6:7]
+                content = content[7:] if indicator and indicator not in " -" else content[6:]
+            text = content.strip()
+            if text:
+                # A continuation line (`-` in column 7) belongs to the sentence
+                # above it, and a blank line decides nothing -- only a line with
+                # real content updates the verdict.
+                opens_sentence = text.endswith(".") and not self._COBOL_OPERAND_ON_NEXT_LINE.search(text)
+            pos += len(line)
+        return starts
+
+    def _matlab_return_channel_offsets(self, code: str) -> set[int]:
+        """
+        Offsets of every bare assignment to a MATLAB output variable that its
+        function only ever WRITES -- the return-channel bindings (#2654).
+
+        MATLAB has no `return <value>`: a result is an assignment to a name in
+        the `function [out] = f(...)` signature, so `out = env;` is the exact
+        statement c/go/java write as `return env;` for zero state_mutation.
+        Dropping every write to an output variable would be wrong the other
+        way -- runica.m uses `weights` as the working accumulator for a whole
+        ICA loop and assigns it repeatedly -- so the discriminator is whether
+        the body ever reads the name back. A name whose every occurrence in
+        the body is a bare left-hand side (`name =`, no subscript, no field,
+        no mention on the right) is pure return channel; one that appears
+        anywhere else -- read in an expression, `out(i) = x`, `out = out + 1`,
+        passed as an argument -- is working state and keeps all of its hits.
+
+        A function's body runs to the next `function` declaration. For a
+        nested function that truncates the parent's body early, which can only
+        make the parent's name look MORE read (the nested span is scanned
+        under the nested declaration) and so only ever KEEPS hits: the failure
+        direction is the pre-filter count, never a zeroed metric.
+
+        Measured over Prism code streams: the rosetta corpus drops 15 of 19
+        hits (25 -> 4 once the per-function x3 flux weighting is applied,
+        against a corpus median of 2); language-crucible's eeglab drops 15 of
+        1321 (1.1%), each a terminal `com = ''` / `varargout = {...}` /
+        `name = dirName;` binding, with `weights`, `y` and `EEG` untouched.
+        """
+        decls = list(self._MATLAB_FUNC_DECL.finditer(code))
+        if not decls:
+            return set()
+
+        offsets: set[int] = set()
+        for i, decl in enumerate(decls):
+            raw_outs = decl.group("outs")
+            if raw_outs is not None:
+                names = {t.strip() for t in raw_outs.split(",") if t.strip()}
+            elif decl.group("out1"):
+                names = {decl.group("out1")}
+            else:
+                continue
+
+            body_start = decl.end()
+            body_end = decls[i + 1].start() if i + 1 < len(decls) else len(code)
+            body = code[body_start:body_end]
+
+            for name in names:
+                if not name.isidentifier():
+                    continue
+                quoted = re.escape(name)
+                write = re.compile(rf"^[ \t]*({quoted})[ \t]*=(?![=])", re.M)
+                write_starts = {m.start(1) for m in write.finditer(body)}
+                if not write_starts:
+                    continue
+                # Any occurrence that is not one of those bare left-hand sides
+                # is a read (or a structured write), which disqualifies the
+                # whole name -- MATLAB's output variable is then ordinary
+                # working state, not just the return channel.
+                if all(m.start() in write_starts for m in re.finditer(rf"\b{quoted}\b", body)):
+                    offsets.update(body_start + start for start in write_starts)
+
+        return offsets
+
+    def _lisp_module_level_define_offsets(self, code: str) -> set[int]:
+        """
+        Offsets of the "(" of every `(define ...)` in `code` whose nearest
+        classifying enclosing form makes it MODULE-LEVEL (#2674).
+
+        In Scheme indentation says nothing about scope -- the enclosing form
+        does. `(define y 5)` inside `(define (f x) ...)` is a local binding;
+        `(define y 5)` inside a file-wrapping `(let () ...)` (the standard
+        Chez/R6RS idiom: cpnanopass.ss has 682 indented defines and none at
+        column 0) is a real global. So this walks the paren structure with a
+        stack of form frames, skipping strings / char literals / comments,
+        and classifies each define by climbing the stack to the nearest
+        non-transparent frame:
+
+          * MODULE frame -> module-level. A `_LISP_MODULE_FORMS` head, or the
+            file wrapper: a bindings-less let-family form. Either is a module
+            frame only if no BODY frame sits above it (a local module inside
+            a lambda is local); the wrapper additionally needs no other
+            wrapper above it (a nested `(let () (define who ...))` is a block).
+          * BODY frame -> internal. A `_LISP_BODY_FORMS` head, any `define-*`
+            form, a let-family form with bindings, or a module/let that failed
+            the test above.
+          * everything else is transparent; running out of stack -> module.
+
+        Linear in `len(code)`: one tokenizer pass, and each define's climb is
+        bounded by nesting depth.
+
+        Measured on the language-crucible golden master (Prism code streams,
+        which is what coding_analysis actually sees): the `globals` regex
+        matches 45 defines across cpnanopass.ss / io.ss / schemify.rkt /
+        thread.rkt; this pass keeps 8 (io.ss's six wrapper-level buffer
+        constants and `open-files`, thread.rkt's one top-level callback,
+        cpnanopass.ss's one wrapper-module binding) and drops 37, every one
+        of them inside a procedure body, a nanopass `define-pass`, a `cond`
+        clause, or a local `(module ...)` under a block-scope `(let () ...)`.
+        Against #2674's raw-source oracle the three deliberate differences
+        are: `(begin ...)` and `let-syntax` bodies inside the wrapper are
+        spliced (kept), a `module` inside a `define-pass` is pass-local
+        (dropped), and a `module` under a nested block let is block-local
+        (dropped) -- the same rule the oracle applied to `(define who ...)`.
+        """
+        module_forms = self._LISP_MODULE_FORMS
+        body_forms = self._LISP_BODY_FORMS
+        let_family = self._LISP_LET_FAMILY
+        head_re = self._LISP_FORM_HEAD
+        # Frame kinds: "module" / "body" / "" (transparent).
+        stack: list[str] = []
+        keep: set[int] = set()
+        comment_depth = 0
+        for tok in self._LISP_SCOPE_TOKEN.finditer(code):
+            text = tok.group(0)
+            first = text[0]
+            if comment_depth:
+                if text == "#|":
+                    comment_depth += 1
+                elif text == "|#":
+                    comment_depth -= 1
+                continue
+            if text == "#|":
+                comment_depth = 1
+                continue
+            if first in ")]":
+                if stack:
+                    stack.pop()
+                continue
+            if first not in "([":
+                continue  # string, char literal, line comment, stray |#
+            head_m = head_re.match(code, tok.end())
+            head = head_m.group(1) if head_m else ""
+            if head == "define":
+                kind = "module"
+                for enclosing in reversed(stack):
+                    if enclosing:
+                        kind = enclosing
+                        break
+                if kind == "module":
+                    keep.add(tok.start())
+            frame = ""
+            if head in module_forms:
+                frame = "body" if "body" in stack else "module"
+            elif head in let_family and head_m is not None:
+                after = code[head_m.end() : head_m.end() + 64].lstrip(" \t\r\n")
+                empty_bindings = after.startswith("()") or after.startswith("[]")
+                frame = "module" if empty_bindings and not any(stack) else "body"
+            elif head in body_forms or head.startswith("define-"):
+                frame = "body"
+            stack.append(frame)
+        return keep
+
+    @staticmethod
+    def _count_space_separated_args(args_str: str) -> int:
+        """
+        #2692: count a comma-free parameter list.
+
+        A plain whitespace split is right for the languages this fallback was
+        written for -- Scheme's `(define (f arg1 arg2)` and shell positionals
+        really do separate arguments with spaces. But it is reached by ANY
+        comma-free capture, and a single TYPED parameter is exactly that shape:
+        ada's `procedure P (Env : Integer)` was counted as three arguments, and
+        `X : Integer; Y : Integer` as six, because Ada separates parameters with
+        semicolons rather than commas.
+
+        Two discriminators, in order:
+
+        1. A semicolon is a parameter separator in the Ada/Pascal family and
+           never appears in a Lisp/shell parameter list, so splitting on it is
+           unambiguous here (commas never reach this branch -- the caller
+           handles those).
+        2. Within a segment, a colon ADJACENT TO WHITESPACE marks a type
+           annotation (`Env : Integer`, `x: int`), so the segment declares one
+           parameter. The whitespace requirement is what keeps Lisp identifiers
+           containing a bare colon (`foo:bar`, a legal Scheme symbol) counting
+           as the separate arguments they are.
+        """
+        stripped = args_str.strip()
+        if not stripped:
+            return 0
+        segments = [seg.strip() for seg in stripped.split(";")]
+        segments = [seg for seg in segments if seg]
+        if len(segments) > 1:
+            return sum(1 if _ANNOTATED_PARAMETER.search(seg) else len(seg.split()) for seg in segments)
+        if _ANNOTATED_PARAMETER.search(stripped):
+            return 1
+        return len(stripped.split())
+
     def _count_top_level_args(self, args_str: str, treat_as_body: bool = False) -> int:
         """
         Depth- and string-aware argument counter for a captured function signature.
@@ -5722,6 +7988,41 @@ class StructuralExtractor:
                 saw_variadic = True
         return max_index if max_index else (1 if saw_variadic else 0)
 
+    def _haskell_arrowless_signature_is_action(self, signature_text: str) -> bool:
+        """
+        #2934: an arrowless Haskell type signature is a point-free VALUE
+        binding (a CAF like `defaultKaTeXURL :: Text`) in the common case,
+        which #1312 correctly drops. It is NOT one when its type is a zero-
+        arg IO action (`entry :: IO ()`, `main :: IO a`): that action opens
+        an executable block under its own name (docs/func_start_rule_contract
+        .md, #2856) exactly as a function does, and the rest of the engine
+        already treats `IO ()` as a genuine zero-arrow callable (see
+        `_count_haskell_type_arrows` and haskell.py's `args` rule). Return
+        True only when the signature's OUTERMOST return-type head is `IO`, so
+        pure value types (`Text`, `Int`, `IORef Int`) still read as values --
+        `IORef` must never be mistaken for `IO` (whole-token match, never a
+        prefix). Broader action monads (`ReaderT ... IO ()`, or `m ()` under
+        a `MonadIO` constraint) are deliberately left to a follow-up per the
+        issue; only a bare `IO` head is retained here.
+        """
+        parts = signature_text.split("::", 1)
+        if len(parts) < 2:
+            return False
+        type_str = parts[1].strip()
+        # A leading `forall a b.` quantifier's `.` terminates the binder list
+        # (not a qualified-name dot); strip the whole clause before the head.
+        type_str = re.sub(r"^forall\b[^.]*\.\s*", "", type_str)
+        # Skip a leading typeclass-constraint clause, mirroring the LAST-top-
+        # level-`=>` rule `_count_haskell_type_arrows` uses for the same job.
+        last_constraint = type_str.rfind("=>")
+        if last_constraint != -1:
+            type_str = type_str[last_constraint + 2 :].strip()
+        head_match = re.match(r"\(*\s*([A-Za-z_][A-Za-z0-9_']*(?:\.[A-Za-z_][A-Za-z0-9_']*)*)", type_str)
+        if not head_match:
+            return False
+        head = head_match.group(1)
+        return head == "IO" or head.endswith(".IO")
+
     def _count_haskell_type_arrows(self, args_str: str) -> int:
         """
         Counts a Haskell function's curried arity from its flattened `::`
@@ -5946,7 +8247,22 @@ class StructuralExtractor:
         keyword_density = total_keyword_hits / max(loc, 1)
 
         args_count = 0
-        if args_pattern and hasattr(args_pattern, "search"):
+        # #2753: a rule with a registry-declared scope filter matches a SUPERSET
+        # of what it counts on purpose -- yaml's `args` matches every indented
+        # mapping key and the `yaml_parameter_block` filter keeps only the ones
+        # nested under a parameter block. The generic derivation below re-runs the
+        # raw pattern against this block with no filter in sight, so for such a
+        # rule it reads the superset: every `- run: ...` step would "declare" one
+        # argument (its own `run:` key), which is a measurement artefact, not a
+        # parameter. `hit_vector` is bisected out of the spatial map that
+        # coding_analysis already filtered, so its `args` entry is exactly this
+        # block's kept parameter keys -- take it directly. Without a spatial map
+        # (the untested-manual-call fallback above) the filter's segment context
+        # doesn't exist, and 0 is the honest answer rather than the superset.
+        scoped_args_filter = (rules.get("_scope_filters") or {}).get("args")
+        if scoped_args_filter:
+            args_count = hit_vector.get("args", 0)
+        elif args_pattern and hasattr(args_pattern, "search"):
             try:
                 arg_match = args_pattern.search(args_search_text if args_search_text is not None else block)
                 if arg_match:
@@ -6150,7 +8466,7 @@ class StructuralExtractor:
                             args_count = self._count_top_level_args(args_str)
                         else:
                             # Handle space-separated arguments (Lisp/Scheme/Shell)
-                            args_count = len(args_str.strip().split())
+                            args_count = self._count_space_separated_args(args_str)
                 elif args_search_text is not None and self.primary_lang_id in ("c", "cpp"):
                     # #2012: Pattern 1 - The cpp args regex rejects `operator()` syntax and
                     # out-of-class methods with non-whitelisted types (e.g. `mlir::ModuleOp`).
@@ -6312,6 +8628,180 @@ class StructuralExtractor:
         }
         return sat, magnitude
 
+    def _export_declaration_offsets(self, code_stream: str) -> set[int]:
+        """Start offsets of every function name this file DECLARES exported.
+
+        #2774 built the singular form: `_visibility_export`'s group 1 is one
+        exported name, and `_is_orphan` discounts that offset so an export
+        statement stops reading as a call. #2823 adds the plural form for the
+        languages whose export syntax names many functions in one construct:
+        `_visibility_export_list`'s capture groups are REGIONS holding exported
+        names -- a Haskell module header's parenthesised list, a Scheme
+        `(export a b c)` clause -- and every name token inside a region is
+        discounted.
+
+        Both keys are honoured, and a language may declare either or both. The
+        singular form records the group's own start offset verbatim, which is
+        why it stays: assembly exports `.foo` and ruby exports `save!`, whose
+        first and last characters the region tokenizer below does not treat as
+        part of a name, so tokenizing those captures would record the wrong
+        offset (`.foo` + 1) and silently stop discounting them.
+        """
+        offsets: set[int] = set()
+
+        exact = self.primary_rules.get("_visibility_export")
+        if exact is not None:
+            offsets.update(m.start(1) for m in exact.finditer(code_stream) if m.group(1))
+
+        listed = self.primary_rules.get("_visibility_export_list")
+        if listed is not None:
+            for m in listed.finditer(code_stream):
+                for group in range(1, (m.re.groups or 0) + 1):
+                    region = m.group(group)
+                    if not region:
+                        continue
+                    base = m.start(group)
+                    offsets.update(base + t.start() for t in _EXPORT_LIST_NAME.finditer(region))
+
+        return offsets
+
+    def _export_declared_names(self, code_stream: str) -> set[str]:
+        """The NAME TEXT captured by this language's export-declaration
+        rules (#2908 Phase 2, is_public source B) -- the sibling of
+        `_export_declaration_offsets`, which records OFFSETS for
+        `_is_orphan`'s discount test. `is_public` needs the names
+        themselves: a unit is public via B iff its own name is in this set.
+
+        Same two regex sites as `_export_declaration_offsets`: the singular
+        `_visibility_export` group(1) text, and the plural
+        `_visibility_export_list`'s regions via `_EXPORT_LIST_NAME.finditer`.
+        Does not touch `_export_declaration_offsets` or `_is_orphan`.
+        """
+        names: set[str] = set()
+
+        exact = self.primary_rules.get("_visibility_export")
+        if exact is not None:
+            names.update(m.group(1) for m in exact.finditer(code_stream) if m.group(1))
+
+        listed = self.primary_rules.get("_visibility_export_list")
+        if listed is not None:
+            for m in listed.finditer(code_stream):
+                for group in range(1, (m.re.groups or 0) + 1):
+                    region = m.group(group)
+                    if not region:
+                        continue
+                    names.update(t.group(0) for t in _EXPORT_LIST_NAME.finditer(region))
+
+        return names
+
+    @staticmethod
+    def _is_orphan(
+        code_stream: str,
+        func: "FunctionNode",
+        func_name: str,
+        export_name_starts: frozenset[int] = frozenset(),
+        occ_index: "Optional[dict[str, list[int]]]" = None,
+        fold_case: bool = False,
+        extra_name_chars: str = "",
+    ) -> bool:
+        """Does `func_name` occur anywhere outside its own definition?
+
+        #2727: the old test was `token_counts[func_name] <= 1` over the WHOLE
+        code stream, so whether a function read as orphaned depended on how many
+        times the language's syntax writes the name, not on whether anything
+        calls it. Ada closes with `end Probe_Globals;`, LiveCode ends a handler
+        by name, Haskell writes `probeGlobals :: Int -> Int` above the equation:
+        the count is already 2 before anything calls it, and the function can
+        never be orphaned. Measured across the language-crucible: livecode
+        reported 3 orphans where the span-scoped test finds 127.
+
+        Counting outside `[start_idx, end_idx)` is the fix, with one correction
+        the issue's own fix shape missed. The span does NOT reliably contain the
+        function's declaration -- shell's Mode-B spans start at the `{`, so a
+        K&R `make_module()` on the previous line sits outside its own body, and
+        ruby's spans are offset outright (66 of 132 sampled functions). Counting
+        naively there makes the DECLARATION read as a reference and clears the
+        flag: ruby fell 51 -> 44 orphans, html 5 -> 2, shell 8 -> 3, losing real
+        ones. So when the span contains no occurrence of the name at all, the
+        definition site is outside it by construction and exactly one outside
+        occurrence is that declaration -- discount it. With the correction no
+        language decreases; the crucible total moves 7397 -> 8385.
+
+        #3198: `fold_case` and `extra_name_chars` carry the language's own
+        lexical rules for what counts as an occurrence (see
+        IDENTIFIER_CASE_INSENSITIVE). Both default off, so a language that
+        declares neither is byte-identical to the pre-#3198 test.
+
+        A recursive self-call stays inside the span, so a recursive-but-uncalled
+        function still reads as unused. A call from anywhere else in the file is
+        outside, and clears the flag exactly as before.
+
+        #2774: `export_name_starts` holds the start offsets of the names
+        captured by a language's `_visibility_export` rule -- `export -f foo`,
+        `namespace export foo`, `Export-ModuleMember -Function foo`,
+        `module_function :foo`, `global foo`. Naming a function in an export
+        statement is a visibility declaration, not a use, and it is the ONE
+        mention a library is guaranteed to make of a function it never calls
+        itself, so counting it cleared the orphan flag on exactly the population
+        the census exists to find: shell read 0 orphans per file with its export
+        lines and 3 without. Only the captured name's own offset is discounted,
+        never the whole line -- so a genuine call that happens to share a line
+        with an export still counts.
+
+        #2823: `_visibility_export_list` fills the same set from export
+        constructs that name MANY functions at once -- Haskell's
+        `module A (probeGlobals, probeTest, probeSafety) where`, Scheme's
+        `(export probe-globals)`. Both languages read 0.25 unreferenced per
+        corpus file against a 2.50 median before this: 12 of 13 probe functions
+        cleared the flag on their own export declaration while nothing called
+        them. See `_export_declaration_offsets`.
+        """
+        start_idx = func.get("start_idx", 0)
+        end_idx = func.get("end_idx", start_idx)
+
+        # #PERF fast path: when a whole-file word-token index is supplied and
+        # the name is a single \w+ token, its occurrences are exactly the index
+        # entries for that name -- read inside/outside the span by bisect
+        # (O(log n)) instead of re-running finditer over the entire code_stream
+        # (O(len(code_stream))) once per function. Semantically identical to the
+        # fallback below; verified by an old-vs-new parity harness across real
+        # files (incl. ruby/scheme/C++ special-name languages, which take the
+        # fallback and are unaffected).
+        if occ_index is not None and (
+            _name_token_re(extra_name_chars).fullmatch(func_name)
+            if (extra_name_chars or fold_case)
+            else _INDEXABLE_NAME_RE.fullmatch(func_name)
+        ):
+            offsets = occ_index.get(func_name.casefold() if fold_case else func_name)
+            if not offsets:
+                # No maximal-word occurrence at all -> matches the fallback's
+                # inside==outside==0 -> declaration discount -> orphan.
+                return True
+            lo = bisect.bisect_left(offsets, start_idx)
+            hi = bisect.bisect_left(offsets, end_idx)
+            inside = hi - lo
+            outside = len(offsets) - inside
+            if export_name_starts:
+                # An occurrence named in an export statement is a visibility
+                # declaration, not a use -- discount the ones outside the span,
+                # exactly as the fallback's `not in export_name_starts` does.
+                outside -= sum(1 for off in offsets[:lo] if off in export_name_starts)
+                outside -= sum(1 for off in offsets[hi:] if off in export_name_starts)
+            if inside == 0:
+                outside -= 1  # the declaration itself, which fell outside the span
+            return outside <= 0
+
+        word = re.compile(_name_boundary_pattern_for(func_name, extra_name_chars), re.IGNORECASE if fold_case else 0)
+        inside = outside = 0
+        for m in word.finditer(code_stream):
+            if start_idx <= m.start() < end_idx:
+                inside += 1
+            elif m.start() not in export_name_starts:
+                outside += 1
+        if inside == 0:
+            outside -= 1  # the declaration itself, which fell outside the span
+        return outside <= 0
+
     def _extract_name(self, raw_match: str) -> str:
         """
         Heuristic Token Normalizer.
@@ -6338,6 +8828,18 @@ class StructuralExtractor:
         # (quotes included) for exactly this shape -- this preserves that same value
         # through to the stored name instead of truncating it afterward.
         if len(match_strip) >= 2 and match_strip[0] in "\"'" and match_strip[-1] == match_strip[0]:
+            return match_strip
+
+        # #2767: a yaml step's name is free prose from an adjacent `name:` key
+        # ("Install dependencies", "Run the test suite"), not an identifier. The
+        # generic word-extraction below is built for identifiers and keeps only
+        # `words[-1]`, which truncated those to `dependencies` and `suite` --
+        # and would collide "Build the wheel" with "Publish the wheel" on
+        # `wheel`, manufacturing exactly the false duplicates #1498's body_hash
+        # guard exists to prevent. Same argument as the groovy branch above:
+        # what the rule captured IS the whole name. An unnamed step captures the
+        # bare keyword (`run`) instead and passes through this branch unchanged.
+        if self.primary_lang_id == "yaml":
             return match_strip
 
         # 1.2 Python Decorator Stripping

@@ -73,12 +73,12 @@ _LIVECODE_SIMPLE_CASES = [
     ("class_start", "module com.livecode.string", "on mouseUp"),
     ("safety", "try\n  put 1 into x\ncatch e\nend try", "put 1 into x"),
     ("safety_bypasses", 'do "put 1 into x"', "put 1 into x"),
-    ("high_risk_execution", 'answer "hello"', "put 1 into x"),
+    ("high_risk_execution", "quit", 'answer "hello"'),  # #2878 C5: a dialog is not danger
     ("io", "open file tFilePath for read", "put 1 into x"),
     ("api", 'on mouseUp\n  answer "hi"\nend mouseUp', "private command foo"),
     ("state_mutation", "put the effective filename of this stack into tPath", "answer 1"),
     ("dead_code", "-- put 1 into x", "put 1 into x"),
-    ("doc", "-- Author: Jane Doe", "put 1 into x"),
+    ("doc", "-- Purpose: To do something", "put 1 into x"),
     ("test", "command testLogin", "put 1 into x"),
     ("concurrency", 'send "myHandler" to me in 2 seconds', "put 1 into x"),
     ("ui_framework", 'put the label of button "OK" into tLabel', "put 1 into x"),
@@ -115,8 +115,8 @@ _LIVECODE_SIMPLE_CASES = [
     # --- DEEP ADVERSARIAL CASES: branch ---
     ("branch", "next   repeat", "put the next_repeat into x"),
     ("branch", "repeat for each item tItem in tList", "put 1 into switcharoo"),
-    ("branch", "try\n  put 1\ncatch tError", "command notAFunction"),
-    ("branch", "finally", "put branching into x"),
+    ("branch", "repeat with i = 1 to 3", "try\n  put 1\ncatch tError"),  # 2822 corollary 1
+    ("branch", "next repeat", "finally"),  # 2822 corollary 1
     ("branch", "if (x = 1) and (y = 2) then", "put 1 into if_func"),
     # --- DEEP ADVERSARIAL CASES: args ---
     ("args", "on myHandler p1, p2, p3", "on myHandler"),
@@ -174,7 +174,10 @@ def test_livecode_dependency_capture_extracts_path():
     m = pattern.search('include "utils.lc"')
     assert m and (m.group(1) or m.group(2)) == "utils.lc"
 
-    m = pattern.search("module com.livecode.string")
+    # #2875 import contract C3: `module com.x` declares the file's OWN module (no
+    # edge); the LCB import form `use com.x` is the dotted-path capture.
+    assert pattern.search("module com.livecode.string") is None
+    m = pattern.search("use com.livecode.string")
     assert m and (m.group(1) or m.group(2)) == "com.livecode.string", "dotted module path capture regressed"
 
 
@@ -267,16 +270,15 @@ def test_livecode_args_multiline_anchor_regression():
 def test_livecode_doc_author_colon_trailing_boundary_regression():
     """
     Regression test (Rule 9/10-class trailing-boundary bug): the
-    `Description|Purpose|Author|Summary` alternation had a trailing `\\b`
+    `Description|Purpose|Summary` alternation had a trailing `\b`
     placed immediately after the literal `:` it requires. `:` is a
-    non-word character, so that `\\b` only fires if the very next character
+    non-word character, so that `\b` only fires if the very next character
     is a word character -- but the near-universal real form is
-    "Author: John Doe" (colon then a space), which is non-word on both
+    "Description: John Doe" (colon then a space), which is non-word on both
     sides of that exact position, so the tag never matched. Fixed by
-    dropping the trailing `\\b` (`:` is already self-delimiting).
+    dropping the trailing `\b` (`:` is already self-delimiting).
     """
     pattern = LIVECODE_RULES["doc"]
-    assert pattern.search("-- Author: John Doe"), "'Author: ' (colon-space) form still didn't match"
     assert pattern.search("-- Description: Handles login"), "'Description: ' form still didn't match"
     assert pattern.search("-- Purpose: Validates input"), "'Purpose: ' form still didn't match"
     assert pattern.search("-- Summary: Entry point"), "'Summary: ' form still didn't match"
@@ -465,7 +467,7 @@ def test_livecode_doc_comment_style_completeness():
     assert pattern.search("--@ @author Jane Doe"), "'--@' doc-block style regressed"
     assert pattern.search("/** @param pName the user name\n@return true */"), "'/**' doc-block style regressed"
     assert pattern.search("//! @author Jane Doe"), "'//!' doc-block style regressed"
-    assert pattern.search("-- Author: Jane Doe"), "'--' plain Author: tag regressed"
+    assert pattern.search("-- Purpose: Something"), "'--' plain Purpose: tag regressed"
 
 
 def test_livecode_ownership_comment_style_completeness():
@@ -532,18 +534,16 @@ def test_livecode_ambiguity_listeners_func_start_events_full_overlap():
     assert func_start.search(text) and listeners.search(text) and events.search(text)
 
 
-def test_livecode_ambiguity_doc_vs_ownership_author_dual_classification():
+def test_livecode_ambiguity_doc_vs_ownership_author_no_collision():
     """
-    Confirmed intentional dual-classification, not a bug: an "Author:"
-    tag is simultaneously structured documentation (`doc`) and authorship
-    metadata (`ownership`) -- the same real-world convention JSDoc's
-    `@author` tag represents in other languages, where both signatures
-    are expected to co-fire on the same line.
+    BUG FIX (#2659): `Author:` is exclusively an `ownership` trait. Including it
+    in `doc` caused double-counting on standard authorship headers.
     """
     doc = LIVECODE_RULES["doc"]
     ownership = LIVECODE_RULES["ownership"]
     text = "-- Author: Jane Doe"
-    assert doc.search(text) and ownership.search(text)
+    assert not doc.search(text)
+    assert ownership.search(text)
 
 
 def test_livecode_ambiguity_io_vs_ipc_rpc_bridges_url_dual_classification():
@@ -707,3 +707,22 @@ def test_livecode_pointers_redos_immune():
 def test_livecode_globals_redos_immune():
     pattern = LIVECODE_RULES["globals"]
     assert_redos_immune(pattern, "the " * 20000, timeout_sec=3.0)
+
+
+def test_livecode_safety_bypasses_global_ownership_regression():
+    """#2675: `safety_bypasses` dropped the `global\\s+` alternative -- it's a
+    scope declaration, not a bypass, and `globals` already owns it
+    exclusively. probe_globals in the corpus's a.lc was double-counted by
+    this rule for the entire +2 over the planted value.
+    """
+    safety_bypasses = LIVECODE_RULES["safety_bypasses"]
+    globals_rule = LIVECODE_RULES["globals"]
+
+    assert not safety_bypasses.search("global tMyVar"), "`global` declarations must NOT count as safety_bypasses"
+    assert globals_rule.search("global tMyVar"), "`global` declarations must still count as globals"
+
+    # legitimate safety_bypasses tokens must still be counted
+    assert safety_bypasses.search("disable messages"), "disable messages must still count as safety_bypasses"
+    assert safety_bypasses.search("unlock screen"), "unlock screen must still count as safety_bypasses"
+    assert safety_bypasses.search("unlock messages"), "unlock messages must still count as safety_bypasses"
+    assert safety_bypasses.search('do "put 1 into x"'), "dynamic do must still count as safety_bypasses"

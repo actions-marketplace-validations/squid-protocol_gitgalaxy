@@ -10,11 +10,28 @@ an allowlist so the fix only applies where it's been verified safe:
 
 ```python
 # gitgalaxy/core/detector.py
-_CLASS_START_NAMED_EXTRACTION_LANGS = frozenset({
-    "apex", "cpp", "csharp", "fortran", "groovy", "java", "javascript",
-    "lua", "makefile", "matlab", "php", "powershell", "python", "scala",
-    "shell", "solidity", "tcl", "typescript",
-})
+_CLASS_START_NAMED_EXTRACTION_LANGS = frozenset(
+    {
+        "apex",
+        "cpp",
+        "csharp",
+        "fortran",
+        "groovy",
+        "java",
+        "javascript",
+        "lua",
+        "makefile",
+        "matlab",
+        "php",
+        "powershell",
+        "python",
+        "scala",
+        "shell",
+        "solidity",
+        "tcl",
+        "typescript",
+    }
+)
 ```
 
 13 more languages regressed when tried the same way and were left on the legacy fallback:
@@ -79,6 +96,22 @@ equations, a different consumer entirely) is unaffected by this decision and sta
 for both languages -- this is specifically about *named* extraction into `class_data`, where css
 and html don't belong. **Decision: permanently out of scope for this epic.** If this gets
 revisited later, re-derive from this section rather than re-opening the question cold.
+
+**Now enforced in code (#2798).** For its first three weeks this decision lived only in prose and
+in the two *reporting* tools (`tree_sitter_accuracy_audit.py`, `tri_comparison_chart.py`, which
+each force css/html's class panels to N/A because of it) -- nothing stopped the extractor itself
+from doing the thing the decision forbade. #1824, a css `class_start` regex improvement five days
+later, added `"css"` to `_CLASS_START_NAMED_EXTRACTION_LANGS` with no mention of this section, and
+css's crucible `found_classes` went 0 -> 90 in the same commit. It went unnoticed for three weeks
+precisely *because* the class panels were already N/A: the decision had blinded the only two views
+that would have shown the reversal. It surfaced from the other end, as `classes_found[css] = 1` on
+the keyword-rosetta bias chart (gitgalaxy#2798).
+
+The decision now lives in `detector.py` as `_CLASS_EXTRACTION_OUT_OF_SCOPE_LANGS`, checked *before*
+the allowlist and before the legacy fallback, and both reporting tools import that set instead of
+keeping their own copy. `test_css_selectors_never_reach_named_class_extraction` fails if a language
+is ever in both sets at once. To genuinely revisit the decision, edit that frozenset -- and
+re-derive from this section first, as above.
 
 ## Optional follow-up (not blocking, epic is otherwise complete)
 

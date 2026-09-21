@@ -30,7 +30,9 @@ from typing import Any, Optional, Union
 from gitgalaxy.core.aperture import ApertureFilter, InaccessibleArtifactError
 from gitgalaxy.core.detector import HAS_TIKTOKEN
 from gitgalaxy.core.guidestar_lens import GuideStarLens
-from gitgalaxy.core.network_risk_sensor import HAS_NETWORKX, NetworkRiskSensor
+from gitgalaxy.core.invocation_resolver import resolve_invocations, resolve_transactions
+from gitgalaxy.core.mainframe_boundary import extract_boundary
+from gitgalaxy.core.network_risk_sensor import CASE_INSENSITIVE_IMPORT_LANGS, NetworkRiskSensor
 from gitgalaxy.core.prism import Prism
 from gitgalaxy.core.spatial_correlation import correlate_against_ledger
 from gitgalaxy.core.spatial_mapper import SpatialMapper
@@ -43,7 +45,9 @@ from gitgalaxy.recorders.llm_recorder import LLMRecorder
 from gitgalaxy.recorders.record_keeper import RecordKeeper
 from gitgalaxy.recorders.sarif_recorder import SarifRecorder
 from gitgalaxy.recorders.sbom_recorder import SbomRecorder
-from gitgalaxy.security.security_auditor import ML_AVAILABLE, SecurityAuditor
+from gitgalaxy.security.ai_appsec_sensor import AIAppSecSensor
+from gitgalaxy.security.dev_agent_firewall import DevAgentFirewall
+from gitgalaxy.security.security_auditor import HAS_NUMPY, HAS_PANDAS, HAS_XGBOOST, SecurityAuditor
 from gitgalaxy.security.security_lens import SecurityLens
 from gitgalaxy.standards.analysis_lens import (
     ASSET_MASKS,
@@ -58,8 +62,6 @@ from gitgalaxy.standards.language_standards import (
     LANGUAGE_DEFINITIONS,
     PROJECT_OVERRIDES,
 )
-from gitgalaxy.tools.ai_guardrails.ai_appsec_sensor import AIAppSecSensor
-from gitgalaxy.tools.ai_guardrails.dev_agent_firewall import DevAgentFirewall
 from gitgalaxy.tools.network_auditing.full_api_network_map import run_api_audit
 from gitgalaxy.tools.supply_chain_security.binary_anomaly_detector import run_xray_audit
 from gitgalaxy.tools.supply_chain_security.supply_chain_firewall import (
@@ -67,6 +69,22 @@ from gitgalaxy.tools.supply_chain_security.supply_chain_firewall import (
 )
 
 HAS_PYYAML = importlib.util.find_spec("yaml") is not None
+
+
+def missing_dependencies() -> dict[str, bool]:
+    """#3028: each optional engine and whether this scan lacked it (pip names).
+
+    The single source for the banner, `session_meta["missing_dependencies"]`
+    and zero-dependency mode, which is simply "any of these is missing".
+    """
+    return {
+        "tiktoken": not HAS_TIKTOKEN,
+        "numpy": not HAS_NUMPY,
+        "pandas": not HAS_PANDAS,
+        "xgboost": not HAS_XGBOOST,
+        "pyyaml": not HAS_PYYAML,
+    }
+
 
 # S607 hardening: resolve once to an absolute path rather than relying on
 # PATH lookup at every subprocess.check_output(["git", ...]) call below.
@@ -83,6 +101,54 @@ logger = logging.getLogger("GalaxyScope")
 # Top-level functions to bypass Python's Multi-Processing pickling limitations
 
 _worker_state: dict[str, Any] = {}
+
+
+# ==============================================================================
+# #2684: EXTENSION AGREEMENT FOR THE POPULARITY TALLY'S STEM FALLBACK
+# ==============================================================================
+# The stem fallback below credits a bare filename token to every file sharing
+# its stem, which let a C `#include <assert.h>` credit livecode's assert.lcb
+# and a doom `tables.h` credit a Postgres tables.sql. If the token names an
+# extension, that extension says which languages the target can possibly be
+# written in -- so a candidate whose own extension shares no language with it
+# is not the file being imported, whatever its stem says.
+#
+# Deliberately permissive at both edges: a token with no extension is left
+# alone (COBOL's `COPY SQLCA` names no file type), and so is any extension the
+# registry does not know, so the guard only ever fires on a positive
+# contradiction. `.h` maps to c/cpp/objective-c and `.y` to c/yacc, so a
+# header still credits its own language's sources -- including the real
+# generated-parser case (`#include "parser.h"` -> that repo's parser.y).
+def _build_extension_languages() -> dict[str, frozenset[str]]:
+    """Inverts the registry: file extension -> every language claiming it."""
+    table: dict[str, set[str]] = {}
+    for lang_id, lang_cfg in LANGUAGE_DEFINITIONS.items():
+        for ext in lang_cfg.get("extensions", []) or []:
+            table.setdefault(ext.lower(), set()).add(lang_id)
+    return {ext: frozenset(langs) for ext, langs in table.items()}
+
+
+_EXTENSION_LANGUAGES: dict[str, frozenset[str]] = _build_extension_languages()
+
+# TypeScript's ESM imports name the *emitted* file, so `import "./x.js"` is how
+# a .ts file is imported -- the one ecosystem where a cross-language extension
+# pair is the documented norm rather than a stem collision.
+_INTERCHANGEABLE_LANGUAGES: frozenset[frozenset[str]] = frozenset({frozenset({"javascript", "typescript"})})
+
+
+def _extensions_can_name_the_same_file(token_ext: str, candidate_ext: str) -> bool:
+    """
+    #2684: may an import token ending in `token_ext` refer to a file whose own
+    extension is `candidate_ext`? True unless the two name provably different
+    languages.
+    """
+    token_langs = _EXTENSION_LANGUAGES.get(token_ext.lower())
+    candidate_langs = _EXTENSION_LANGUAGES.get(candidate_ext.lower())
+    if not token_langs or not candidate_langs:
+        return True  # unknown to the registry -- no contradiction to act on
+    if token_langs & candidate_langs:
+        return True
+    return any(token_langs & pair and candidate_langs & pair for pair in _INTERCHANGEABLE_LANGUAGES)
 
 
 def execution_timeout_failsafe(_signum, _frame):
@@ -173,6 +239,8 @@ def _init_worker(
     )
 
     _worker_state["guidestar"].scan_project_config()
+    # #2555: a root manifest stands down the aperture's infra/test shield for this scan.
+    _worker_state["filter"].manifest_project_scope = _worker_state["guidestar"].has_manifest_scope
 
 
 def _process_file_worker(rel_path: str) -> dict[str, Any]:
@@ -408,6 +476,11 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
                 # Phase 4: Lexical Scanning
                 t_prism = time.perf_counter()
                 refraction = prism.split_streams(content_buffer, lang_id)
+                # #2908 Phase 2: a line-number-aligned comment surface for
+                # detector.py's positional `is_documented` anchor (D3) --
+                # see split_positional_comment_stream's own docstring for
+                # why refraction["comment_stream"] can't be reused for this.
+                positional_comment_stream = prism.split_positional_comment_stream(content_buffer, lang_id)
                 if is_file_profiling:
                     phase_times["4_Lexical_Scan"] = time.perf_counter() - t_prism
 
@@ -429,6 +502,7 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
                     confidence=detection_result.get("intensity", 1.0),
                     profile_regex=is_profiling,
                     raw_content=content_buffer,
+                    positional_comment_stream=positional_comment_stream,
                 )
                 if is_file_profiling:
                     phase_times["5_Optical_Detector"] = time.perf_counter() - t_detector_phase
@@ -456,7 +530,15 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
             if "equations" not in logic_data:
                 logic_data["equations"] = {}
 
-            if not is_inert:
+            # #2978: inert formats (markdown/yaml/json/csv/plaintext) carry no code for
+            # detector.py to parse, but they're a common home for embedded credentials
+            # (docker-compose, k8s manifests, CI config) that the filename/extension-based
+            # CRITICAL-LEAK shunt in aperture.py doesn't catch -- so the lens still runs on
+            # them by default. SECURITY_SCAN_INERT_FORMATS is the opt-out for repos where
+            # that trades too much doc/config noise (README examples, CI `secrets:` blocks)
+            # for the extra coverage.
+            scan_inert_security = _worker_state["config"].get("SECURITY_SCAN_INERT_FORMATS", True)
+            if not is_inert or scan_inert_security:
                 # Handle the new nested dictionary
                 sec_results = security.scan_content(content_buffer)
 
@@ -549,9 +631,13 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
                             logic_data["equations"].get("sec_amplified_sql_injection", 0) + amplified_sql_injection
                         )
                         logic_data.setdefault("mitigation_telemetry", {})
-                        logic_data["mitigation_telemetry"]["amplified_sql_injection"] = (
-                            logic_data["mitigation_telemetry"].get("amplified_sql_injection", 0)
-                            + amplified_sql_injection
+                        # gitgalaxy#3018: the audit report surfaces this key title-cased,
+                        # so "amplified_sql_injection" printed "Amplified Sql Injection"
+                        # per file -- the same overclaim the DB column was renamed for.
+                        # This correlation proves CO-LOCATION (a public api within ~10
+                        # lines of a DB sink, same function), never a data-flow path.
+                        logic_data["mitigation_telemetry"]["api_near_db_sink"] = (
+                            logic_data["mitigation_telemetry"].get("api_near_db_sink", 0) + amplified_sql_injection
                         )
 
             if is_file_profiling:
@@ -562,25 +648,36 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
             t_imports = time.perf_counter()
             raw_imports = set()
             named_tokens = set()  # <--- NEW: Initialize token tracker
+            # #3200/#3201/#3246/#3211-followup: named mainframe boundary facts,
+            # empty for every language that does not declare `boundary_extraction`.
+            call_sites: list = []
+            dataset_bindings: list = []
+            record_layouts: list = []
+            transaction_defs: list = []
+
+            # 1. Extract raw file dependencies. An inert (static-asset) language
+            # normally skips this whole phase, but one that explicitly DECLARES
+            # `_dependency_capture` has opted its references into the DAG (#2638:
+            # markdown's relative links are dependencies -- popularity and
+            # orphaned-docs detection). The other inert skips (security lens,
+            # named tokens, popularity census) stay skipped.
+            import_regex = lang_defs.get(lang_id, {}).get("rules", {}).get("_dependency_capture")
+            if import_regex:
+                try:
+                    for match in import_regex.finditer(content_buffer):
+                        extracted_path = next((g for g in match.groups() if g), None)
+                        if extracted_path:
+                            # Handle comma-separated blocks and brackets (e.g., Rust/Scala: {A, B}, Python: a, b as c)
+                            clean_group = extracted_path.replace("{", "").replace("}", "")
+                            for item in clean_group.split(","):
+                                # Strip 'as alias' and whitespace to isolate the pure module name
+                                clean_module = re.split(r"\s+as\s+", item)[0].strip()
+                                if clean_module:
+                                    raw_imports.add(clean_module)
+                except Exception:
+                    logging.exception("Import extraction failed for language '%s'.", lang_id)
 
             if not is_inert:
-                # 1. Extract raw file dependencies
-                import_regex = lang_defs.get(lang_id, {}).get("rules", {}).get("_dependency_capture")
-                if import_regex:
-                    try:
-                        for match in import_regex.finditer(content_buffer):
-                            extracted_path = next((g for g in match.groups() if g), None)
-                            if extracted_path:
-                                # Handle comma-separated blocks and brackets (e.g., Rust/Scala: {A, B}, Python: a, b as c)
-                                clean_group = extracted_path.replace("{", "").replace("}", "")
-                                for item in clean_group.split(","):
-                                    # Strip 'as alias' and whitespace to isolate the pure module name
-                                    clean_module = re.split(r"\s+as\s+", item)[0].strip()
-                                    if clean_module:
-                                        raw_imports.add(clean_module)
-                    except Exception:
-                        logging.exception("Import extraction failed for language '%s'.", lang_id)
-
                 # 2. Extract Named Tokens dynamically via Language Standards
                 named_token_regex = lang_defs.get(lang_id, {}).get("rules", {}).get("_named_token_capture")
                 if named_token_regex:
@@ -595,6 +692,34 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
                                         named_tokens.add(clean_token)
                     except Exception:
                         logging.exception("Named token extraction failed for language '%s'.", lang_id)
+
+            # 3. #3200/#3201: the named mainframe boundary channel. A language
+            # opts in with a top-level `boundary_extraction` declaration (cobol,
+            # jcl). TOP LEVEL, not `rules`: language_lens.py re.compile()s every
+            # string value inside `rules`, so a helper key put there arrives here
+            # as a Pattern and silently extracts nothing (#2806).
+            # Unlike raw_imports above this reads the CODE STREAM,
+            # not `content_buffer`: a `CALL` in a comment or a `//* EXEC PGM=`
+            # banner must not produce a call edge, and the code stream is the
+            # only view with comments already removed. Failure is contained the
+            # same way the two extractors above contain theirs -- boundary facts
+            # are additive, so losing them degrades the DB to its pre-#3200
+            # state rather than failing the file.
+            boundary_dialect = lang_defs.get(lang_id, {}).get("boundary_extraction")
+            if boundary_dialect:
+                try:
+                    boundary = extract_boundary(boundary_dialect, refraction["code_stream"])
+                    call_sites = boundary["calls"]
+                    dataset_bindings = boundary["datasets"]
+                    # #3246: the DATA DIVISION item tree + FD record layouts, read
+                    # with a default so a dialect that predates the channel (or
+                    # carries no records, like JCL) is not a missing-key error.
+                    record_layouts = boundary.get("records", [])
+                    # #3211-followup: CSD transaction definitions (csd deck, or a
+                    # DFHCSDUP deck inline in JCL), same default-read discipline.
+                    transaction_defs = boundary.get("transactions", [])
+                except Exception:
+                    logging.exception("Boundary extraction failed for language '%s'.", lang_id)
 
             if is_file_profiling:
                 phase_times["6_Import_Regex"] = time.perf_counter() - t_imports
@@ -644,6 +769,13 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
             "mitigations": refraction.get("mitigations", []),  # <--- THE FIX: Route the suppressions
             "raw_imports": sorted(raw_imports),
             "named_tokens": sorted(named_tokens),
+            # #3200/#3201/#3246/#3211-followup: already deterministically ordered by the extractor.
+            "call_sites": call_sites,
+            "dataset_bindings": dataset_bindings,
+            "record_layouts": record_layouts,
+            # #3211-followup: CSD transaction definitions, resolved to programs
+            # cross-file at aggregation (resolve_transactions).
+            "transaction_defs": transaction_defs,
             "popularity_hits": popularity_hits,
             "regex_telemetry": (logic_data.pop("regex_telemetry", {}) if is_profiling else {}),
         }
@@ -756,7 +888,9 @@ class Orchestrator:
         # Audit Recorder: Emits human-readable forensic traceability reports
         self.audit_recorder = AuditRecorder(parent_logger=logger)
         # LLM Recorder: Generates token-compressed RAG context text for AI Agents
-        self.llm_recorder = LLMRecorder(parent_logger=logger)
+        # #3111: the recorder needs the scan config to know which optional
+        # vectors were measured, so it can omit the rest rather than print 0.0.
+        self.llm_recorder = LLMRecorder(parent_logger=logger, scan_config=config)
         # DB Recorder: Archives relational tables natively to SQLite3
         self.db_recorder = RecordKeeper(parent_logger=logger)
         # SARIF Recorder: Exports industry-standard JSON for enterprise security dashboards
@@ -825,8 +959,20 @@ class Orchestrator:
         # ==============================================================================
         self.census: set[str] = set()
         self.stem_map: dict[str, str] = {}
+        # #3175: physical byte size per valid file, captured for free during the
+        # Phase 0 walk and used only to dispatch the worker pool largest-first (LPT
+        # scheduling) so one mega-file cannot land in the tail and stall the pool.
+        # Purely a scheduling hint -- output order is re-anchored to path order after
+        # the pool drains (see the ram_cache re-sort in _extract_features_parallel).
+        self.file_size_map: dict[str, int] = {}
         self.ram_cache: dict[str, dict[str, Any]] = {}
         self.parsed_files: list[dict[str, Any]] = []
+        # #3200/#3201: the resolved mainframe call sites and the 'call'/'exec'
+        # edges aggregated from them. Empty for a repository with no mainframe
+        # source, and on any path that never reaches the resolver.
+        self.call_sites: list[dict[str, Any]] = []
+        self.invocation_edges: list[dict[str, Any]] = []
+        self.transactions: list[dict[str, Any]] = []  # #3211-followup: CICS transaction map
         self.unparsable_files: list[dict[str, Any]] = []
         self.anomalies: list[dict[str, str]] = []
         self.popularity_scores: dict[str, int] = {}
@@ -847,7 +993,11 @@ class Orchestrator:
         # directory -- the 16th (past MICRO_MASS_GRACE_LIMIT) was silently dropped from
         # file_data with no trace but an Excluded Artifacts line, never reaching prism/
         # detector at all (#2512).
-        self.MICRO_MASS_EXEMPT_EXTENSIONS = frozenset({".cpy", ".cbl", ".cob", ".jcl", ".sql", ".ddl", ".dml"})
+        # PL/I %INCLUDE members (#2502) are the copybook shape: navikt/DSF keeps 1,473
+        # of them in one src/ directory, many a single short DECLARE.
+        self.MICRO_MASS_EXEMPT_EXTENSIONS = frozenset(
+            {".cpy", ".cbl", ".cob", ".jcl", ".sql", ".ddl", ".dml", ".pli", ".pl1", ".plinc"}
+        )
 
         self.splicing_telemetry = {
             "top_slowest": [],
@@ -875,35 +1025,36 @@ class Orchestrator:
         start_time = time.time()
         logger.info(f"--- PIPELINE_START: {self.root.name} (v{self.version}) ---")
 
-        if not HAS_NETWORKX or not HAS_TIKTOKEN or not ML_AVAILABLE or not HAS_PYYAML:
-            missing_libs = []
-            if not HAS_NETWORKX:
-                missing_libs.append("networkx")
-            if not HAS_TIKTOKEN:
-                missing_libs.append("tiktoken")
-            if not ML_AVAILABLE:
-                missing_libs.extend(["xgboost", "pandas", "numpy"])
-            if not HAS_PYYAML:
-                missing_libs.append("pyyaml")
+        missing = missing_dependencies()
+        if any(missing.values()):
+            missing_libs = [pkg for pkg, gone in missing.items() if gone]
+            missing_ml = [pkg for pkg in ("xgboost", "pandas", "numpy") if missing[pkg]]
 
             pip_cmd = f"pip install {' '.join(missing_libs)}"
 
+            # What each missing engine actually costs, so a user knows which
+            # values were not measured. The full per-field inventory is
+            # docs/zero_dependency_mode.md.
+            def _box(text: str = "") -> None:
+                logger.warning(f" ┃ {text}".ljust(75) + "┃")
+
             logger.warning("")
             logger.warning(" ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
-            logger.warning(" ┃ ⚠️  ZERO-DEPENDENCY MODE ACTIVE                                         ┃")
+            _box("⚠️  ZERO-DEPENDENCY MODE ACTIVE")
             logger.warning(" ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫")
-            logger.warning(" ┃ Missing computational engines. Metrics will be safely set to NULL:      ┃")
-            if not HAS_NETWORKX:
-                logger.warning(" ┃  - networkx (Network Topology, Downstream Exposure, Choke Points)       ┃")
-            if not HAS_TIKTOKEN:
-                logger.warning(" ┃  - tiktoken (Absolute Token Mass, Financial Read Cost)                  ┃")
-            if not ML_AVAILABLE:
-                logger.warning(" ┃  - xgboost, pandas (Advanced ML Threat Inference & Taxonomy)            ┃")
-            if not HAS_PYYAML:
-                logger.warning(" ┃  - pyyaml (Required for parsing .yaml/.yml Swagger/OpenAPI specs)       ┃")
-            logger.warning(" ┃                                                                         ┃")
-            logger.warning(" ┃ To unlock absolute precision, run:                                      ┃")
-            logger.warning(f" ┃    {pip_cmd}".ljust(75) + "┃")
+            _box("Every structural signal is still measured. Missing engines cost:")
+            if missing["tiktoken"]:
+                _box(" - tiktoken: token mass & financial read cost are NULL.")
+            if missing_ml:
+                _box(f" - {'/'.join(missing_ml)}: ML threat inference is skipped")
+                _box("   (--fail-on-malware cannot fire). Rule-based threats still run.")
+            if missing["pyyaml"]:
+                _box(" - pyyaml: --config/.galaxyscope.yaml ignored; YAML OpenAPI")
+                _box("   specs are not parsed.")
+            _box()
+            _box("Field-by-field: docs/zero_dependency_mode.md. Full precision:")
+            _box('   pip install "gitgalaxy[full]"')
+            _box(f"   (or just the missing ones: {pip_cmd})")
             logger.warning(" ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
             logger.warning("")
 
@@ -912,6 +1063,8 @@ class Orchestrator:
             # OS-level walk determining physical existence, OS permissions, and intent.
             t_phase = time.time()
             self.guidestar.scan_project_config()
+            # #2555: a root manifest stands down the aperture's infra/test shield for this scan.
+            self.filter.manifest_project_scope = self.guidestar.has_manifest_scope
             self._build_file_census()
             logger.debug(f"⏱️ EXECUTION_TIME [Phase 0 - Radar]: {time.time() - t_phase:.2f}s")
 
@@ -941,15 +1094,30 @@ class Orchestrator:
             self.parsed_files, network_macro = self.network_sensor.build_dependency_graph(self.parsed_files)
             logger.debug(f"⏱️ EXECUTION_TIME [Phase 4 - Network Topology]: {time.time() - t_phase:.2f}s")
 
+            # #3200/#3201: resolve the mainframe call graph AFTER the dependency
+            # graph, and entirely beside it. These edges carry edge_kind
+            # 'call'/'exec' and are never handed to the DiGraph, so pagerank,
+            # popularity, blast radius and every risk score are unchanged --
+            # see invocation_resolver.py's header for why that is deliberate.
+            self.call_sites, self.invocation_edges = resolve_invocations(self.parsed_files)
+            # #3211-followup: the CICS transaction map, resolved the same way.
+            self.transactions = resolve_transactions(self.parsed_files)
+
             # PHASE 5: Zero-Trust Guardrails (AI & AppSec)
             # Enforces explicit system rules identifying Prompt Injections or Context Window Exhaustion.
-            t_phase = time.time()
-            dev_firewall = DevAgentFirewall(parent_logger=logger)
-            self.parsed_files = dev_firewall.evaluate_ecosystem(self.parsed_files)
+            # Opt-in (#1178): most scan targets have no AI/agentic surface, so the phase is off by
+            # default and only runs when explicitly requested -- never auto-detected, so enabling it
+            # is always a deliberate choice visible in the config/CLI.
+            if self.config.get("AI_GUARDRAILS"):
+                t_phase = time.time()
+                dev_firewall = DevAgentFirewall(parent_logger=logger)
+                self.parsed_files = dev_firewall.evaluate_ecosystem(self.parsed_files)
 
-            appsec_sensor = AIAppSecSensor(parent_logger=logger)
-            self.parsed_files = appsec_sensor.hunt_threats(self.parsed_files)
-            logger.debug(f"⏱️ EXECUTION_TIME [Phase 5 - Zero-Trust Guardrails]: {time.time() - t_phase:.2f}s")
+                appsec_sensor = AIAppSecSensor(parent_logger=logger)
+                self.parsed_files = appsec_sensor.hunt_threats(self.parsed_files)
+                logger.debug(f"⏱️ EXECUTION_TIME [Phase 5 - Zero-Trust Guardrails]: {time.time() - t_phase:.2f}s")
+            else:
+                logger.debug("⏭️ Phase 5 (Zero-Trust Guardrails) off by default -- enable with --ai-guardrails")
 
             # PHASE 6: Spectral Audit & Verification
             # Uses standard deviations to identify and drop un-parseable data dumps or log files.
@@ -972,13 +1140,15 @@ class Orchestrator:
             summary = self.processor.summarize_galaxy_metrics(repository_graph, total_unparsable)
             summary["network_macro"] = network_macro
 
-            # #371: repo_z_score is repo-wide (only knowable once summary is
-            # computed), but record_keeper.py/llm_recorder.py read it per-file
+            # #371/#1159: the repo baseline is repo-wide (only knowable once summary
+            # is computed), but record_keeper.py/llm_recorder.py read it per-file
             # off telemetry -- thread it down now that it exists, or every file's
-            # column/report field stays permanently the 0.0 fallback.
-            repo_z_score = summary.get("repo_macro_species", {}).get("z_score", 0.0)
+            # column/report field stays permanently the fallback.
+            repo_macro = summary.get("repo_macro_species", {})
             for file_data in repository_graph or []:
-                file_data.setdefault("telemetry", {})["repo_z_score"] = repo_z_score
+                tel = file_data.setdefault("telemetry", {})
+                tel["repo_z_score"] = repo_macro.get("z_score")
+                tel["repo_macro_species"] = repo_macro.get("name", "Unclassified")
 
             report = self.processor.generate_forensic_report(repository_graph)
             logger.debug(f"⏱️ EXECUTION_TIME [Phase 8 - Metrics Synthesis]: {time.time() - t_phase:.2f}s")
@@ -1220,21 +1390,49 @@ class Orchestrator:
                             )
                             self.policy_failed = True
 
-                    # 4. Systemic Threat Ceiling (Cumulative Risk * Blast Radius)
+                    # 4. Systemic Threat Ceiling (Structural Magnitude * Blast Radius)
+                    #
+                    # #3112 BREAKING CHANGE: this gate used to multiply blast
+                    # radius by the Cumulative Risk composite -- a unitless
+                    # sum over all 13 risk vectors, ~31% of which was constant
+                    # or dead. That composite is gone, so the ceiling is now
+                    # structural magnitude * blast radius.
+                    #
+                    # The flag's INTENT is unchanged and is arguably better
+                    # served: "fail when something structurally heavy is also
+                    # widely depended upon". Both factors are now unit-honest
+                    # -- magnitude is explicitly "NOT a risk score" in the
+                    # brief, and blast radius is a normalized PageRank.
+                    #
+                    # THRESHOLD VALUES DO NOT CARRY OVER. The old basis summed
+                    # up to 13 sigmoid percentages (observed ~556 on a real
+                    # scan); magnitude is a different scale entirely, so any
+                    # existing --max-systemic-threat number must be re-tuned.
+                    # Deliberately NOT silently rescaled: a fabricated
+                    # conversion factor would be a worse failure than an
+                    # obvious one. See CHANGELOG.
                     if max_systemic_threat > 0.0:
-                        risk_vec = file_data.get("risk_vector", [])
-                        cumulative_risk = (
-                            sum(r for r in risk_vec if isinstance(r, (int, float)) and r > 0.0) if risk_vec else 0.0
-                        )
+                        structural_magnitude = file_data.get("file_impact", 0.0) or 0.0
 
                         net_metrics = file_data.get("telemetry", {}).get("network_metrics", {})
-                        blast_radius = net_metrics.get("normalized_blast_radius", 0.0)
+                        # #3027: blast radius is computed in every mode (native
+                        # PageRank, no optional package); None only when that
+                        # computation failed, in which case this file's ceiling
+                        # cannot be evaluated -- say so, don't multiply a placeholder.
+                        blast_radius = net_metrics.get("normalized_blast_radius")
+                        if blast_radius is None:
+                            logger.warning(
+                                f"--max-systemic-threat not evaluated for {file_data.get('path', 'unknown')}: "
+                                "no blast radius was computed."
+                            )
 
-                        systemic_threat = cumulative_risk * blast_radius
+                        systemic_threat = structural_magnitude * (blast_radius or 0.0)
 
                         if systemic_threat >= max_systemic_threat:
                             logger.critical(
-                                f"BUILD FAILED: {file_data.get('path', 'unknown')} exceeded Systemic Threat limit ({systemic_threat:.1f} >= {max_systemic_threat}). Cumulative Risk: {cumulative_risk:.1f} | Blast Radius: {blast_radius:.3f}"
+                                f"BUILD FAILED: {file_data.get('path', 'unknown')} exceeded Systemic Threat limit "
+                                f"({systemic_threat:.1f} >= {max_systemic_threat}). "
+                                f"Structural Magnitude: {structural_magnitude:.1f} | Blast Radius: {blast_radius:.3f}"
                             )
                             self.policy_failed = True
 
@@ -1256,13 +1454,10 @@ class Orchestrator:
                 "duration_seconds": round(time.time() - start_time, 2),
                 "target_directory": str(self.root.resolve()),
                 "git_audit": self._get_git_audit(),
-                "missing_dependencies": {
-                    "networkx": not HAS_NETWORKX,
-                    "tiktoken": not HAS_TIKTOKEN,
-                    "xgboost": not ML_AVAILABLE,
-                    "pyyaml": not HAS_PYYAML,
-                },
-                "zero_dependency_mode": (not HAS_NETWORKX or not HAS_TIKTOKEN or not ML_AVAILABLE or not HAS_PYYAML),
+                "missing_dependencies": missing_dependencies(),
+                "zero_dependency_mode": any(missing_dependencies().values()),
+                # #3028: the AI threat columns are recorded only when scores exist.
+                "ml_inference_ran": self.model_auditor.inference_ran,
             }
 
             if "unparsable_files" not in summary:
@@ -1293,6 +1488,33 @@ class Orchestrator:
             # PHASE 12: ARCHIVAL & EXPORT ROUTING
             # Delegates the sealed state objects to output-specific engines.
             # ==========================================================
+
+            # --- Phase 12.0: SQLite Recorder (Native Database) ---
+            # #ENGINE-PARITY: runs BEFORE the audit/LLM recorders so the file
+            # archetype record_keeper classifies from the fully-assembled metrics is
+            # written back into each file's telemetry dict; the reports then report
+            # the same value the DB stores.
+            if not exclusive_mode or self.config.get("DB_ONLY"):
+                try:
+                    db_output = str(Path(output_file).with_name(f"{Path(output_file).stem}_master.db"))
+                    logger.info(f"SQLITE: Generating repository-specific database -> {db_output}")
+
+                    self.db_recorder.record_mission(
+                        parsed_files=(list(repository_graph) if repository_graph else []),
+                        unparsable_files=(list(total_unparsable) if total_unparsable else []),
+                        summary=summary,
+                        session_meta=session_meta,
+                        output_path=db_output,
+                        dependency_edges=self.network_sensor.dependency_edges,  # #2992
+                        call_sites=self.call_sites,  # #3200/#3201
+                        invocation_edges=self.invocation_edges,  # #3200
+                        transactions=self.transactions,  # #3211-followup
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"SQLITE_FAILURE: Could not generate native database. {e}",
+                        exc_info=True,
+                    )
 
             # --- Phase 12.1: Audit Recorder (Forensic Log) ---
             if not exclusive_mode or self.config.get("AUDIT_ONLY"):
@@ -1333,25 +1555,6 @@ class Orchestrator:
                 except Exception as e:
                     logger.error(
                         f"LLM_FAILURE: Could not generate AI artifacts. {e}",
-                        exc_info=True,
-                    )
-
-            # --- Phase 12.3: SQLite Recorder (Native Database) ---
-            if not exclusive_mode or self.config.get("DB_ONLY"):
-                try:
-                    db_output = str(Path(output_file).with_name(f"{Path(output_file).stem}_master.db"))
-                    logger.info(f"SQLITE: Generating repository-specific database -> {db_output}")
-
-                    self.db_recorder.record_mission(
-                        parsed_files=(list(repository_graph) if repository_graph else []),  # <--- PASS A COPY
-                        unparsable_files=(list(total_unparsable) if total_unparsable else []),  # <--- PASS A COPY
-                        summary=summary,
-                        session_meta=session_meta,
-                        output_path=db_output,
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"SQLITE_FAILURE: Could not generate native database. {e}",
                         exc_info=True,
                     )
 
@@ -1417,9 +1620,12 @@ class Orchestrator:
             logger.info(f"--- ENGINE_TELEMETRY: Processed {total_loc:,} lines of code at {loc_per_sec:,} LOC/s ---")
             logger.info(f"--- ARCHIVES_SEALED: {gpu_output} & {audit_output} ---")
 
-            if not HAS_NETWORKX or not HAS_TIKTOKEN:
+            # Same trigger as the start-of-run banner (it used to check only
+            # networkx/tiktoken, so a scan missing xgboost or pyyaml ended silently).
+            if any(missing_dependencies().values()):
                 logger.warning(
-                    " ⚠️  NOTE: Pipeline completed in Zero-Dependency Mode. Run `pip install networkx tiktoken` for full precision."
+                    ' ⚠️  NOTE: Pipeline completed in Zero-Dependency Mode. Run `pip install "gitgalaxy[full]"` for '
+                    "full precision; docs/zero_dependency_mode.md lists what this scan could not measure."
                 )
 
             if self.config.get("FILE_SPEED"):
@@ -1457,10 +1663,16 @@ class Orchestrator:
                 git_paths = [self.single_file_target]
                 self.git_tracked_files = set(git_paths)
             else:
+                # #2555: `-z` (NUL-delimited) output disables git's default
+                # core.quotepath octal-escaping/double-quote-wrapping of paths with
+                # "unusual" bytes (non-ASCII, tab, backslash, literal `"`). Without it,
+                # such a path arrives wrapped as `"src/na\303\257ve.txt"`, and the
+                # surrounding `"` leaks all the way into the extracted extension
+                # (`.txt"`) and the exclusion reason string.
                 raw_output = subprocess.check_output(  # noqa: S603 -- _GIT_BIN resolved absolute, args are fixed strings
-                    [_GIT_BIN, "ls-files"], cwd=self.root, text=True, stderr=subprocess.DEVNULL
+                    [_GIT_BIN, "ls-files", "-z"], cwd=self.root, text=True, stderr=subprocess.DEVNULL
                 )
-                git_paths = raw_output.splitlines()
+                git_paths = [p for p in raw_output.split("\0") if p]
                 self.git_tracked_files = set(git_paths)
 
             # --- FAST I/O: ThreadPool for os.stat operations ---
@@ -1501,6 +1713,7 @@ class Orchestrator:
 
                     self.census.add(stem)
                     self.stem_map[rel_path] = rel_path
+                    self.file_size_map[rel_path] = size_bytes  # #3175: largest-first dispatch key
 
                     # ---> Tally both the extension AND the full filename
                     self.ext_tally[ext] = self.ext_tally.get(ext, 0) + 1
@@ -1564,6 +1777,7 @@ class Orchestrator:
 
                     self.census.add(stem)
                     self.stem_map[rel_p] = rel_p
+                    self.file_size_map[rel_p] = size_bytes  # #3175: largest-first dispatch key
 
                     # ---> Tally both the extension AND the full filename
                     self.ext_tally[ext] = self.ext_tally.get(ext, 0) + 1
@@ -1599,6 +1813,13 @@ class Orchestrator:
         if cpu_count is None:
             cpu_count = 4
         max_workers = max(1, cpu_count - 1)
+        # #2988: allow pinning the worker count (GALAXYSCOPE_MAX_WORKERS=1 forces a
+        # single-worker, fully serial extraction). Used to reproduce/confirm the
+        # whole-repo symbol-resolution non-determinism, and to run deterministically
+        # when a scan shares the box with other heavy processes.
+        _wenv = os.environ.get("GALAXYSCOPE_MAX_WORKERS")
+        if _wenv and _wenv.isdigit() and int(_wenv) > 0:
+            max_workers = int(_wenv)
 
         current_log_level = logging.getLogger().getEffectiveLevel()
         # DEFENSIVE UI: Mute the initialization spam from the 16-32 worker cores unless in debug mode
@@ -1617,10 +1838,21 @@ class Orchestrator:
                 self.census,
             ),
         ) as executor:
-            # Map futures to their file paths in a tracking dictionary
-            active_futures = {
-                executor.submit(_process_file_worker, rel_path): rel_path for rel_path in self.stem_map.values()
-            }
+            # Map futures to their file paths in a tracking dictionary.
+            # #3175: submit LARGEST-FIRST (LPT scheduling). A single mega-file can be
+            # 10-40% of a mega-repo's extraction wall; if it is dequeued late the pool
+            # stalls on one worker while the rest idle. Dispatching by descending byte
+            # size lets the heaviest file overlap all other work, bounding the tail.
+            # This reorders *dispatch only* -- results are re-keyed to path order after
+            # the pool drains (self.ram_cache re-sort below), so no output byte moves.
+            # Ties and any size-less incremental entries fall back to stem_map (path)
+            # order via the stable sort + .get(..., 0) default.
+            dispatch_order = sorted(
+                self.stem_map.values(),
+                key=lambda p: self.file_size_map.get(p, 0),
+                reverse=True,
+            )
+            active_futures = {executor.submit(_process_file_worker, rel_path): rel_path for rel_path in dispatch_order}
 
             # THE STARVATION MONITOR (Event-Driven Generator)
             # as_completed yields instantly upon future completion, averting O(N^2) polling wait states.
@@ -1765,11 +1997,29 @@ class Orchestrator:
         suffix_map = {}
         stem_to_paths = {}
 
+        # #2871 (#2540's residue): a case-folded view of the same suffix keys,
+        # held per case-insensitive-resolution language and holding only that
+        # language's own files -- the orchestrator's twin of
+        # network_risk_sensor's `_build_folded_resolution_map`. #2540 taught
+        # the sensor's graph (the one pagerank and the recorded `popularity`
+        # column read) that haskell's necessarily-capitalised `import B` binds
+        # b.hs, but THIS resolver -- the one the Contextual Baseline Fix reads
+        # to decide whether an imported file's orphans are wiped -- kept its
+        # exact-case fast path and a stem fallback whose `len(stem) >= 3`
+        # guard rejects `b`. So every column a reviewer could see said the
+        # chain resolved while the debt wipe never ran (keyword-rosetta
+        # haskell a/b/c: unreferenced_by_name 3 where every other language
+        # reads 0, risk_tech_debt 97 against a stratum median of 30).
+        folded_suffix_map: dict[str, dict[str, list[str]]] = {}
+
         for repo_file in repo_file_paths:
             s = Path(repo_file).stem.lower()
             if s not in stem_to_paths:
                 stem_to_paths[s] = []
             stem_to_paths[s].append(repo_file)
+
+            fold_lang = str(self.ram_cache.get(repo_file, {}).get("lang_id", "")).lower()
+            folded = folded_suffix_map.setdefault(fold_lang, {}) if fold_lang in CASE_INSENSITIVE_IMPORT_LANGS else None
 
             norm_repo = repo_file.replace("\\", "/")
             repo_no_ext = norm_repo.rsplit(".", 1)[0] if "." in Path(norm_repo).name else norm_repo
@@ -1780,6 +2030,8 @@ class Orchestrator:
                 if suffix not in suffix_map:
                     suffix_map[suffix] = []
                 suffix_map[suffix].append(repo_file)
+                if folded is not None:
+                    folded.setdefault(suffix.lower(), []).append(repo_file)
 
             parts_no_ext = repo_no_ext.split("/")
             for i in range(len(parts_no_ext)):
@@ -1788,6 +2040,8 @@ class Orchestrator:
                     suffix_map[suffix] = []
                 if repo_file not in suffix_map[suffix]:
                     suffix_map[suffix].append(repo_file)
+                if folded is not None and repo_file not in folded.setdefault(suffix.lower(), []):
+                    folded[suffix.lower()].append(repo_file)
 
         stop_stems = {
             "text",
@@ -1853,6 +2107,10 @@ class Orchestrator:
 
         for rel_path, meta in self.ram_cache.items():
             raw_imports = sorted(meta.get("raw_imports", set()))
+            # #2988: the importing file's own extension, used to reject
+            # cross-language matches when the import token carries no extension
+            # of its own (bare module imports: Python/JS `import base64`).
+            importer_ext = Path(rel_path).suffix
             for raw_import in raw_imports:
                 clean_path = import_cleaner.sub("", raw_import.strip())
                 if "from" in clean_path:
@@ -1874,10 +2132,21 @@ class Orchestrator:
                 matched_internal = False  # <--- NEW: Flag to verify if import is local
 
                 # --- FAST PATH 1: O(1) Suffix & Exact Match ---
+                # #2988: guard by the IMPORTING file's language, the same way the
+                # stem fallback below guards by token extension (#2684). Without it
+                # an extensionless bare import (`import base64` in a .py) matches the
+                # extensionless suffix key "base64", which lumps every same-stemmed
+                # file across languages -- so Python's stdlib base64 credited curl's
+                # C `lib/curlx/base64.c`, spuriously firing the Contextual Baseline
+                # Fix and the api_exposure network multiplier. The token itself is
+                # often extensionless (Python/JS module imports), so the token-ext
+                # guard can't catch this; the importer's own extension can.
                 if clean_path in suffix_map:
-                    matched_internal = True
                     for target_path in suffix_map[clean_path]:
+                        if not _extensions_can_name_the_same_file(importer_ext, Path(target_path).suffix):
+                            continue
                         self.popularity_scores[target_path] += 1
+                        matched_internal = True
 
                 # --- FAST PATH 2: O(1) Python Package Resolution ---
                 if not matched_internal:
@@ -1887,12 +2156,40 @@ class Orchestrator:
                         for target_path in suffix_map[init_path]:
                             self.popularity_scores[target_path] += 1
 
+                # --- FAST PATH 1c (#2871 / #2540): case-folded retry ---
+                # Only after every exact-case form missed, only for a file
+                # whose language resolves imports case-insensitively, and
+                # only against that language's own files -- the same three
+                # conditions as the sensor's Stage 1c, so the two resolvers
+                # agree on the edge the Contextual Baseline Fix is gated on.
+                if not matched_internal:
+                    fold_lang = str(meta.get("lang_id", "")).lower()
+                    lang_map = folded_suffix_map.get(fold_lang) if fold_lang in CASE_INSENSITIVE_IMPORT_LANGS else None
+                    if lang_map:
+                        for target_path in lang_map.get(clean_path.lower(), ()):
+                            self.popularity_scores[target_path] += 1
+                            matched_internal = True
+
                 # --- THE FALLBACK: Stem Matching ---
                 if not matched_internal:
                     guess_stem = Path(clean_path).stem.lower()
+                    token_ext = Path(clean_path).suffix
                     if guess_stem in stem_to_paths and guess_stem not in stop_stems and len(guess_stem) >= 3:
                         for target_path in stem_to_paths[guess_stem]:
                             if clean_path in target_path or guess_stem == clean_path or "/" not in clean_path:
+                                # #2684: the third clause is true of EVERY bare
+                                # filename, so without this guard one token
+                                # credits every same-stemmed file in the whole
+                                # scan, across languages and repositories.
+                                # #2988: fall back to the IMPORTER's extension when
+                                # the token itself is extensionless (bare module
+                                # imports), so a Python `import base64` cannot credit
+                                # curl's C `base64.c` via the shared "base64" stem.
+                                guard_ext = token_ext or importer_ext
+                                if guard_ext and not _extensions_can_name_the_same_file(
+                                    guard_ext, Path(target_path).suffix
+                                ):
+                                    continue
                                 self.popularity_scores[target_path] += 1
                                 matched_internal = True
 
@@ -1963,7 +2260,11 @@ class Orchestrator:
                 if variant in anchor_index:
                     candidates.update(anchor_index[variant])
 
-            for anchor_imp in candidates:
+            # #2988: iterate a SORTED candidate list, not the set. The loop breaks
+            # on the first anchor within the distance threshold, so an unordered set
+            # made the recorded "mimics <anchor>" nondeterministic when a token was
+            # equidistant from two anchors (e.g. 'string:' -> 'string' vs 'strings').
+            for anchor_imp in sorted(candidates):
                 # 3. The Casing Shield (Developer typos, not malware)
                 if orphan_imp.lower() == anchor_imp.lower():
                     continue
@@ -2141,21 +2442,108 @@ class Orchestrator:
             # -----------------------------------------------------------------
 
             # =================================================================
+            # ---> #2536: RAW PRE-ADJUSTMENT SNAPSHOT <---
+            # The Contextual Baseline Fix below rewrites api/unreferenced_by_name
+            # IN PLACE for any imported file, which made the raw extraction
+            # counts unrecoverable from the recorder DB (the #1096
+            # cross-language control corpus needs them). Snapshot the affected
+            # keys unconditionally BEFORE the adjustment runs so files the
+            # adjustment never touches record raw == adjusted. Purely
+            # additive: scoring still consumes the adjusted equations.
+            # =================================================================
+            pre_adjust_eq = meta.get("equations", {})
+            meta["raw_pre_adjustment"] = {
+                "api": pre_adjust_eq.get("api", 0),
+                "unreferenced_by_name": pre_adjust_eq.get("unreferenced_by_name", 0),
+            }
+            # =================================================================
+
+            # =================================================================
             # ---> THE CONTEXTUAL BASELINE FIX <---
             # If the file is imported by the ecosystem, its "orphans" are actually its API.
             # =================================================================
             popularity = self.popularity_scores.get(rel_path, 0)
             if popularity > 0 and "equations" in meta:
-                orphans = meta["equations"].get("orphaned_logic", 0)
+                orphans = meta["equations"].get("unreferenced_by_name", 0)
                 if orphans > 0:
+                    # #2731: credit only the orphans the language's own `api`
+                    # rule did NOT already count. A function that is both
+                    # declared public and uncalled used to contribute twice --
+                    # keyword-rosetta's `data/go/a.go` has three exported,
+                    # uncalled functions and recorded raw_arch_api 3 + orphans 3
+                    # = api 6, three functions for six units of public surface.
+                    # The overlap is the common case, not the exception: a
+                    # library's public functions are exactly the ones with no
+                    # in-repo caller, so `risk_api_exposure` and
+                    # `risk_documentation` (both read the adjusted `api`) were
+                    # inflated most for the most library-shaped code.
+                    #
+                    # detector.py owns the overlap count -- it is a per-function
+                    # name test against the api rule's own match lines, and the
+                    # code text it needs is gone by the time we get here. A
+                    # file-level `orphans - raw_api` subtraction would be wrong:
+                    # a file's api hits also land on public classes, fields and
+                    # grouped constants that are not functions at all, and would
+                    # erase orphans the rule never saw.
+                    already_public = min(meta.get("api_declared_orphans", 0), orphans)
+
                     # 1. Convert the dead weight into API Exposure
-                    meta["equations"]["api"] = meta["equations"].get("api", 0) + orphans
+                    meta["equations"]["api"] = meta["equations"].get("api", 0) + (orphans - already_public)
                     # 2. Wipe the Technical Debt
-                    meta["equations"]["orphaned_logic"] = 0
+                    #    Unconditional, and independent of the credit above: the
+                    #    file is imported, so none of its orphans are dead weight
+                    #    -- the already-public ones are simply surface the api
+                    #    rule had counted already.
+                    meta["equations"]["unreferenced_by_name"] = 0
 
                     # 3. Heal the function metadata
                     for func in meta.get("functions", []):
                         if func.get("usage_status") == 1:
+                            # #2908 Phase 2, is_public source C: this credit
+                            # firing (imported file, real orphan) is exactly
+                            # the Contextual Baseline Fix's own definition of
+                            # "actually public" -- set BEFORE the usage_status
+                            # flip below, which stays untouched. OR'd with any
+                            # existing True from detector.py's A/B sources
+                            # (a name can be healed here AND api/export-list
+                            # public at once; is_public is a union, never a
+                            # double count).
+                            func["is_public"] = True
+                            func["usage_status"] = 0
+            # =================================================================
+            # ---> #2904: TIER-3 EXTERNAL-ENTRY-POINT RESCUE <---
+            # A makefile is never imported (nothing `import`s a makefile; its
+            # caller is a human typing `make all`, CI, or a Dockerfile), so its
+            # popularity is STRUCTURALLY 0 and the tier-2 fix above can never
+            # reach it -- every `.PHONY:` entry point falls through to
+            # `risk_tech_debt`. But a `.PHONY:` target is a curated declaration
+            # of the file's EXTERNAL interface, not dead weight. For a language
+            # that opts in via `export_visibility: external_entry_points`, credit
+            # its DECLARED entry-point orphans (`api_declared_orphans` -- the
+            # orphans whose name sits on an api-rule line) the same way an
+            # imported file's orphans are credited: clear them from the tech-debt
+            # census. Only the declared portion moves -- a genuinely internal,
+            # UNdeclared orphan target (never .PHONY, no in-repo caller) stays
+            # real dead weight, so this cannot blind #2774. Gated on the tier-2
+            # branch NOT firing (elif), so popularity>0 never double-runs it.
+            # The honest census survives in `raw_pre_adjustment` above; only the
+            # debt/surface classification moves, never the raw count.
+            elif meta.get("exports_are_external_entry_points") and "equations" in meta:
+                orphans = meta["equations"].get("unreferenced_by_name", 0)
+                declared = min(meta.get("api_declared_orphans", 0), orphans)
+                if declared > 0:
+                    # No api credit: a declared entry point's own declaration
+                    # line is already an api-rule hit, so `api` already carries
+                    # it -- re-crediting would double-count. Just stop reading it
+                    # as tech debt.
+                    meta["equations"]["unreferenced_by_name"] = orphans - declared
+                    for func in meta.get("functions", []):
+                        # A unit that is already public (api/export source B) AND
+                        # uncalled is exactly a declared external entry point --
+                        # clear its unused flag (is_public source C analogue). An
+                        # undeclared internal orphan (is_public False) is left
+                        # flagged, so it keeps contributing to the census.
+                        if func.get("usage_status") == 1 and func.get("is_public"):
                             func["usage_status"] = 0
             # =================================================================
 
@@ -2172,6 +2560,15 @@ class Orchestrator:
 
             # Pass the mapped test coverage data to the risk engine
             meta["test_coverage_map"] = test_coverage_map.get(rel_path, {})
+
+            # #2909: hand the import fan-in to the risk engine. It was computed
+            # above (the Contextual Baseline Fix) and written into the telemetry
+            # payload thirty lines AFTER calculate_risk_vector ran, so
+            # meta.get("popularity", 0) read 0 on every file, every scan -- the
+            # popularity terms in api_exposure, verification and the threat
+            # vector were dead. (documentation's multiplier was removed by
+            # #2908 D4 in the same change, so it does NOT re-liven here.)
+            meta["popularity"] = popularity
 
             # The Analysis Engine natively handles the Exposed Secret and Documentation bypass protocols.
             # We unconditionally route to the Signal Processor so it can execute the 18-point math.
@@ -2656,6 +3053,11 @@ class Orchestrator:
             # Re-map the directed graph because nodes/edges have mutated
             self.parsed_files, network_macro = self.network_sensor.build_dependency_graph(self.parsed_files)
 
+            # #3200/#3201: same resolution in delta mode.
+            self.call_sites, self.invocation_edges = resolve_invocations(self.parsed_files)
+            # #3211-followup: the CICS transaction map, same resolution in delta mode.
+            self.transactions = resolve_transactions(self.parsed_files)
+
             # 6. Audit Verification & ML Threat Inference
             repository_graph, unparsable_audits = self.auditor.audit(self.parsed_files)
             if repository_graph:
@@ -2665,10 +3067,12 @@ class Orchestrator:
             summary = self.processor.summarize_galaxy_metrics(repository_graph, unparsable_audits)
             summary["network_macro"] = network_macro
 
-            # #371: see the identical backfill in the main pipeline above.
-            repo_z_score = summary.get("repo_macro_species", {}).get("z_score", 0.0)
+            # #371/#1159: see the identical backfill in the main pipeline above.
+            repo_macro = summary.get("repo_macro_species", {})
             for file_data in repository_graph or []:
-                file_data.setdefault("telemetry", {})["repo_z_score"] = repo_z_score
+                tel = file_data.setdefault("telemetry", {})
+                tel["repo_z_score"] = repo_macro.get("z_score")
+                tel["repo_macro_species"] = repo_macro.get("name", "Unclassified")
 
             # #376: see the identical backfill in the main pipeline above.
             summary["typosquat_hits"] = getattr(self, "typosquat_hits", 0)
@@ -2680,13 +3084,10 @@ class Orchestrator:
                 "duration_seconds": round(time.time() - start_time, 2),
                 "target_directory": str(self.root.resolve()),
                 "git_audit": self._get_git_audit(),  # Gets the NEW commit hash
-                "missing_dependencies": {
-                    "networkx": not HAS_NETWORKX,
-                    "tiktoken": not HAS_TIKTOKEN,
-                    "xgboost": not ML_AVAILABLE,
-                    "pyyaml": not HAS_PYYAML,
-                },
-                "zero_dependency_mode": (not HAS_NETWORKX or not HAS_TIKTOKEN or not ML_AVAILABLE or not HAS_PYYAML),
+                "missing_dependencies": missing_dependencies(),
+                "zero_dependency_mode": any(missing_dependencies().values()),
+                # #3028: the AI threat columns are recorded only when scores exist.
+                "ml_inference_ran": self.model_auditor.inference_ran,
             }
 
             self.db_recorder.record_mission(
@@ -2695,6 +3096,10 @@ class Orchestrator:
                 summary=summary,
                 session_meta=session_meta,
                 output_path=db_output_path,
+                dependency_edges=self.network_sensor.dependency_edges,  # #2992
+                call_sites=self.call_sites,  # #3200/#3201
+                invocation_edges=self.invocation_edges,  # #3200
+                transactions=self.transactions,  # #3211-followup
             )
 
             logger.info(
@@ -2765,6 +3170,13 @@ def main():
     parser.add_argument("--sarif-only", action="store_true", default=None, help="Run ONLY the SARIF exporter")
     parser.add_argument("--sbom-only", action="store_true", default=None, help="Run ONLY the CycloneDX SBOM generator")
     parser.add_argument(
+        "--ai-guardrails",
+        action="store_true",
+        default=None,
+        help="Enable Phase 5 (Zero-Trust AI Guardrails) for targets with an AI/agentic surface. "
+        "Off by default; when off, the guardrail columns record NULL (not evaluated)",
+    )
+    parser.add_argument(
         "--fail-on-secrets",
         action="store_true",
         default=None,
@@ -2786,10 +3198,23 @@ def main():
         "--max-systemic-threat",
         type=float,
         default=None,
-        help="CI/CD Gate: Fail build if systemic threat exceeds this limit (0.0 to disable)",
+        help=(
+            "CI/CD Gate: fail the build if any file's structural magnitude x normalized blast radius exceeds "
+            "this limit (0.0 to disable). NOTE (#3112): the basis changed from the removed Cumulative Risk "
+            "composite to structural magnitude, so thresholds set before that change must be re-tuned."
+        ),
     )
     parser.add_argument(
         "--incremental", type=str, metavar="DB_PATH", help="Path to baseline SQLite database for Delta Scanning"
+    )
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        metavar="COMMIT_SHA",
+        default=None,
+        help="Explicit baseline commit to rehydrate/diff against for --incremental. "
+        "Default (unset) keeps the latest commit by date. Required for longitudinal "
+        "history walks, where the DB holds many commits in arbitrary order (#2983).",
     )
 
     # --- DEPENDENCY AUDIT CACHE (incremental SBOM verification) ---
@@ -2819,6 +3244,16 @@ def main():
         default=None,
         help="Max cache-miss files freshly scanned per package per run (default 25; deferred files are disclosed and picked up next run)",
     )
+    parser.add_argument(
+        "--spec-alignment",
+        action="store_true",
+        default=None,
+        help=(
+            "Measure and report the Spec Alignment vector (#3111). OFF by default: it scores the fraction of "
+            "functions NOT carrying a spec-tag traceability marker, so without that convention every file reads "
+            "at ceiling and the vector is a constant. Enable it only if your codebase uses spec tags."
+        ),
+    )
     parser.add_argument("--config", type=str, help="Path to project-level configuration file (e.g., .galaxyscope.yaml)")
     parser.add_argument(
         "--splicing-speed",
@@ -2846,10 +3281,12 @@ def main():
         "db_only": False,
         "sarif_only": False,
         "sbom_only": False,
+        "ai_guardrails": False,
         "fail_on_secrets": False,
         "fail_on_malware": False,
         "max_risk_exposure": 0.0,
         "max_systemic_threat": 0.0,
+        "spec_alignment": False,
         "no_dependency_cache": False,
         "full_dependency_scan": False,
         "dependency_scan_budget": 25,
@@ -3029,10 +3466,12 @@ def main():
             "DB_ONLY": args.db_only,
             "SARIF_ONLY": args.sarif_only,
             "SBOM_ONLY": args.sbom_only,
+            "AI_GUARDRAILS": args.ai_guardrails,
             "FAIL_ON_SECRETS": args.fail_on_secrets,
             "FAIL_ON_MALWARE": args.fail_on_malware,
             "MAX_RISK_EXPOSURE": args.max_risk_exposure,
             "MAX_SYSTEMIC_THREAT": args.max_systemic_threat,
+            "SPEC_ALIGNMENT": args.spec_alignment,
             "SPLICING_SPEED": args.splicing_speed,
             "FILE_SPEED": args.file_speed,
             "DEPENDENCY_CACHE_PATH": args.dependency_cache,
@@ -3058,14 +3497,21 @@ def main():
 
         scope = Orchestrator(args.target, full_config)
 
+        if args.baseline and not args.incremental:
+            logging.warning(
+                "⚠️ --baseline has no effect without --incremental; it selects the delta-scan baseline commit. Ignoring."
+            )
+
         if args.incremental:
             from gitgalaxy.core.state_rehydrator import StateRehydrator
 
-            logging.info(f"🔄 Delta Scan Requested: Attempting to rehydrate from {args.incremental}")
+            baseline_msg = f" (baseline {args.baseline})" if args.baseline else " (baseline: latest by date)"
+            logging.info(f"🔄 Delta Scan Requested: Attempting to rehydrate from {args.incremental}{baseline_msg}")
 
             db_out_path = str(Path(final_output).with_name(f"{Path(final_output).stem}_master.db"))
             rehydrator = StateRehydrator(args.incremental)
-            baseline_state = rehydrator.load_latest_state(project_name)
+            # #2983: pass the explicit baseline when given; None keeps latest-by-date.
+            baseline_state = rehydrator.load_state(project_name, args.baseline)
 
             if baseline_state:
                 baseline_commit = baseline_state["commit_hash"]

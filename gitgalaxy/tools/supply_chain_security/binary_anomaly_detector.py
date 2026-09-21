@@ -201,7 +201,7 @@ def main():
                         print(f"   -> {msg}")
                     anomalies_found += 1
 
-        except Exception as e:
+        except Exception as e:  # noqa: PERF203 -- per-iteration isolation: one unreadable file shouldn't abort the anomaly scan
             logging.getLogger("binary_anomaly_detector").debug(f"Failed to scan '{rel_path_str}': {e}")
 
     end_time = time.time()
@@ -307,9 +307,12 @@ def run_xray_audit(target_path: Path, config: Optional[Union[ResolvedConfig, dic
 
                 # Check Binary Headers
                 bt = security.scan_binary(head_bytes, ext)
-                if bt and not (ext in [".sh", ".bash", ".zsh"] and "#!/bin/" in bt.get("threat_snippet", "")):
-                    if not is_whitelisted:
-                        anomalies_found += 1
+                if (
+                    bt
+                    and not (ext in [".sh", ".bash", ".zsh"] and "#!/bin/" in bt.get("threat_snippet", ""))
+                    and not is_whitelisted
+                ):
+                    anomalies_found += 1
 
                 # Check String Entropy
                 content = head_bytes.decode("utf-8", errors="ignore")

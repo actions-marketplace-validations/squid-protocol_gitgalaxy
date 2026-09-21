@@ -64,12 +64,13 @@ _SCALA_SIMPLE_CASES = [
     ("structural_boundaries", "import scala.util.Try", "extendedInfo = fetch()"),
     ("func_start", "def foo() = {}", "if (x) foo()"),
     ("class_start", "class Foo {", "Class.forName(name)"),
-    ("safety", "val x: Option[Int] = None", "optional = true"),
+    # #2869 contract: C1, constructors/types (Option[Int]) are invisible now; require() is the form
+    ("safety", "require(x > 0)", "val x: Option[Int] = None"),
     ("safety_bypasses", "x.asInstanceOf[String]", "x.getClass"),
     ("high_risk_execution", "System.exit(1)", "System.currentTimeMillis()"),
     ("io", "Source.fromFile(path)", "sourceMap = generate()"),
     ("api", "export Foo._", "private def foo() = {}"),
-    ("state_mutation", "var count = 0", "println(count)"),
+    ("state_mutation", "count = 1", "var count = 0"),  # #2765: a declaration is not a write
     ("dead_code", "// def foo() = {}", "// just a note"),
     ("doc", "/** A doc comment */", "/* regular block comment */"),
     ("test", "assertEquals(1, 1)", "musty_old_code = true"),
@@ -100,7 +101,7 @@ _SCALA_SIMPLE_CASES = [
     ("thread_sleeps", "Thread.sleep(1000)", "delayedResult = compute()"),
     ("bitwise_ops", "a ^ b", "a && b"),
     ("sync_locks", "synchronized { }", "locked = true"),
-    ("immutability_locks", "val x = 5", "evaluate(x)"),
+    ("immutability_locks", "final val MaxSize = 10", "val x = 5"),  # #2772 C1: `val` is the ordinary binding
     ("cleanup", "conn.close()", "closely_related = true"),
     ("encapsulation", "private val x = 5", "privately = true"),
     ("listeners", 'emitter.on("event", cb)', "button.onClick"),
@@ -130,31 +131,31 @@ _SCALA_DEEP_CASES = [
     ("branch", "for { x <- xs; if x > 0 } yield x", "val yieldAmount = 5"),
     ("branch", "while (true) do \n  println(1)", "val whileRunning = true"),
     ("branch", "x match { case Some(y) => y }", "case_sensitive = false"),
-    ("branch", "throw new IllegalArgumentException()", "val throwaway = 0"),
-
+    ("branch", "x match {", "throw new IllegalArgumentException()"),  # 2822 corollary 1
     # ------------------ args ------------------
     ("args", "def `weird-name with spaces!`(x: Int, y: String): Int =", "val foo = 1"),
     ("args", "def foo[T <: List[Int]](x: T): Int = {", "val fooT = 1"),
     ("args", "(f: (Int) => String) => f(1)", "val lambdaString = 1"),
-    ("args", "def foo(x: String = \"()\") = x", "val defaultParen = 1"),
+    ("args", 'def foo(x: String = "()") = x', "val defaultParen = 1"),
     ("args", "def config(\n  host: String,\n  port: Int\n) = {}", "val configHost = 1"),
     ("args", "x => x * 2", "val x = 2"),
-
     # ------------------ func_start ------------------
-    ("func_start", "@Target(Array(ElementType.METHOD))\n@Retention(RetentionPolicy.RUNTIME)\ndef foo() =", "val bar = 1"),
+    (
+        "func_start",
+        "@Target(Array(ElementType.METHOD))\n@Retention(RetentionPolicy.RUNTIME)\ndef foo() =",
+        "val bar = 1",
+    ),
     ("func_start", "inline\ntransparent\nprivate[this]\ndef foo() =", "inline val x = 5"),
     ("func_start", "override def `do something`[T]() =", "val do_something = 1"),
     ("func_start", "open lazy def bar() = {}", "open class Bar"),
     ("func_start", "def f[A](x: Int) =", "val fX = 1"),
-
     # ------------------ class_start ------------------
-    ("class_start", "@Entity\n@Table(name=\"users\")\nfinal case class User(id: Int)", "val classId = 1"),
+    ("class_start", '@Entity\n@Table(name="users")\nfinal case class User(id: Int)', "val classId = 1"),
     ("class_start", "sealed abstract class Foo[T] extends Bar", "val abstractClass = 5"),
     ("class_start", "transparent trait Foo", "transparent val x = 1"),
     ("class_start", "enum Color { case Red, Green, Blue }", "val enumColor = Red"),
     ("class_start", "private[this]\nfinal\nobject Singleton", "final val Singleton = 1"),
     ("class_start", "open class Base", "open val base = 1"),
-
     # ------------------ structural_boundaries ------------------
     ("structural_boundaries", "extension (s: String) def foo = 1", "val extensionData = 5"),
     ("structural_boundaries", "given intOrd: Ord[Int] with {", "val givenValue = 5"),
@@ -187,7 +188,7 @@ def test_scala_ownership_scaladoc_author_no_colon_regression():
     pattern = SCALA_RULES["ownership"]
     assert pattern.search("@author Jane Doe"), "the real, colon-less @author form still didn't match"
     assert pattern.search("Created by: Jane Doe")
-    assert pattern.search("Copyright: 2026 Acme")
+    assert not pattern.search("Copyright: 2026 Acme")  # #2882 C2: rights are not responsibility
 
 
 def test_scala_test_signature_boundary_regression():
@@ -297,10 +298,11 @@ def test_scala_ambiguity_sweep_shared_literals_are_not_bugs():
     assert import_pattern.search(live_import)
     assert not dead_code.search(live_import)
 
+    # #2875 import contract C5: `import` fires in statement position only, so the
+    # raw-regex collision this sweep used to document is structurally gone --
+    # dead_code owns the commented-out import alone.
     commented_import = "// import scala.util.Try"
-    assert dead_code.search(commented_import) and import_pattern.search(commented_import), (
-        "documented raw-regex collision changed shape -- update this test's rationale"
-    )
+    assert dead_code.search(commented_import) and not import_pattern.search(commented_import)
 
 
 def test_scala_explicit_casts_and_pointers_no_false_collision():
@@ -331,3 +333,31 @@ def test_scala_redos_immunity_sweep():
     assert_redos_immune(SCALA_RULES["args"], "def foo[" + "[" * 100000, timeout_sec=3.0)
     assert_redos_immune(SCALA_RULES["func_start"], "@a(" + "a" * 100000, timeout_sec=3.0)
     assert_redos_immune(SCALA_RULES["class_start"], "@a(" + "a" * 100000, timeout_sec=3.0)
+
+
+def test_scala_doc_block_counts_once_regression():
+    """
+    #2672: `/\\*\\*` and its tags (`@param`, `@return`, ...) were independent
+    alternatives, so one Scaladoc block counted doc=2 -- the #2658 shape.
+    Pair the block into a single bounded (0,15000 chars) non-greedy span so
+    it counts once, regardless of how many tags it carries.
+    """
+    doc = SCALA_RULES["doc"]
+
+    block = "/**\n * @param argv probe input\n */\n"
+    assert len(doc.findall(block)) == 1, "a single Scaladoc block must count once, not once per tag"
+
+    two_blocks = "/**\n * @param argv probe input\n */\ndef f(): Unit = {}\n/**\n * @return again\n */\n"
+    assert len(doc.findall(two_blocks)) == 2, "two separate Scaladoc blocks must still count as 2"
+
+
+def test_scala_doc_bare_tag_outside_block_still_counts_regression():
+    """#2672: a tag outside any Scaladoc block must still count."""
+    doc = SCALA_RULES["doc"]
+    assert doc.search("@note outside any doc block")
+    assert doc.search("@tparam T outside any doc block")
+
+
+def test_scala_doc_block_redos_immune_regression():
+    """#2672 ReDoS probe: an unterminated `/**` must fail closed quickly, not hang."""
+    assert_redos_immune(SCALA_RULES["doc"], "/**" + "x" * 200000, timeout_sec=3.0)

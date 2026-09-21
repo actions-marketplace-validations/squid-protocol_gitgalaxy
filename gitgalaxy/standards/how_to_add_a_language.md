@@ -9,7 +9,17 @@ For the mathematical proofs backing this architecture, review:
 * [Claim 10: Heuristic vs. AST Parsing](../../docs/wiki/03-10-claim-10-ast-vs-heuristic-parsing.md)
 * [Claim 8: Empirical Validation of AST-Free Parsing](../../docs/wiki/03-08-claim-8-empirical-validation-of-ast-free-parsing.md)
 
-To add a new language to the Language Classifier, you will use an advanced LLM (like Claude 3.5 Sonnet, GPT-4o, or Gemini 1.5 Pro) to generate the Structural Signatures dictionary.
+To add a new language to the Language Classifier, you will use an LLM to generate the
+Structural Signatures dictionary. The generation passes (Step 2's rules dict, Step 4's strict
+suite, the rosetta shell) are deliberately **machine-gated** — the strict harness's ReDoS
+detonation, `tests/tools/language_addition_audit.py`, `signal_contract_audit.py` and
+keyword-rosetta's `verify_language.py` judge the output, not the model — so they do not need
+the most expensive model available: a cheaper or different-family model (e.g. `gemini -p` from
+the CLI) is fine for the drafts, and for Step 4 a *different model family than the one that
+wrote the rules* is actively preferred, since the whole point of that step is an adversarial
+pass that doesn't share the generator's blind spots. Reserve the expensive model for the
+judgment work no gate covers: signal-ownership adjudication (see the Decision tables below),
+engine wiring, and golden-master diff forensics.
 
 ---
 
@@ -40,6 +50,67 @@ Copy the **Generation Prompt** below and paste it into the LLM. Replace `[TARGET
    existing case is `"objective-c"`, whose module is `languages/objectivec.py`), the file's own
    module name still needs to be identifier-safe even though the dict key itself doesn't; pick a
    concatenated or underscored slug and keep the dict key exactly as the LLM/consumers expect it.
+
+### Step 3.5: Run the registration audit (5 seconds; do this BEFORE any test suite)
+
+A language touches surfaces far from its own file, and each one missed is a CI round-trip:
+the lens's `COLLISION_FREQUENCIES` when an extension is contested, the detector's Mode
+dispatch/aliases and `_CLASS_START_NAMED_EXTRACTION_LANGS`, `analysis_lens.py`'s
+`LANGUAGE_STRICTNESS` row and `ECOSYSTEMS` set, the pinned `POSITIONAL_LANGUAGES` family in
+`tests/core_engine/test_unreferenced_by_name_contract_2806.py`, the `docs/language_status/`
+index, and the keyword-rosetta control folder. One command enumerates all of it:
+
+    python tests/tools/language_addition_audit.py --lang <lang>
+
+Hard failures there are exactly the red CI runs you would otherwise discover one at a time
+(`tests/core_engine/test_language_addition_invariants.py` runs the same checks); warnings are
+the per-language judgment surfaces with a pointer to the right skill or doc for each. The
+#2511 (db2_sql) landing paid two CI round-trips for surfaces this audit now covers — don't
+re-derive the checklist by exploration.
+
+### Decision tables (settle these by lookup, not by re-reasoning)
+
+**Dispatch ⇒ census.** If the language's statements are its extraction units — anything routed
+through the `"sql"` alias / Mode E terminator cleaving in `detector.py`'s
+`ScopeParsingRegistry` — declare top-level `"invocation_model": "positional"`, full stop. The
+units are statement buckets (`CREATE_Statement`, #2792) and no syntax reaches a bucket by its
+extracted name; whether the *language* can `CALL` a procedure by name is irrelevant, because
+the census runs over units, not database objects. This rule has now been proven twice (sqlite
+at #2866; db2_sql at #2511, where the by_name first draft read a too-clean 0-vs-2.50 census on
+the rosetta corpus and had to be corrected in a follow-up commit). Declaring it also means
+adding the language to the pinned `POSITIONAL_LANGUAGES` literal with a corollary-4
+justification comment — the audit's check 3 catches a mismatch either way.
+
+**Cross-rule ownership.** These were each adjudicated against a stated contract at least once
+(sqlite/pli/db2_sql); reuse the ruling instead of re-deriving it from the contract docs:
+
+| Construct | Owner(s) | Ruling |
+|---|---|---|
+| `CLOSE` (cursor/file/handle) | `cleanup` only | #2841 C2 — releasing a resource is cleanup's, never io's |
+| `DELETE FROM` / record delete | `cleanup` only | #2843/#2888 — removal below the store; NOT `state_mutation` |
+| `TRUNCATE`, `DROP DATABASE\|TABLESPACE\|STOGROUP` | `high_risk_execution` | whole-store destruction family (#2878) |
+| `DROP TABLE\|VIEW\|INDEX\|...` | `safety_bypasses` **and** `cleanup` | deliberate dual (sqlite's shape) |
+| `CREATE TRIGGER` | `func_start` **and** `events` | deliberate dual |
+| `CREATE VIEW` | `class_start`/`func_start` **and** `api` | deliberate dual (per-language which structural key) |
+| `GOTO` / `GO TO` | `safety_bypasses` | unstructured jump (pli precedent); NOT `branch` (#2822 excludes unconditional transfers) |
+| Unconditional branch/call/return mnemonic (`B`, `BR`, `JMP`, `BAL`, `BALR`, `ret`) | `structural_boundaries` | #2764/#2545 — a call is not a decision; in an assembly-family language the unconditional jump is ALSO not a bypass (it is how every loop and exit is written — Rule 2), so the GO TO row above is the structured-language exception, not the default |
+| Storage-layout / dummy section (`DSECT`, a record layout that emits no code) | `class_start` | #2503 — the #2856 record/struct family, even when the issue text asks for `func_start`; document the deviation and pin it with a test (db2_sql's cited-deviation shape) |
+| Storage RMW vs register logicals (`OI/NI/XI/OC/NC/XC` vs `NR/OR/XR`/shifts) | `state_mutation` vs `bitwise_ops` | #2503 — one owner per FORM: in-place storage ops are the re-assignment signal (assembly.py's xchg/inc ruling), register logicals are bitwise; a plain store (`ST`/`MVC`) is the language's baseline and belongs to the structural tally |
+| `STOP` / `EXIT` / process end | `high_risk_execution` **and** `panics_and_aborts` | the #2878 termination dual |
+| `END IF` / `END WHILE` / closers | nobody | #2822 C2 — guard the opener keyword with a lookbehind |
+| `SET <special register>` | `globals` (± `high_risk_execution` for auth switches) | environment, not `state_mutation` |
+| a directive living on a comment line | `None` for code-stream rules | comment surface never reaches them (Rule 18) — it can still anchor `internal_discriminator`, which reads raw text |
+
+**`None`-set starter kits.** Rule 4 wants explicit `None`s; start from the nearest family and
+adjust rather than deciding all ~10 from scratch: SQL dialects (sqlite/db2_sql):
+`ui_framework, closures, generics, pointers, inline_asm, ssr_boundaries, dependency_injection,
+test_skip, hardcoded_secrets` (+ `macros` if the only directive form is a comment).
+Mainframe procedural (pli): `closures, generics, comprehensions, hardcoded_secrets,
+dependency_injection, inline_asm, test_skip, regex_execution`.
+Assembler (hlasm): `closures, generics, comprehensions, test, test_skip,
+dependency_injection, inline_asm, encapsulation, regex_execution, hardcoded_secrets` —
+and remember the keyword-rosetta side reviews absences too: each `None` on a gated signal
+needs a validated deviation-ledger entry there (`tools/na_check.py --ci` says which).
 
 <br><br>
 
@@ -97,6 +168,19 @@ This dictionary defines the **Structural Signatures** used by an AST-free parsin
 16. **Identifier Capture Classes Must Match the Language's Real Grammar:** A capture class like `[a-zA-Z0-9_!?-]+` for a function/type name assumes a narrow, C-like identifier grammar. Many languages (Lisp-family especially, but any language with idiomatic naming conventions using extra punctuation) allow far more characters in identifiers than that. Because the capture typically feeds a required trailing lookahead, a truncated capture doesn't just capture less — it can break the lookahead entirely, turning a partial-match bug into a complete non-match for the whole rule.
     * ❌ `[a-zA-Z0-9_!?-]+` for Scheme identifiers — excludes `> < = * + / . ~ $ % ^ &`, so idiomatic names like `list->vector`, `1+`, and SRFI-9's `<TypeName>` record-naming convention never matched AT ALL, because the truncated capture broke the trailing lookahead requiring whitespace/`)` right after.
     * ✅ Check the language's actual identifier grammar (e.g. R7RS's special-initial/special-subsequent character sets) before picking the capture class, and verify against real idiomatic names from that language's own standard library — not just simple ASCII test names.
+17. **When the Discriminator Is the Enclosing Form, Don't Fake It With a Column Anchor:** A flat regex sees one line; if the same line means different things depending on what it is nested in, no anchor fixes that — it only trades one error for another. Declare a structural scope filter on the rule instead: add `"_scope_filters": {"<rule>": "<filter_name>"}` to the language's `rules` and implement (or reuse) the named filter in `detector.py`'s `_apply_scope_filter`. The filter runs after the regex over the same segment and only ever removes matches, so counts, spatial maps and threat locations stay consistent, and an unknown filter name is ignored (never zeroes a metric).
+    * ❌ Scheme `globals`: `(define y 5)` is a local binding inside `(define (f x) ...)` and a real global inside a file-wrapping `(let () ...)`, at identical indentation. The `^(?![ \t])` column-0 anchor (#2651) deleted 67 false positives AND 32 real globals on the language-crucible corpus (#2674).
+    * ✅ `"_scope_filters": {"globals": "lisp_body_position"}` — the `lisp_body_position` filter walks the paren structure and keeps only defines whose nearest classifying enclosing form is module scope. Measure any such filter against real files with a hand-checkable oracle before shipping it; the rosetta corpus plants at top level and cannot see this class of defect.
+    * ✅ `"_scope_filters": {"args": "yaml_parameter_block"}` (#2753) — the same shape in the *widening* direction: yaml's `args` used to anchor on a `with:` header and count the whole block as one argument. A YAML key line is a parameter or an ordinary config key purely by what it is nested under, so the rule now matches every indented mapping key and the filter keeps the ones whose immediate parent is a `with:`/`inputs:`/`args:` header. Deliberately matching a superset is only safe *with* the filter — check every other consumer of the rule before you do it (`_calculate_block_metrics`' per-function args count had to be re-pointed at the already-filtered spatial map, or every `- run:` step would have "declared" one argument off its own key).
+    * ✅ `"_scope_filters": {"args": "abap_declaration_statement"}` (#2824) — the enclosing form is the *statement*: ABAP passes actuals with the same six binding keywords its declarations use, and the owner (`METHODS ...` vs `CALL FUNCTION ...`) can start an unbounded distance before the clause, which no regex anchor can reach (`re` has no variable-width lookbehind). The filter tokenizes statements (periods outside literals) and keeps clauses owned by `METHODS`/`CLASS-METHODS`/`FORM`/`FUNCTION`/`MODULE`. Write the skip/tokenize helpers as plain code, not a regex skip loop — the first draft's `(?:[ \t\r\n]+|...)*` was the classic nested-quantifier ReDoS shape and the strict suite's detonation caught it.
+    * Perf, not semantics: a rule whose pattern provably never spans a newline may additionally opt into `"_line_gates": ("<rule>", ...)` (#3072) — the detector then sweeps only the lines containing one of the pattern's required literals (c/cpp/go `state_mutation` are the shipped examples). Eligibility is re-derived from the pattern by `rule_prefilter.build_line_gate` at cache build, so the declaration can never change counts: if a later edit to the rule breaks line-locality the gate is refused and the rule silently runs whole-segment (the registry property test in `tests/core_engine/test_line_gates.py` makes that regression loud). Only declare it for rules that measurably dominate the pass — the line scan has real overhead and *loses* on cheap patterns.
+
+18. **The Stream Contract (what text a rule sees):** every rule runs over the file's *code stream* — the text left after `prism.py` removes the comment surface for the language's `lexical_family`. **String literals are never masked** (gitgalaxy#2535 traced this to ground: there is no shielding mechanism, for any rule, in any language), so a keyword inside a string is a real hit for every rule, and a rule that must not count one has to exclude it itself. The recorded count is the raw hit count for every signal (gitgalaxy#2813): the proximity adjustments in `core/spatial_correlation.py` (the ×3 cascading flux on `state_mutation`, the silencer dampener on `high_risk_execution`; see `core/README.md`'s proximity table) are tallied in `mitigation_telemetry` and applied only in the score layer's weighted view, never in a count. The full statement, and the one-sentence **count contract** every rule below must satisfy, live in `gitgalaxy/standards/signal_contracts.py` (rendered at `docs/signal_contracts.md`); the comment line above each key in the schema below is that sentence in prompt form, and `tests/signal_contract_audit.py` fails a PR where the two disagree.
+
+19. **If the Language Cannot Invoke by Name, Say So Instead of Guessing:** `unreferenced_by_name` is a census of extracted callable units whose name occurs nowhere else in the file. It is a *name-reference* test and cannot be anything else from one file's text, so it is only meaningful where writing the name is how the language reaches the unit. Where it is not — JCL's job steps, a Dockerfile's instructions, a SQL script's statements, a workflow's steps and an HTML document's script/style elements all execute in the order they are written, and no syntax in any of them reaches an extracted unit by its extracted name (gitgalaxy#2866; the near-misses are the point: a named build stage is `class_start`'s unit, yaml's `needs:` reaches a job, `steps.<id>` reads outputs without causing a run) — declare `"invocation_model": "positional"` at the TOP LEVEL of the language definition (beside `lexical_family`, NOT inside `rules` -- `language_lens.py` compiles every string value inside `rules` into a regex, so the declaration would arrive as `re.compile("positional")` and read as "not positional") and the census is not computed at all: the count is absent, not maximal. Every other language keeps the default (`by_name`) and needs no declaration — including languages whose only named units live in a corner of the syntax: css is censused over its `@keyframes` custom-idents because `animation-name` reaches one by name.
+    * ⚠️ Declare it only when the language has **no** invoke-by-name form for the units its own `func_start` extracts. "The corpus never calls them" is not the same claim: four of the five languages gitgalaxy#2806 first proposed for this family (abap `PERFORM`, m4 bare expansion, a make prerequisite, an Objective-C selector) do name their callees, and their 100%-unreferenced reading was a corpus plant gap that the plant fixed with no engine change. The full statement is `docs/unreferenced_by_name_contract.md`.
+    * ⚠️ **If your language's names are not `\w`-only ASCII-cased, say so.** The census asks whether the name OCCURS outside its own unit, and "occurs" has to mean what the language means. Two optional TOP-LEVEL keys (beside `lexical_family`, never inside `rules`) carry that: `"identifier_case": "insensitive"` when the language resolves names regardless of case (COBOL's `perform a-para` reaches `A-PARA`), and `"identifier_extra_chars"` for name characters beyond `\w` (COBOL's `-`, without which `B-PARA-EXIT` counts as a mention of `B-PARA` and clears its flag). Both default to the case-sensitive `\w`-only reading, so declaring nothing leaves the language exactly as it was; declaring one MOVES that language's census and needs corpus evidence in the PR (gitgalaxy#3198, `docs/unreferenced_by_name_contract.md` corollary 7).
+    * ⚠️ **The opposite mistake is a census that reads too CLEAN.** If the language writes a function's name in a *declaration* outside the function's own span -- an export statement, a module header's export list -- that occurrence clears the flag and the unit reads as referenced with nothing calling it (haskell and scheme both read 0.25 per corpus file against a 2.50 median, gitgalaxy#2823). Declare the form so the engine can discount it: `_visibility_export` inside `rules` when the construct names exactly ONE function per match (`export -f foo`, `namespace export foo`), and `_visibility_export_list` when one construct names many at once (`module A (a, b, c) where`, `(export a b c)`) -- there, each capture group is a REGION and the engine discounts every name token in it. Declare one key or the other, never both.
 
 ### THE LEXICAL PARSING FAMILIES
 You must assign the language to one of these 5 lexical parsing families based on how it handles comments and non-executable text:
@@ -108,6 +192,14 @@ You must assign the language to one of these 5 lexical parsing families based on
 
 ### OUTPUT SCHEMA & DEFINITIONS
 Generate a valid Python dictionary matching this exact structure. 
+
+> Each `# key: sentence` comment below is that signal's **contract** — what one hit is, stated
+> once for every language — in the form this prompt needs. The source of truth is
+> `gitgalaxy/standards/signal_contracts.py` (kind, unit, status, contract doc per signal);
+> `tests/signal_contract_audit.py --ci` fails when a comment here stops containing its contract
+> sentence, and `docs/signal_contracts.md` is the rendered table. A signal marked *stated* there
+> has been audited across the corpus languages and has a `docs/<signal>_rule_contract.md`;
+> a *draft* has only this comment. Taking one from draft to stated: the `rule-contract-audit` skill.
 
 ```python
 "[TARGET LANGUAGE]": {
@@ -132,61 +224,61 @@ Generate a valid Python dictionary matching this exact structure.
     # stripper has always used the family table, not these. Do not re-add them.
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
-        # branch: Control flow that forces the CPU to make a decision or jump. Includes: if, else, switch, for, while, catch, try, &&, ||, ternary. EXCLUDES: Exceptions (throw, raise) — these belong in panics_and_aborts.
+        # branch: A keyword or operator that opens a runtime choice between control-flow paths: the choosing construct or one of its alternative arms. Includes: if, else/elif arms, switch/match and their case/when/default arms, loop openers, &&, ||, ternary. EXCLUDES: handler keywords (try, catch, rescue, except, finally, ensure, trap — they are safety's; the decision was made by the throw), the continuation and closing words of a construct already counted (then, fi, esac, done, of, END, end if), and unconditional transfers (goto — like return, structural_boundaries' unless another rule owns it). Full contract, corollaries and the 46-language audit: docs/branch_rule_contract.md (#2822).
         "branch": re.compile(r""), 
-        # args: Signatures defining input parameters. Includes: parameter blocks of functions, methods, and lambdas. Must safely step over type hints.
+        # args: THE PARAMETERS A CALLABLE DECLARES. Includes: the parameter blocks of functions, methods, constructors and lambdas; must safely step over type hints. Anchor the parameter list to the declaration it belongs to -- a declaration keyword (`def`/`fn`/`proc`), a mandatory return type, a terminator lookahead on what FOLLOWS the list (`(?=\{)`, `(?=:|\{)`), or a typed parameter list -- because `(...)` is equally a call, a cast and a grouped expression. EXCLUDES call sites: a call consumes a parameter surface, it does not declare one, and unlike `func_start` there is no `_slice_by_braces` downstream to drop the ones without a body. Where the language has no formal parameter list, match the construct that stands in for a declared parameter and record it in the fallback table. Full contract, corollaries and the 46-language audit: docs/args_rule_contract.md (#2773).
         "args": re.compile(r""), 
-        # structural_boundaries: Keywords defining structural boundaries and straight-line execution. Includes: var, return, class, import. EXCLUDES: Access modifiers (public, private) and Immutability keywords (const, final — these belong in immutability_locks).
+        # structural_boundaries: A vocabulary token of straight-line execution or structural delimiting -- a return, a declaration or import keyword, a type keyword, an instruction mnemonic in a language with no other structure -- counted as a length-like tally with no structural referent. Includes: var, return, class, import. EXCLUDES: access modifiers (public, private -- encapsulation/api) and immutability keywords (const, final -- immutability_locks). A tally is never a denominator (count contract corollary 5); `control_flow_ratio` divides by it today, which is #2770's Phase 4 question, not this row's. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "structural_boundaries": re.compile(r""), 
-        # func_start: Exact syntax anchoring the start of an executable block of logic. Includes: Method signatures, constructors. EXCLUDES: Interfaces, types, and classes.
+        # func_start: THE SYNTAX THAT OPENS AN EXECUTABLE BLOCK OF LOGIC UNDER ITS OWN NAME -- a function, method, procedure or subroutine declaration anchored to its naming syntax, or, where the language has no named-callable form, the instruction that begins an executable step (dockerfile RUN/CMD/ENTRYPOINT/HEALTHCHECK, a makefile recipe, a yaml run:/script: step). A call site or reference to a callable is not a declaration. EXCLUDES type declarations (classes, interfaces, records -- those are class_start). A language with no executable-block morphology records the stated absence (None, markdown). Full contract, corollaries and the 46-language audit: docs/func_start_rule_contract.md (#2856).
         "func_start": re.compile(r""), 
-        # class_start: The syntax that defines an object-oriented class, struct, or record.
+        # class_start: THE DECLARATION OF A NAMED TYPE -- a class, struct, record, interface, enum or object -- OR THE FILE'S COMPILATION-UNIT CONTAINER WHERE THAT CONTAINER IS THE LANGUAGE'S ONLY NAMED-ENTITY DECLARATION (cobol PROGRAM-ID, jcl JOB card, a dockerfile FROM stage). A container the file cannot exist without reads against the corpus's zero median by morphology, not by defect -- banding that constant is the declaration-requirement stratum question (#2796), a scoring-layer answer, not this rule's. A token that is genuinely two constructs at once is a deliberate dual, not a miscount (dockerfile FROM is class_start+import, kotlin `object` is class_start+globals). A language with no type-declaration morphology records the stated absence (None + ledger entry: agc_assembly, m4, makefile, markdown, shell). Full contract, corollaries and the 46-language audit: docs/class_start_rule_contract.md (#2856).
         "class_start": re.compile(r""), 
 
         # --- PHASE 2: SAFETY & EXECUTION RISK ---
-        # safety: Defensive programming constructs that prevent crashes at runtime. Includes: try/catch, explicit null checks, guard. EXCLUDES: Immutability.
+        # safety: A site that handles or forestalls a runtime failure at the value level -- a guarded region's opener or its typed handler, a runtime assertion or validation call, a fallback or handled-absence form, an installed failure handler or watchdog, or a hardening instruction -- in a form an ordinary identifier, type annotation or constructor cannot match. Includes: try/typed catch, assert/require/precondition, fromMaybe/unwrap_or fallbacks, trap/watchdogs, endbr64. EXCLUDES: type annotations and constructors (Maybe, Option, sealed), blanket handlers (bare except -- safety_bypasses'), release combinators (finally -- cleanup's), raising (throw/error), block closers (END-IF), frame mechanics, immutability (#2772's axis).
         "safety": re.compile(r""), 
         # safety_bypasses: Syntax that actively bypasses type safety, swallows errors, or relies on unpredictable state. Includes: Force unwrapping (!), any, raw memory casting, linter bypasses (@ts-ignore).
         "safety_bypasses": re.compile(r""), 
-        # high_risk_execution: Process-killing commands and catastrophic runtime vulnerabilities. Includes: eval, exec, process.exit. EXCLUDES: TODO/HACK (planned_debt) and print (debug_prints).
+        # high_risk_execution: A SITE THAT HANDS CONTROL OUT OF THE PROGRAM'S OWN SEMANTICS -- it ends or halts the process, runs text or another program as code, loads or rewrites executable code at run time, destroys a whole store the program does not own, or steps outside the runtime's protections -- in the primitive's own invocation or statement form. Five families, one owner each: termination and traps (exit, abort, STOP RUN, hlt, panic), running text or another program (eval, exec, system, popen, Invoke-Expression, PGM=IKJEFT01), loading or rewriting code (ALTER, srcdoc, innerHTML =, load_extension), whole-store destruction (rm -rf /, mkfs, DROP DATABASE, TRUNCATE, selfdestruct), protection escape (sudo, chmod 777, Unsafe, machine.reset). Where an ordinary identifier can carry the name, anchor the invocation form (call parens, statement position, opcode field); a bound alias, a type or property reference, or a landing point (setjmp) is not a site. EXCLUDES a jump inside the unit (goto -- nobody's signal), deletion below the store (one file/record/table -> cleanup, #2843), debug or dialog output (trace, alert, answer -> debug_prints), memory primitives, workspace resets (clear all -> cleanup), TODO/HACK (planned_debt), print (debug_prints). Full contract, corollaries and the 46-language audit: docs/high_risk_execution_rule_contract.md (#2878).
         "high_risk_execution": re.compile(r""), 
-        # io: Interaction with the disk, network, or external systems. Includes: File writing/reading, HTTP clients, sockets. EXCLUDES: Logging/printing.
+        # io: AN OPERATION THAT MOVES DATA BETWEEN THE PROGRAM AND A SYSTEM OUTSIDE ITS OWN RUNTIME -- a file, stream, socket, device, terminal, or external data store -- in a form an ordinary identifier cannot match. A token may fire bare only when it names the language's I/O facility itself with no measured collision (python `open`, `fetch`, `URLSession`); an everyday word fires only anchored to its operative form (call parens, command position, statement keyword, DD allocation). One io statement is one hit, a job-local temporary crosses no boundary, and where the program executes inside the data store, DML is computation, not io. EXCLUDES tokens another rule owns for the same construct: dependency inclusion (`source`, `.read`, ATTACH -> import), releasing a resource (`close`/`fclose` -> cleanup), command execution (-> high_risk_execution), and logging/printing. A closed runtime records the stated absence instead (`None` + intended-morphology ledger entry, solidity). Full contract, corollaries and the 46-language audit: docs/io_rule_contract.md (#2841).
         "io": re.compile(r""), 
-        # api: Code exposed to the outside world. Captures explicit visibility markers (export, public) AND implicit architectural defaults.
+        # api: A DECLARATION THAT MAKES A NAMED FUNCTION OR TYPE VISIBLE OUTSIDE THIS FILE. Anchor an explicit visibility marker (export, public) to the declaration it modifies -- never `\bpublic\b` on its own, which counts the word, not the surface. Where the language is public-by-default, match the declaration itself; where it has no per-function visibility concept, match the file-level declaration that exposes the file and record it in the fallback table. EXCLUDES call sites, imports, and references to an exported name. Full contract, corollaries and the 46-language audit: docs/api_rule_contract.md (#2730).
         "api": re.compile(r""), 
-        # state_mutation: Reassignment of variables or modifying collections. Includes: let, mut, volatile, .push(), .set().
+        # state_mutation: A STATEMENT THAT WRITES A NEW VALUE INTO STATE THAT ALREADY EXISTS -- a re-assignment (plain, compound or `++`), an in-place update of a container or structure, or a write through a mutable cell or reference. A declaration is not a write, even with an initializer (`let mut x = 5`, `var x = 5`, `int x = 5;`, go `x := 5`): anchor the assignment to a statement start with a bare lvalue so a type or `let`/`var` in front breaks the match; where the language has no declaration syntax (shell, php, tcl...) the assignment statement is the write and counts. A type or modifier naming mutable state (`IORef Int`, `AtomicInteger x;`, `volatile`, `mutable`, `MutableList`) is not a write, a read/bind/cast (`this.x` as an rvalue, haskell `<-`, `std::move`, perl `my $self = shift`) is not a write, and one statement is one hit (`UPDATE t SET ...` = 1; `s = append(s, x)` = 1). EXCLUDES tokens another rule owns for the same construct: dockerfile `ENV` (globals), matlab `clear` / m4 `popdef` / apex `.clear(` (cleanup). Full contract, corollaries and the 46-language audit: docs/state_mutation_rule_contract.md (#2765).
         "state_mutation": re.compile(r""), 
         # dead_code (Commented Logic / Deprecated Trails): Commented-out structural code and unused logic trails. Includes: // if (x), /* var y */.
         "dead_code": re.compile(r""), 
         # doc: Structured documentation meant to be parsed by IDEs or generators. Includes: JSDoc, Docstrings.
         "doc": re.compile(r""), 
-        # test: Assertions and unit testing framework keywords. Includes: describe, it, assert, expect.
+        # test: A SITE THAT ENGAGES A TESTING FRAMEWORK: A TEST-CASE OR FIXTURE DECLARATION, A FRAMEWORK ASSERTION OR EXPECTATION, OR THE FRAMEWORK NAMED AS SUCH. The language's own runtime guard (C `assert(`, python's `assert` statement, Lua `assert(`) is safety's hit, never test's; a framework's assertion form (CU_ASSERT, ASSERT_*/EXPECT_*, assertEquals, luassert's `assert.<chain>`) is test's. One statement is one hit -- a module qualifier is not a separate hit from the call it qualifies (`Test::More::ok(` = 1). An everyday word (test, it, ok, group, mock...) fires only anchored to its framework form (call parens with a description string, declaration position, annotation `@Test`/`#[Test]`/`[Test]`, block label) with hyphen guards where `-` is a word boundary; an unambiguous framework name (pytest, unittest, PHPUnit, Test::More, busted) may fire bare and counts wherever it appears. A language with no per-case idiom a framework executes records the stated absence instead (`None` + ledger entry, yacc). Full contract, corollaries and the 46-language audit: docs/test_rule_contract.md (#2852).
         "test": re.compile(r""), 
 
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
         # concurrency: Asynchronous logic and parallel execution. Includes: async, await, Promise, Thread.
         "concurrency": re.compile(r""), 
-        # ui_framework: DOM manipulation, UI components. Includes: HTML tags, React hooks.
+        # ui_framework: A call, declaration or markup construct that builds or mutates a user-interface surface through a UI framework or the document tree -- a component or widget definition, a hook or lifecycle call, a DOM query or mutation, a layout or rendering directive -- in the framework's own invocation or property form. Includes: HTML tags, React hooks, DOM queries, widget/component definitions, layout properties in a stylesheet. EXCLUDES an everyday word (`text`, `widget`) in a string or identifier, a generic type parameter (`<Class>` -- generics'), and template markers inside documentation prose. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "ui_framework": re.compile(r""), 
-        # closures: Anonymous functions, lambdas, inline callbacks. Includes: Fat arrows (=>).
+        # closures: The syntax that opens an anonymous callable -- a lambda, arrow function, block literal or inline callback -- at the point it is defined. Includes: fat arrows (=>), lambda, fn/function literals, block arguments. A named function's parameter list, a control-flow condition (`if (...) {`) and a call that merely passes a named callable are not one; a language with no anonymous-callable form records None. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "closures": re.compile(r""), 
-        # globals: Accessing global state, environment variables, or system registries. Includes: window., process.env.
+        # globals: A DECLARATION OF A BINDING WITH PROGRAM LIFETIME -- FILE, MODULE, CLASS-STATIC OR PROCESS SCOPE -- OR A READ OR WRITE OF THE PROCESS'S AMBIENT ENVIRONMENT THROUGH ITS NAMED HANDLE, in a form an ordinary identifier cannot match. Scope, not mutability: a program-scope constant counts (`public static final X =`, `const val`, rust `static`/`const` items) -- constness is immutability_locks' axis; a function-local binding never counts, whatever its keyword (anchor a file-scope declaration to column 0, the #2651 shape, and count an indented `static` only where the language makes it a program-lifetime local). A declaration or the ambient handle, not a reference: an ordinary read of a global by name is invisible; the handles are the language's named process-state objects (`os.environ`, `process.env`, `$PATH`, `System.getenv`, `sy-subrc`, `msg.sender`, `%ENV`, `sqlite_master`). An everyday word fires only in its global form (`$NAME` not bare `TERM`, `.shared`/`.default` not bare `default`, `globalThis.` not `global.`/`self.`, `COMMON` outside a hyphenated identifier). Linkage and region headers are not state (`static void f();`, `extern "C"`, fortran `EXTERNAL`, an assembly `.data` section switch, cobol WORKING-STORAGE). One owner: process control through the ambient class is high_risk_execution's (`Environment.Exit`); `locals()` is nobody's global. Deliberate duals kept: kotlin `object` (class_start), fortran `COMMON` (safety_bypasses), jcl `SET` (state_mutation). A language with no scoped-vs-global morphology records the stated absence (None + ledger entry: html, markdown). Full contract, corollaries and the 46-language audit: docs/globals_rule_contract.md (#2858).
         "globals": re.compile(r""), 
-        # decorators: Annotations applied to classes/methods. Includes: @Injectable, [Obsolete].
+        # decorators: A metadata attribute attached to the declaration it precedes -- an annotation, attribute, pragma or directive line -- in the language's attribute syntax. Includes: @Injectable, [Obsolete], #[inline], !$OMP. EXCLUDES a namespace or package separator (`::`), a type annotation, a label and a sigil; a language with no attribute syntax records None. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "decorators": re.compile(r""), 
-        # generics: Type parameters indicating generic abstractions. Includes: <T>, List<T>.
+        # generics: A type-parameter list on a declaration or an instantiation -- the bracketed parameters that make a type or callable generic -- in the language's parameterisation syntax. Includes: <T>, List<T>, [A], Map<String, String>. EXCLUDES a comparison operator, a cast (`<T>expr` -- explicit_casts'), a markup tag and a shift; a language without parametric types records None. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "generics": re.compile(r""), 
-        # comprehensions: Collection iterators or inline looping. Includes: .map(, .filter(.
+        # comprehensions: A collection-transform expression -- a comprehension, a map/filter/fold/for-each call, or an inline iteration form -- at its invocation. Includes: .map(, .filter(, [x for x in ...], for-each, fold. EXCLUDES a plain loop statement (branch's) and a block opener that happens to contain a loop; a language with no transform form records None. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "comprehensions": re.compile(r""), 
-        # scientific: Math, data science, and complex rendering libraries. Includes: Math., numpy.
+        # scientific: A call into, or an import of, a numeric, scientific or rendering library facility -- a math function, a linear-algebra or matrix type, an array, plotting or GPU library -- in its qualified, typed or call form. Includes: Math., numpy, LOG(, Matrix4, dart:math, vector mnemonics. EXCLUDES an everyday identifier used as a variable name (`sum`, `exp`, `log`) and a library mentioned in a string. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "scientific": re.compile(r""), 
         # reflection_metaprogramming (Cognitive Load / Metaprogramming Density): Metaprogramming, reflection, and dynamic property assignment. Includes: Reflection, Proxy, .bind().
         "reflection_metaprogramming": re.compile(r""), 
-        # import: Dependency resolution and module loading. Includes: import, require, using.
+        # import: A STATEMENT OR DIRECTIVE THAT BINDS AN EXTERNAL UNIT -- A MODULE, PACKAGE, HEADER, LIBRARY, FILE, STAGE OR BASE IMAGE -- INTO THE CURRENT UNIT, IN THE LANGUAGE'S OWN DEPENDENCY FORM -- `import`, `#include`, `use`, `using`, `require`, `COPY`, `with`, `FROM`, `uses:`, or the dynamic loader call where that is the load form (`require(`, `import(`, `__import__(`, `Type.forName(`, `dofile(`). The unit is the statement, not the edge: `import (…)`, `use a::{b, c};`, `import a, b`, `with a, b;` are one hit each and the graph's edges are `_dependency_capture`'s; a regex must not span statements (one per line is one per line). A binding, not a reference or a self-declaration: a qualified name (`Account.Name`), a call through an imported symbol, a type annotation, the file's own `module`/`package`/`library` header and host association (`IMPORT` inside an interface body) are invisible. A named unit: a reserved no-op (`FROM scratch`) or a bare/numeric location directive (`BANK 31`) binds nothing. Statement or command position only: `include`, `use`, `import`, `.` fire neither as a string word, a doctest prompt line, a path component (`include/Makefile`), a block closer (`end module`) nor an argument (`find . -name`). One owner, with the stated duals kept: dockerfile `FROM` (class_start), html `<link href>` (io's attribute reading), sqlite `.read`/`.import` (import's since io C2, #2841). A language with no dependency form records the stated absence (None + ledger entry: markdown). Full contract, corollaries and the 46-language audit: docs/import_rule_contract.md (#2875).
         "import": re.compile(r""), 
         # _dependency_capture: Regex strictly capturing group 1 as the exact dependency path string.
         "_dependency_capture": re.compile(r""), 
-        # ownership: Authorship metadata. Includes: @author, Created by:.
+        # ownership: A tag naming who is responsible for the unit -- an author, creator, maintainer, owner, developer or contact -- with its value, in the form the language's tooling or header convention reads as metadata. Includes: @author, Author:, Created by:, Maintainer:, __author__ =, MAINTAINER. Not a license identifier or a copyright notice (#2882 C2), not the word in prose (C1).
         "ownership": re.compile(r""), 
 
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -194,23 +286,23 @@ Generate a valid Python dictionary matching this exact structure.
         "planned_debt": re.compile(r""), 
         # fragile_debt: Explicit admissions of fragile or dangerous logic. Includes: HACK, FIXME, XXX.
         "fragile_debt": re.compile(r""), 
-        # hardcoded_secrets: Static credentials or API keys baked into code. Includes: password, secret, token.
+        # hardcoded_secrets: A literal credential written into the file -- a password, token, key or secret assigned or configured as a string literal of credential length -- at the assignment. Includes: password: "...", api_key = "...", private_key :=. EXCLUDES the identifier on its own, a reference to a secret store, and a placeholder shorter than credential length. Baseline rule in three languages (ada, solidity, yaml); every other language is covered by the security lens's own detector (`sec_hardcoded_secrets`), which is not a registry rule. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "hardcoded_secrets": re.compile(r""), 
         # spec_exposure: Audit tags establishing traceability of intent. Includes: [SPEC-123], [audit].
         "spec_exposure": re.compile(r""), 
-        # ssr_boundaries: Server-Side Rendering computation boundaries. Includes: getServerSideProps.
+        # ssr_boundaries: A server-side rendering boundary -- a framework's data-loading or render-mode hook, a server/client directive, or a template-render call -- in the framework's own form. Includes: getServerSideProps, getStaticProps, "use server", render_template(. EXCLUDES the words `request` or `template` as ordinary identifiers or in prose, and a type named Request; a language with no rendering framework records None. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "ssr_boundaries": re.compile(r""), 
-        # events: Event-driven architecture signatures and message brokers. Includes: emit, EventEmitter, Kafka.
+        # events: A site that publishes into or wires up an event or message channel -- an emit or dispatch call, a broker or bus client construction, a signal connect -- in call form. Includes: emit(, dispatchEvent(, EventEmitter, Kafka/AMQP clients, signal/slot connect. EXCLUDES a bare verb (`emit`, `signal`) in a string or as an ordinary function name, and the receiving side (listeners'). Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "events": re.compile(r""), 
-        # dependency_injection: Inversion of Control (IoC) injection markers. Includes: @Autowired, @Inject.
+        # dependency_injection: An inversion-of-control marker -- an injection annotation, a provider or module registration, a container or factory declaration -- attached to the declaration it wires. Includes: @Autowired, @Inject, @Bean, @Configuration, ApplicationContext. EXCLUDES a plain import and a macro-prerequisite directive (`AC_REQUIRE` is macros' territory); a language with no IoC convention records None. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "dependency_injection": re.compile(r""), 
-        # macros: Compiler pragmas or macro definitions that generate code at compile-time. Includes: #define, macro_rules!.
+        # macros: A compile-time code-generation directive -- a macro definition, a conditional-compilation or include directive, a compiler pragma -- in directive form. Includes: #define, #if/#else/#endif, macro_rules!, define-syntax, syntax-rules, m4 define. EXCLUDES a macro invocation that reads as an ordinary call, and a decorator line (decorators'); a language with no preprocessor or macro system records None. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "macros": re.compile(r""), 
-        # pointers: Explicit tracking of raw memory addressing and pointer dereferencing. Includes: *const, &mut, IntPtr.
+        # pointers: A site that takes, holds or dereferences a raw memory address -- an address-of, a pointer declaration or dereference, an unsafe pointer or raw-handle type -- in the language's pointer syntax. Includes: *const, &mut, IntPtr, ->, unsafe.Pointer, *T. EXCLUDES a managed reference, an object member access, and a hash or array dereference in a language without raw addresses (perl `->{key}`, `$$ref` are references, not addresses -- filed); a language with no address syntax records None. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "pointers": re.compile(r""), 
-        # memory_alloc: Explicit unmanaged memory allocations and raw heap manipulations. Includes: malloc, new.
+        # memory_alloc: A call that requests memory from the runtime or the heap explicitly -- an allocator call, an explicit object or buffer construction, a manual resize -- at its invocation. Includes: malloc, calloc, alloca, new, make(, cons, Buffer.alloc. EXCLUDES the allocator's name in a string or as a function pointer. The managed side is unsettled: javascript/typescript/scheme count every `new`/`cons`, java/kotlin/scala/dart count none -- the batch filed it as one decision, not 46; one side must be chosen for the whole row (count contract corollary 3). Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "memory_alloc": re.compile(r""), 
-        # inline_asm: Direct CPU architecture bridging. Includes: __asm__, asm!.
+        # inline_asm: The opener of an embedded machine-code region -- an inline-assembly statement, block or intrinsic -- in the language's embedding syntax. Includes: __asm__, asm!, asm volatile, assembly { } (solidity), @asm. An assembly language's own instructions are not inline in anything and record None (assembly, agc_assembly); so does every language with no embedding form. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "inline_asm": re.compile(r""), 
 
         # --- PHASE 5: RESOURCE MANAGEMENT & STABILITY ---
@@ -218,36 +310,40 @@ Generate a valid Python dictionary matching this exact structure.
         "telemetry": re.compile(r""), 
         # debug_prints (Debug Artifacts / Unstructured Outputs): Ad-hoc, temporary debug statements. Includes: print(, console.log(.
         "debug_prints": re.compile(r""), 
-        # explicit_casts: Explicitly bypassing the compiler's type-checker. Includes: as String, (int), static_cast.
+        # explicit_casts: A site that converts a value's type explicitly -- a cast expression, a conversion call or a cast keyword -- in cast form. Includes: as String, (int), static_cast<, @intCast(, string(x), <Type>expr. EXCLUDES a type annotation, a generic instantiation (generics'), and an instruction-set prefix (agc EXTEND selects an extended opcode; it converts nothing -- filed); a language with no explicit conversion form records None. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "explicit_casts": re.compile(r""), 
-        # panics_and_aborts (Execution Interrupts / Fatal Aborts): Forcefully destroying the current execution context. Includes: throw, raise, panic!, abort().
+        # panics_and_aborts (Execution Interrupts / Fatal Aborts): A statement that ends the current execution context by raising or aborting -- a throw or raise, a panic, an unreachable marker, a fatal-error, revert or process-exit call -- in statement or call form. Includes: throw, raise, panic!, abort(), unreachable, revert, exit(, AC_MSG_ERROR. EXCLUDES an ordinary `return`, an assertion that guards a value (assert -- safety's), and a handler keyword (catch). Deliberate dual: process termination (`exit`, `System.exit`, `kill`) is also high_risk_execution's termination family (#2878); the two rows count it on purpose. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "panics_and_aborts": re.compile(r""), 
-        # thread_sleeps (Thread Blocking / Synchronous Pauses): Thread blocking or forced timeouts. Includes: sleep(, delay(.
+        # thread_sleeps (Thread Blocking / Synchronous Pauses): A call that blocks the current thread or schedules a forced delay -- a sleep, a timed wait, a timeout-driven deferral -- at its invocation. Includes: sleep(, usleep(, delay(, setTimeout(, std.time.sleep. EXCLUDES an identifier named `delay` or a duration type not in call position; a language with no blocking-wait form records None. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "thread_sleeps": re.compile(r""), 
-        # bitwise_ops: Bitwise operations manipulating raw bytes. EXCLUDES logical &&/||.
+        # bitwise_ops: A bitwise operator applied between value operands -- shift, and, or, xor, or the unary complement -- in operator position. Includes: <<, >>, &, |, ^, ~. EXCLUDES logical &&/||, an address-of or reference sigil (`&x`, `\&sub`), a capture or pipe delimiter (`|err|`), and any `&`/`|` inside a string literal (HTML entities, regex alternation -- the stream keeps strings, so the rule must anchor to two value operands; filed). Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "bitwise_ops": re.compile(r""), 
         # sync_locks: Explicitly coordinating threaded logic to prevent race conditions.
         "sync_locks": re.compile(r""), 
-        # immutability_locks (Immutability Constraints): Explicitly locking data so it cannot be mutated. Includes: const, final, readonly.
+        # immutability_locks: AN ADDED MARKER OR LOCK CALL THAT PREVENTS A BINDING OR VALUE FROM BEING CHANGED AFTER INITIALISATION, WHERE THE LANGUAGE'S DEFAULT WOULD PERMIT IT -- a modifier or qualifier on an otherwise-mutable declaration, a restricted constant-declaration form distinct from the general-purpose binding, a runtime lock call, or an immutable reference pin; the language's ordinary binding keyword is a binding choice, not a lock, and a language whose bindings are immutable by default records the stated absence. Includes: java/groovy `final` fields, c/cpp `const` qualifiers, csharp `readonly`/`init`, ts `readonly`/`as const`, kotlin `const val`, scala `final val`, fortran `PARAMETER`/`INTENT(IN)`, go/rust/dart `const` items, `Object.freeze(`, ruby `.freeze`, lua `<const>`, shell command-position `readonly`, docker/yaml digest pins. EXCLUDES the ordinary binding keyword (rust/swift `let`, kotlin/scala `val`, js/ts/zig `const`, dart `final` -- the rust-vs-swift inversion #2772 exists to fix), class/hierarchy locks (`final class`, `sealed` -- inheritance, not data), purity markers (solidity `view`/`pure`, rust `const fn`), interactivity gates (html `disabled`/`inert`), lifetimes (`&'static`), and quoting as literal syntax (scheme). Immutable-by-default languages are `None` + ledger absence: haskell, swift, zig. Feeds `_calc_state_flux` as the mitigation subtrahend -- the formula half of #2772 is Phase 4's. Full contract, corollaries and the 46-language audit: docs/immutability_locks_rule_contract.md (#2772).
         "immutability_locks": re.compile(r""), 
-        # cleanup (Resource Cleanup / Teardown): Explicitly destroying state or releasing resources. Includes: free(, dispose(), .close().
+        # cleanup: A SITE THAT EXPLICITLY DESTROYS STATE OR RELEASES A HELD RESOURCE -- a deallocation or finalization call, a handle or connection close, removal of an entry from a live container or of external state the program owns, or the opener of a guaranteed-teardown region -- in call or statement form. Includes: free(, fclose(, .dispose(), drop(x), unset, DEALLOCATE, DROP TABLE, rm -f target, file delete, trap ... EXIT, finally/bracket, DISP=(...,DELETE). A declaration of the routine is not a site (`def close`, `fn drop`, `void dispose()`, `sub DESTROY`, `- free`), terminating the program is not release (exit/logout -> panics_and_aborts; agc ENDOFJOB/RESUME stay as the executive's own release forms), a bare token in a string, POD heading, hyphenated name or handler table is a name, and configuring the reclaimer is not reclaiming (collectgarbage("stop")). EXCLUDES tokens another rule owns for the same construct: Unlock/RUnlock (sync_locks), .delete(/.clear( container mutators (state_mutation), whole-store destruction rm -rf / and TRUNCATE (high_risk_execution), END-* block closers (structure, #2869's family), the clean: target header (func_start's unit -- its recipe carries the sites). Full contract, corollaries and the 46-language audit: docs/cleanup_rule_contract.md (#2888).
         "cleanup": re.compile(r""), 
-        # encapsulation (Encapsulation / Access Modifiers): Explicitly hiding logic from the rest of the application. Includes: private, protected, internal.
+        # encapsulation (Encapsulation / Access Modifiers): One hit is a declaration-position marker that excludes a name from the public surface, in the language's own morphology. The comparator is PUBLIC, not the language's default -- a marker that merely restates a default still counts if it marks the name non-public (apex private, swift internal), but a marker of the PUBLIC side never does (rust bare `pub` is api's token; only pub(crate|super|self) count here). Declaration position only: where privacy is part of the identifier (python/dart `_x`, js/ts `#x`), the declaration counts, not every usage. Lexical scoping (perl my, shell/lua local) is scope, not visibility -- those languages record the stated absence (None). Includes: private, protected, static (c linkage), unexport. Full contract, corollaries and the 46-language audit: docs/encapsulation_rule_contract.md (#2766).
         "encapsulation": re.compile(r""), 
-        # listeners: Waiting to receive state from an external broadcast. Includes: on(, addEventListener, subscribe(.
+        # listeners: A registration to receive from an external broadcast -- an event-listener, subscription or handler-binding call -- at its invocation. Includes: on(, addEventListener(, subscribe(, .sink(, .irq(. EXCLUDES the words `on`, `callback` or `handler` in prose, in a string or as ordinary identifiers, and the publishing side (events'). Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "listeners": re.compile(r""), 
-        # test_skip: Bypassed tests or ignored verification specs. Includes: @Ignore, test.skip(.
+        # test_skip: A marker that disables or ignores a test -- a skip decorator, an ignore attribute, a `.skip`/`xit` call form -- attached to the test it silences. Includes: @Ignore, @pytest.mark.skip, test.skip(, xit(, [Fact(Skip=. EXCLUDES the word `skip` as an ordinary identifier, argument or documentation item; a language with no test framework records None. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "test_skip": re.compile(r""), 
 
         # --- HYBRID DOMAIN SENSORS ---
-        # serialization_parsing: JSON, XML, YAML parsing libraries.
+        # auth_middleware: A site that performs or gates authentication or privilege -- a sign-on or sign-off, a credential verification, a permission or security query, a privilege GRANT or REVOKE, or the registration of an auth middleware or filter -- at its invocation. Includes: EXEC CICS SIGNON, VERIFY PASSWORD, GRANT SELECT ON, pam_authenticate(, check_password(, @PreAuthorize, passport.authenticate(. EXCLUDES a literal credential written into the file (sec_hardcoded_secrets'), a user-table or session-store declaration, and `auth`/`login`/`signon`/`grant` in prose, in a string or as an ordinary identifier (a cobol paragraph named SEND-SIGNON-SCREEN is not a sign-on). Declared contract (#3004): docs/domain_sensor_contracts.md.
+        "auth_middleware": re.compile(r""), 
+        # serialization_parsing: A call that encodes to or decodes from a structured interchange format -- JSON, XML, YAML, CSV, protocol buffers, a marshal or unmarshal -- at its invocation. Includes: JSON.parse(, json.loads(, xml.etree, yaml.safe_load(, Marshal, jq. EXCLUDES formatted record I/O and stream open/close (READ/WRITE/OPEN are io's -- filed, fortran) and a text-processing command that parses no format (`sed`, `awk`). Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "serialization_parsing": re.compile(r""), 
-        # regex_execution: Native regex evaluation commands.
+        # regex_execution: A site that evaluates a regular expression -- a match, substitution or split operator, a regex constructor or compile/exec call -- at its invocation. Includes: =~, s///, new RegExp(, re.compile(, preg_match(, std::regex. EXCLUDES a plain substring search or intrinsic that takes no pattern (INDEX, SCAN, VERIFY -- filed, fortran). Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "regex_execution": re.compile(r""), 
-        # time_date_logic: Time/date instantiation and math.
+        # time_date_logic: A site that instantiates or computes with a clock or calendar value -- a now/time/date constructor, duration arithmetic, a formatting or timezone call -- at its invocation. Includes: Date.now(, time.time(, DateTime(, Time::HiRes, strftime(. EXCLUDES an array or variable named `time` and the word in prose. Declared contract (batch #2897): docs/domain_sensor_contracts.md.
         "time_date_logic": re.compile(r""), 
-        # ipc_rpc_bridges: Inter-process or RPC bridging commands.
-        "ipc_rpc_bridges": re.compile(r"") 
+        # ipc_rpc_bridges: A site that crosses a process or host boundary through a bridge -- an RPC or IPC client or server construction, a pipe or socket-message send, a foreign-function or platform-channel call -- at its invocation. Includes: grpc, postMessage(, MessageChannel, pipe(, fork(, shm_open, multiprocessing, ProcessBuilder, java.rmi, Isolate.spawn. EXCLUDES an in-process queue or dispatch queue, a coroutine yield, a GPIO pin and a contract event (all filed as wrong-construct hits). Declared contract (batch #2897): docs/domain_sensor_contracts.md.
+        "ipc_rpc_bridges": re.compile(r""), 
+        # system_config_mutation: A site that durably mutates shared infrastructure or subsystem configuration -- a resource-definition update against a system catalog or control store, a persistent system-parameter, registry or service-configuration write -- in the mutating utility's or primitive's own invocation or statement form. Includes: PGM=DFHCSDUP, sysctl -w, Set-ItemProperty HKLM:, systemctl enable. EXCLUDES a privilege GRANT/REVOKE or any auth gate (auth_middleware's, #3157), the executor of caller-supplied commands and every fixed-command utility's execution risk (high_risk_execution's boundary, #2751 -- this signal owns the step shape by intent, never the risk), a write into the program's own runtime state (state_mutation's), a scope-local symbol or environment value like JCL SET or dockerfile ENV (globals'), single-item teardown like DISP=(...,DELETE) (cleanup's), and IDCAMS dataset-lifecycle steps (io/cleanup territory; catalog-level DEFINE ALIAS/ALTER is an open boundary question). Declared contract (#3084): docs/domain_sensor_contracts.md.
+        "system_config_mutation": re.compile(r"") 
     }
 }
 ```
@@ -386,6 +482,37 @@ are not the same thing:
 6. Re-run the full test suite once more after regenerating, to confirm the new fixtures are
    internally self-consistent with everything else.
 
+### Step 6: Record the cost of the addition
+Once the language is actually landed, log what it cost so we accumulate a graphable history of
+time and tokens per language. Append one line to
+`gitgalaxy/standards/language_addition_costs.jsonl` with:
+
+    python tests/tools/record_language_cost.py --lang <lang> --issue <NNNN> \
+        --phase combined --session latest --primary-model <model> \
+        --notes "<lexical family + anything notable>"
+
+The tool derives active wall-clock (idle gaps > 5 min excluded), tokens on four bases
+(`output` / `fresh` / `cache_read` / `total`), the per-model output split, and an estimated
+USD cost from the current pricing table — parsed straight from this session's transcript, so
+the figure is measured, not guessed. One record carries the fields a graph needs: `started_at`
+(date/time for the x-axis), `active_min`, the token bases, `est_cost_usd`, `runner`, and
+`primary_model`.
+
+Two things that keep the series honest:
+- **Which token number to trust.** `output_tokens` is the most stable "work done" proxy;
+  `est_cost_usd` is what maps to dollars. `total_tokens` on a Claude Code run is dominated by
+  prompt-cache **reads** (often 100M+) — do not read it as "150k-scale" effort; the live
+  context-window gauge you watch during a session (~150–200k) is a *peak-context* reading, a
+  different quantity entirely.
+- **Runner basis.** Token totals are **not** comparable across agents. A Claude Code total is
+  cache-read-inflated; a headless `agy`/Gemini run reports far smaller, un-inflated numbers.
+  The `runner` field records which basis a row is on — filter/group by it before comparing.
+
+If the engine and keyword-rosetta halves were separate sessions, record each with its own
+`--phase engine` / `--phase corpus`, or repeat `--session <uuid>` to fold several transcripts
+into one `combined` row. For an addition with no Claude transcript, use `--manual` with
+`--runner`, `--active-min`, and whatever token figure you have.
+
 ---
 
 ## Optional: The AI/ML & Literate-Programming Extension Pack
@@ -404,25 +531,17 @@ existed in the original 43-key baseline because none of it existed as a mainstre
 that schema was designed.
 
 * `llm_api`: Direct calls into a hosted LLM provider SDK. Includes: `openai`, `anthropic`.
-* `llm_orchestrator`: Agent/RAG orchestration frameworks. Includes: `langchain`, `llama_index`.
-* `llm_vector_store`: Vector database clients. Includes: `chromadb`, `pinecone`.
-* `ml_traditional`: Classical (non-deep-learning) ML libraries. Includes: `sklearn`.
-* `dl_frameworks`: Deep learning frameworks. Includes: `tensorflow`, `torch`, `keras`.
-* `hardware_bridge`: Bridges from software into physical/peripheral I/O. Includes: `serialport`,
-  `usb`, `bluetooth`, `socket.io`, `websocket`.
-* `cryptography`: Cryptographic primitives and identity libraries. Includes: `crypto`, `bcrypt`,
-  `x509`, `tls`/`ssl`, `jsonwebtoken`, `argon2`.
-* `rce_funnel`: Spawning a shell/interpreter subprocess from application code — a common
-  agentic-tool-use RCE shape. Includes: `child_process.spawn/exec/execSync` invoking
-  `python`/`bash`/`sh`/`node`.
-* `exfiltration_camouflage`: Outbound HTTP calls disguised as telemetry/metrics/audit traffic.
-  Includes: `requests.post`/`urllib.request`/`httpx.post` whose payload references
-  `telemetry`/`metrics`/`audit`-shaped keys.
-* `memory_scraping`: Direct reads of process memory. Includes: `/proc/<pid>/mem`-style paths.
-* `lazy_evaluation`: Generators and deferred-execution constructs. Includes: `yield`,
-  `Generator`, `Iterator` (and their `Async*` counterparts).
-* `vectorized_math`: Tensor/matrix math operations. Includes: `einsum`, `matmul`, `tensordot`,
-  `.dot(`, the `@` matmul operator.
+* `llm_orchestrator`: An import of an agent or retrieval-orchestration framework from the pack's name list -- one hit per import statement, none for a use of the imported name. Includes: langchain, llama_index (the pack's whole list today).
+* `llm_vector_store`: An import of a vector-database client from the pack's name list -- one hit per import statement, none for a use of the imported name. Includes: chromadb, pinecone (the pack's whole list today).
+* `ml_traditional`: An import of a classical (non-deep-learning) machine-learning library from the pack's name list -- one hit per import statement, none for a use of the imported name. Includes: sklearn (the pack's whole list today).
+* `dl_frameworks`: An import of a deep-learning framework from the pack's name list -- one hit per import statement, none for a use of the imported name. Includes: tensorflow, torch, keras (the pack's whole list today).
+* `hardware_bridge`: An import of a library that bridges software into physical or peripheral I/O -- serial, USB, bluetooth, printers, device sockets -- one hit per import statement. Includes: serialport, usb, bluetooth, socket.io, websocket, printer. The rule also lists `webgl`, which is rendering rather than a peripheral -- recorded, not changed, in the batch.
+* `cryptography`: An import of a cryptographic-primitive, hashing, transport-security or identity library from the pack's name list -- one hit per import statement. Includes: crypto, bcrypt, x509, tls, ssl, jsonwebtoken, argon2. The standard-library hashing modules (`hashlib`, `hmac`) are not in the list -- the crucible's python reads 0 on files that import them; filed as too narrow.
+* `rce_funnel`: A subprocess spawn from application code whose command is a shell or interpreter -- at the spawn call, with the interpreter name in the command. Includes: child_process.spawn/exec/execSync('python'|'bash'|'sh'|'node'|'bun'. A deliberate refinement of high_risk_execution's running-another-program family (#2878): the same call counts there too; a spawn of a non-interpreter program is only high_risk_execution's.
+* `exfiltration_camouflage`: An outbound HTTP call whose target or payload carries a telemetry-, metrics-, audit- or log-shaped name -- at the call. Includes: requests.post(..telemetry..), fetch(..metrics..), axios.post(..audit..). The same call without the camouflage vocabulary is io's alone; with it, both rows count it on purpose.
+* `memory_scraping`: A read of another process's memory image through the operating system's process filesystem -- at the path construction or open. Includes: /proc/<pid>/mem, '/proc/' + str(pid). EXCLUDES a process's introspection of its own state.
+* `lazy_evaluation`: A deferred-execution construct at its site -- a yield statement, a generator or iterator type annotation, an async-generator form. Includes: yield, Generator, Iterator, AsyncGenerator, AsyncIterator. EXCLUDES a completed collection and an ordinary loop.
+* `vectorized_math`: A tensor or matrix operation at its site -- an einsum/matmul/tensordot/dot call, or the infix matrix-multiply operator between two value operands. Includes: einsum(, matmul(, tensordot(, .dot(, a @ b. EXCLUDES a decorator marker (`@name` on its own line or after a newline -- the python rule's operand lookbehind accepts a preceding `)` across the newline; filed).
 * `_named_token_capture`: Capture-group rule that extracts the exact imported symbol name(s)
   from a `from X import Y` statement, for dependency-graph precision beyond what the baseline
   `_dependency_capture` rule gives you.
@@ -431,10 +550,10 @@ that schema was designed.
 For languages that *are* documentation rather than executable code, but still have internal
 structure worth mapping.
 
-* `lit_code_blocks`: Fenced code block delimiters (` ``` `).
-* `lit_diagrams`: Embedded diagram blocks (e.g. Mermaid).
-* `lit_headers`: Section headers, for document structure/navigation mapping.
-* `lit_links`: Cross-reference/hyperlink targets.
+* `lit_code_blocks`: A fence line that opens or closes a code block -- a block contributes its opener and its closer, so one block is two hits. Includes: ``` and ```lang fences. A diagram fence (```mermaid) is also lit_diagrams' -- a deliberate dual.
+* `lit_diagrams`: A fence line that opens an embedded diagram block by its info string -- one hit per diagram. Includes: ```mermaid, ```plantuml, ```graphviz. The closing fence is lit_code_blocks' alone.
+* `lit_headers`: An ATX heading line -- one to six `#` at the margin followed by a space -- one hit per heading. Includes: # Title, ## Section. The rule is not fence-aware: a `#` comment line inside a ```python block reads as a heading (filed).
+* `lit_links`: An inline link or image target `[text](target)` -- one hit per link. Includes: [b](b.md), ![alt](img.png). EXCLUDES a reference-style definition (`[id]: url`) and a bare URL.
 
 ### Adding a new extension pack
 If you're detecting a new category of risk that doesn't fit any baseline key and only applies
@@ -443,7 +562,18 @@ pattern, and a one-line INCLUDES description, listed under a new `### <Name> Ext
 heading naming which languages carry it. Keep extension keys out of the baseline schema above —
 that schema is the one every language is expected to implement to Strict Feature Parity (Rule
 4); extension packs are deliberately the exception, not the rule.
-## After the language lands: the control-corpus folder (keyword-rosetta)
+## The control-corpus folder (keyword-rosetta) — author it EARLY, not last
+
+**Ordering note (#2511's lesson):** despite this section's position in the doc, author the
+rosetta shell right after Step 3.5 and run
+`python tools/verify_language.py <lang> --report --engine <worktree>` *before* investing in
+the Step 4 strict suite. The report run takes ~30 seconds, is machine-checked against planted
+ground truth, and is the highest-signal semantic oracle in the whole pipeline: on db2_sql it
+caught an `invocation_model` contract violation that 141 fresh strict tests and the full
+8,000-case engine suite had no way to see (every planted count was right; the *census
+semantics* were wrong). Authoring it early also means the engine PR and the corpus PR can
+open together and reference each other, instead of the corpus PR's CI sitting red until the
+engine merges.
 
 Every language in `LANGUAGE_DEFINITIONS` has a matching control folder in
 [keyword-rosetta](https://github.com/squid-protocol/keyword-rosetta) (built for issue #1096):

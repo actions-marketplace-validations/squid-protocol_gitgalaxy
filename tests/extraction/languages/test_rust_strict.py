@@ -40,12 +40,13 @@ _RUST_SIMPLE_CASES = [
     ("structural_boundaries", "let x = 1;", "x + 1;"),
     ("func_start", "fn foo() {}", "struct Foo {}"),
     ("class_start", "struct Foo {}", "fn foo() {}"),
-    ("safety", "match x {", "let x = 1;"),
+    # #2869 contract: C1/C3, bare match is branch's now; the fallback family is the form
+    ("safety", "let v = x.unwrap_or(0);", "match x {"),
     ("safety_bypasses", "x.unwrap()", "let x = 1;"),
     ("high_risk_execution", 'panic!("oops")', "let x = 1;"),
     ("io", "std::fs::read(path)", "let x = 1;"),
     ("api", "pub fn foo() {}", "fn foo() {}"),
-    ("state_mutation", "let mut x = 1;", "let x = 1;"),
+    ("state_mutation", "x = 2;", "let mut x = 1;"),  # #2765: `mut` marks the binding; the write is the assignment
     ("dead_code", "// fn foo() {}", "// just a note"),
     ("doc", "/// doc comment", "// just a note"),
     ("test", "assert!(x)", "let x = 1;"),
@@ -310,8 +311,11 @@ def test_rust_intentional_double_classification_sweep():
     - `macro_rules! foo {}` -> macros + reflection_metaprogramming (Rust's
       macro system IS its metaprogramming system)
     """
+    # #2766 retired the pub dual: bare `pub` marks the PUBLIC surface and is api's
+    # token alone; encapsulation counts only the restricted-pub non-public markers.
     assert RUST_RULES["api"].search("pub fn foo() {}")
-    assert RUST_RULES["encapsulation"].search("pub fn foo() {}")
+    assert not RUST_RULES["encapsulation"].search("pub fn foo() {}")
+    assert RUST_RULES["encapsulation"].search("pub(crate) fn foo() {}")
 
     struct_decl = "struct Foo {}"
     assert RUST_RULES["class_start"].search(struct_decl)
@@ -325,9 +329,11 @@ def test_rust_intentional_double_classification_sweep():
     assert RUST_RULES["concurrency"].search(await_expr)
     assert RUST_RULES["structural_boundaries"].search(await_expr)
 
+    # #2772 C2/C3: `const fn` is a purity marker and `*const` the raw-pointer
+    # spelling -- both immutability halves retired; the other owners keep them.
     const_fn = "const fn foo() {}"
     assert RUST_RULES["func_start"].search(const_fn)
-    assert RUST_RULES["immutability_locks"].search(const_fn)
+    assert not RUST_RULES["immutability_locks"].search(const_fn)
 
     panic_call = 'panic!("oops")'
     assert RUST_RULES["high_risk_execution"].search(panic_call)
@@ -335,7 +341,7 @@ def test_rust_intentional_double_classification_sweep():
 
     raw_ptr = "let p: *const i32 = &x;"
     assert RUST_RULES["pointers"].search(raw_ptr)
-    assert RUST_RULES["immutability_locks"].search(raw_ptr)
+    assert not RUST_RULES["immutability_locks"].search(raw_ptr)
 
     macro_def = "macro_rules! foo {}"
     assert RUST_RULES["macros"].search(macro_def)
@@ -376,6 +382,7 @@ def test_rust_redos_immunity_sweep():
     assert RUST_RULES["class_start"].search("struct Foo {}")
     assert RUST_RULES["debug_prints"].search('println!("hi")')
 
+
 def test_rust_branch_deep_cases():
     """Deep case variants for 'branch' structural signature."""
     branch = RUST_RULES["branch"]
@@ -390,8 +397,9 @@ def test_rust_branch_deep_cases():
     # Negative deep cases (bugs we fixed)
     assert not branch.search("let r#match = 1;")
     assert not branch.search("let r#if = true;")
-    assert not branch.search("'loop: {") # The 'loop itself shouldn't trigger branch
+    assert not branch.search("'loop: {")  # The 'loop itself shouldn't trigger branch
     assert not branch.search("T: ?Sized")
+
 
 def test_rust_args_deep_cases():
     """Deep case variants for 'args' structural signature."""
@@ -407,18 +415,20 @@ def test_rust_args_deep_cases():
     assert not args.search("let x = a | b | c;")
     assert not args.search("if a | b | c {")
 
+
 def test_rust_func_start_deep_cases():
     """Deep case variants for 'func_start' structural signature."""
     func_start = RUST_RULES["func_start"]
     # Positive deep cases
-    assert func_start.search("pub(crate) async unsafe extern \"C\" fn do_stuff() {")
+    assert func_start.search('pub(crate) async unsafe extern "C" fn do_stuff() {')
     assert func_start.search("#[inline(always)]\n#[no_mangle]\nfn foo() {")
     assert func_start.search("fn r#do() {")
     assert func_start.search("fn generic<T: Trait<Associated = <Type as Trait>::Assoc>>() {")
-    assert func_start.search("extern \"system\" fn sys_call() {")
+    assert func_start.search('extern "system" fn sys_call() {')
     # Negative deep cases
     assert not func_start.search("let fn_ptr = 1;")
     assert not func_start.search("struct fn_struct {}")
+
 
 def test_rust_class_start_deep_cases():
     """Deep case variants for 'class_start' structural signature."""
@@ -432,6 +442,7 @@ def test_rust_class_start_deep_cases():
     # Negative deep cases
     assert not class_start.search("let struct_name = 1;")
     assert not class_start.search("let trait_name = 1;")
+
 
 def test_rust_structural_boundaries_deep_cases():
     """Deep case variants for 'structural_boundaries' structural signature."""

@@ -35,7 +35,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch: decisions that split flow. Includes English-like loops and try-catch.
         "branch": re.compile(
-            r"\b(if|then|else|switch|case|default|repeat|while|until|times|try|catch|finally|throw|next\s+repeat|and|or|not)\b",
+            r"\b((?<!end )if|else|(?<!end )switch|case|default|(?<!end )repeat|next\s+repeat|and|or|not)\b",
             re.I,
         ),
         # 2. args: Parameters / Coupling. Captures parameters in handlers (on, command, function).
@@ -69,7 +69,7 @@ DEFINITION: dict[str, Any] = {
         # immutability_locks and violating this key's own documented EXCLUDES
         # rule (immutability keywords belong in immutability_locks, not here).
         "structural_boundaries": re.compile(
-            r"\b(put|get|set|go|send|dispatch|pass|return|add|subtract|multiply|divide|visual\s+effect|play|sort|find|replace)\b",
+            r"\b(put|get|set|go|send|dispatch|pass|return|add|subtract|multiply|divide|visual\s+effect|play|sort|find|replace|then|while|until|times)\b",
             re.I,
         ),
         # 4. func_start: Executable Logic Anchors. Anchors executable logic blocks (handlers).
@@ -131,8 +131,9 @@ DEFINITION: dict[str, Any] = {
         ),
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
         # 6. safety: Defensive Programming. Defensive programming and screen/message locking.
+        # C2: throw raises, not handles. (batch4's livecode throw safety+branch pair retires.)
         "safety": re.compile(
-            r"\b(try|catch|finally|throw|lock\s+screen|lock\s+messages|lock\s+errordialogs|assert|strict\s+compilation|is\s+a|is\s+strictly)\b",
+            r"\b(try|catch|finally|lock\s+screen|lock\s+messages|lock\s+errordialogs|assert|strict\s+compilation|is\s+a|is\s+strictly)\b",
             re.I,
         ),
         # 7. safety_neg: Safety Bypasses. Actively bypassing safety (disabling messages, raw do).
@@ -148,13 +149,20 @@ DEFINITION: dict[str, Any] = {
         # `do "put 1 into x"` and `do (tExpr)` both silently never
         # matched. Pulled "do\s+(?!...)" out of the group (the lookahead
         # already fully delimits it; no trailing \b needed).
+        # BUG FIX (#2675): dropped the `global\s+` alternative -- it's a scope
+        # declaration, not a safety bypass, and `globals` already owns it
+        # exclusively (`\b(global\s+|the\s+global|...)\b`). The corpus's
+        # probe_globals plants two `global` declarations in a.lc that this
+        # rule was double-counting, the entire +2 over the planted value.
         "safety_bypasses": re.compile(
-            r"\b(disable\s+messages|unlock\s+(?:screen|messages)|global\s+)\b|\bdo\s+(?![a-zA-Z_]\w*\b)",
+            r"\b(disable\s+messages|unlock\s+(?:screen|messages))\b|\bdo\s+(?![a-zA-Z_]\w*\b)",
             re.I,
         ),
         # 8. danger: High-Risk Execution. Process killers and blocking UI alerts in execution flow.
+        # #2878 contract C5: answer/ask are dialogs; C4 `delete file|folder|url` is a single
+        # resource (cleanup's question, #2843); shell( runs a command (C1b).
         "high_risk_execution": re.compile(
-            r"\b(answer|ask|do(?!\s+(?:AppleScript|VBScript))|delete\s+(?:file|folder|url)|quit|exit\s+to\s+top)\b",
+            r"\b(?:do(?!\s+(?:AppleScript|VBScript))|quit|exit\s+to\s+top)\b|\bshell\s*\(",
             re.I,
         ),
         # 9. io: I/O & Network Boundaries. Disk, Network, and URL fetching.
@@ -166,7 +174,7 @@ DEFINITION: dict[str, Any] = {
         # (bounded per Rule 5, still linear) so it spans the whole
         # single-line expression instead of stopping at the first space.
         "io": re.compile(
-            r"\b(open\s+(?:file|socket|process)|read\s+from|write\s+to|close\s+(?:file|socket|process)|post\s+[^\n]{1,300}?\s+to\s+url|get\s+url|put\s+url|load\s+url)\b",
+            r"\b(open\s+(?:file|socket|process)|read\s+from|write\s+to|post\s+[^\n]{1,300}?\s+to\s+url|get\s+url|put\s+url|load\s+url)\b",
             re.I,
         ),
         # 10. api: Public Surface Area. Exposed surface area (Any non-private handler).
@@ -202,8 +210,14 @@ DEFINITION: dict[str, Any] = {
         # non-word on both sides of that position, so the boundary never
         # fired and the tag never matched. `:` is already self-delimiting
         # (same principle as Rule 10), so the trailing `\b` is dropped.
+        #
+        # BUG FIX (#2659): `Author:` is already exclusively captured by the
+        # `ownership` rule. Including it in `doc`'s bare-tag alternation
+        # caused a double-count on every header author line. Removed here,
+        # following the established precedent in ada.py. Genuine structured
+        # `@author` tags remain in `doc`.
         "doc": re.compile(
-            r"^[ \t]*(?:--\||--@|/\*\*|//!).*(?:@param|@return|@author)|\b(?:Description|Purpose|Author|Summary):",
+            r"^[ \t]*(?:--\||--@|/\*\*|//!).*(?:@param|@return|@author)|\b(?:Description|Purpose|Summary):",
             re.I | re.M,
         ),
         # 14. test: Testing & Assertions. Unit testing framework markers.
@@ -237,7 +251,10 @@ DEFINITION: dict[str, Any] = {
         # sides of that position), so it never matched. Pulled out of the
         # group with only a trailing `\b` (the `$` is self-delimiting).
         "globals": re.compile(
-            r"\b(global\s+|the\s+global|the\s+environment|the\s+platform|it)\b|\$ENV\b",
+            # #2858 contract corollary 1: `it` is the handler-local result variable
+            # (60+ of 385 crucible hits were `return it` / `if it is empty`), not
+            # global state; `the platform` / `the environment` are ambient reads.
+            r"\bglobal[ \t]+[a-zA-Z_]|\bthe[ \t]+(?:globals?|environment|platform)\b|\$ENV\b",
             re.I,
         ),
         # 19. decorators: Decorators / Annotations. LCB attributes.
@@ -277,14 +294,21 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 24. import: Dependency Inclusions. Library and stack loading.
-        "import": re.compile(r"\b(start\s+using\s+(?:stack|behavior)|require|include|module)\b", re.I),
+        # #2875 contract C3/C5: `module com.x` declares the file's OWN module and
+        # `end module` closes it (35 of 83 crucible hits); the LCB import form is
+        # `use com.livecode.foreign`. Every form in statement position.
+        "import": re.compile(
+            r"^[ \t]*(?:start[ \t]+using[ \t]+(?:stack|behavior)\b|use[ \t]+[A-Za-z_]\w*(?:\.\w+)+|(?:require|include)[ \t]+\S)",
+            re.I | re.M,
+        ),
         "_dependency_capture": re.compile(
-            r"^[ \t]*(?:start[ \t]+using[ \t]+(?:stack[ \t]+|behavior[ \t]+)?|require[ \t]+|include[ \t]+|module[ \t]+)(?:['\"]([^'\"]+)['\"]|([^'\"\s]+))",
+            r"^[ \t]*(?:start[ \t]+using[ \t]+(?:stack[ \t]+|behavior[ \t]+)?|require[ \t]+|include[ \t]+|use[ \t]+)(?:['\"]([^'\"]+)['\"]|([^'\"\s]+))",  # #2875 C3: own module out, `use` in
             re.I | re.M,
         ),
         # 25. ownership: Authorship metadata in comments.
+        # #2882 contract: C2 `Copyright:` out
         "ownership": re.compile(
-            r"^[ \t]*(?:--|//|#)\s*(?:Author|Created by|Maintainer|Copyright):\s+([^\n]+)",
+            r"^[ \t]*(?:--+|//+|#+|/\*+|\*+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -365,6 +389,9 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"\b(skip\s+test)\b", re.I),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (LiveCode Specifics) ---
+        # auth_middleware (#3004): contract-level absence. Event-handler GUI
+        # scripting with no auth framework or privilege vocabulary.
+        "auth_middleware": None,
         "serialization_parsing": re.compile(
             r"(?i)\b(jsonImport|jsonExport|arrayEncode|arrayDecode|revXMLCreateTree)\b"
         ),
@@ -384,5 +411,9 @@ DEFINITION: dict[str, Any] = {
         "ipc_rpc_bridges": re.compile(
             r"(?i)\b(open\s+socket|read\s+from\s+socket|post\s+[^\n]{0,300}to|get\s+url|open\s+process)\b|shell\s*\("
         ),
+        # system_config_mutation (#3084): contract-level absence. desktop
+        # scripting layer; no host-configuration vocabulary of its own -- file
+        # writes are io's.
+        "system_config_mutation": None,
     },
 }

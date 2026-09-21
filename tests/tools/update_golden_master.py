@@ -19,7 +19,7 @@ as tests/test_golden_crucible.py): set LANGUAGE_CRUCIBLE_PATH, or have it
 as a sibling directory of this repo checkout.
 
 Updates whichever fixture matches the CURRENT environment (full-precision
-if networkx/tiktoken/pandas/xgboost are installed, zero-dependency-mode
+if tiktoken/pandas/xgboost are installed, zero-dependency-mode
 otherwise) -- run it once per mode if both fixtures need updating.
 """
 
@@ -34,15 +34,19 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import golden_diff
 from _crucible_pin import PINNED_TAG
 
-from gitgalaxy.galaxyscope import HAS_NETWORKX, HAS_PYYAML, HAS_TIKTOKEN
+from gitgalaxy.galaxyscope import HAS_PYYAML, HAS_TIKTOKEN
 from gitgalaxy.security.security_auditor import ML_AVAILABLE
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 CRUCIBLE_DATA_PATH = Path(os.environ.get("LANGUAGE_CRUCIBLE_PATH", REPO_ROOT.parent / "language-crucible")) / "data"
+# Match the check path (test_golden_crucible.py): a generous, override-able cap on
+# the full-corpus scan. It guards against a hung scan, not slowness -- the #3246
+# bless hit the old 180s on a loaded machine. Override via GITGALAXY_GOLDEN_SCAN_TIMEOUT.
+GOLDEN_SCAN_TIMEOUT = int(os.environ.get("GITGALAXY_GOLDEN_SCAN_TIMEOUT", "600"))
 
 
 def zero_dependency_mode() -> bool:
-    return not (HAS_NETWORKX and HAS_TIKTOKEN and ML_AVAILABLE and HAS_PYYAML)
+    return not (HAS_TIKTOKEN and ML_AVAILABLE and HAS_PYYAML)
 
 
 def main():
@@ -83,8 +87,22 @@ def main():
                 "--splicing-speed",
             ],
             check=True,
-            timeout=180,
-            env={**os.environ, "GITGALAXY_LICENSE_KEY": "COMMUNITY_FREE_TIER"},
+            timeout=GOLDEN_SCAN_TIMEOUT,
+            env={
+                **os.environ,
+                "GITGALAXY_LICENSE_KEY": "COMMUNITY_FREE_TIER",
+                # #3005: this script disagreed with test_golden_crucible.py's own
+                # comparison by ~8500 unrelated git-history-derived leaves (Architect/
+                # Authorship Centralization/Raw Churn Frequency/Instability & Volatility
+                # Exposure) for files nobody's PR ever touched. Root cause: this env var
+                # was added to test_golden_crucible.py for #2976 (the golden masters pin
+                # a corpus whose git history isn't part of the measured structure) but
+                # never propagated here, so a bless run with a full local clone of the
+                # corpus (unlike the historyless/shallow states the fixtures were
+                # actually generated against) picked up real git-log data the check path
+                # never sees and would then disagree with on every subsequent check.
+                "GITGALAXY_DISABLE_GIT_HISTORY": "1",
+            },
         )
 
         new_output_path = output_dir / "data_galaxy_audit.json"

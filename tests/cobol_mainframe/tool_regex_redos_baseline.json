@@ -1,0 +1,4 @@
+{
+  "offenders": [],
+  "about": "#3214 ReDoS sweep baseline: known-slow refraction-tool regexes, so `--ci` fails only on a new one. Empty since #3222 bounded the last three (OPEN operands, SELECT/ASSIGN, REPLACING pairs). Add an entry only with an issue tracking its fix."
+}

@@ -39,7 +39,7 @@ from __future__ import annotations
 import copy
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from gitgalaxy.standards import gitgalaxy_config as _defaults
 
@@ -103,6 +103,7 @@ TOP_LEVEL_SPEC: dict[str, Any] = {
     "APPROVED_IMPORTS": EXTEND,
     "BLACKLISTED_IMPORTS": EXTEND,
     "FIREWALL_NETWORK_WEIGHTING": REPLACE,
+    "SECURITY_SCAN_INERT_FORMATS": REPLACE,
     "DENYLIST_PATTERNS": EXTEND,
     "ALLOWLIST_PATHS": EXTEND,
     "XRAY_BYPASS_EXTENSIONS": EXTEND,
@@ -135,6 +136,7 @@ _NO_DEFAULT_KEYS = {"SARIF_IGNORED_RULES", "SARIF_IGNORED_PATHS"}
 CLI_OVERRIDABLE_KEYS: set = {
     "STRICT_IMPORT_MODE",
     "FIREWALL_NETWORK_WEIGHTING",
+    "SECURITY_SCAN_INERT_FORMATS",
 }
 
 
@@ -251,9 +253,9 @@ def _load_yaml_section(yaml_path: str) -> dict[str, Any]:
 
 
 def resolve_config(
-    yaml_path: Optional[str] = None,
-    yaml_data: Optional[dict[str, Any]] = None,
-    cli_overrides: Optional[dict[str, Any]] = None,
+    yaml_path: str | None = None,
+    yaml_data: dict[str, Any] | None = None,
+    cli_overrides: dict[str, Any] | None = None,
 ) -> ResolvedConfig:
     """
     Merge, in the precedence decided in #332:

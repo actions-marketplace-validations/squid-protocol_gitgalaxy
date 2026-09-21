@@ -17,6 +17,7 @@ env/
 .venv/
 .crucible_venvs/
 .ast_accuracy_corpus/
+.mainframe_corpora/
 # A language-crucible corpus checkout belongs in a SIBLING dir (../language-crucible),
 # never inside the repo -- an in-repo clone gets ingested by galaxyscope self-scans and
 # poisons the golden masters (see .claude/rules/golden-master-guidelines.md). Backstop
@@ -111,6 +112,16 @@ museum_2/
 # no ctags -- e.g. abap): hand-reviewed and committed like the ledger above, read by
 # tests/tools/tri_comparison_chart.py but never written by it.
 !docs/self_scan/manual_verification.json
+# ...and the COBOL modernization answer key (#3210): hand-verified per-program truth,
+# committed and reviewed like the ledger above. A new key file dropped silently by
+# the *.json rule above is how its first PR shipped without its own data.
+!tests/cobol_mainframe/answer_key/*.json
+# ...and the pinned mainframe corpus manifest (#3213) and the refraction tools'
+# ReDoS baseline (#3214): committed source, same reason.
+!tests/cobol_mainframe/corpora.json
+!tests/cobol_mainframe/tool_regex_redos_baseline.json
+# ...and the refraction differential's unexplained-delta baseline (#3211).
+!tests/cobol_mainframe/refraction_differential_baseline.json
 *_llm.md
 venvs/
 

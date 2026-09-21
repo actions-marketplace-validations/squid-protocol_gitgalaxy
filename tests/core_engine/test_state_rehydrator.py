@@ -1,9 +1,11 @@
+import json
 import sqlite3
 
 import pytest
 
 # Adjust this import to match your actual directory structure
-from gitgalaxy.core.state_rehydrator import StateRehydrator
+from gitgalaxy.core.state_rehydrator import StateRehydrator, _json_import_set
+from gitgalaxy.recorders.record_keeper import _ordered_raw_imports
 
 # ==============================================================================
 # MOCK DATABASE CALIBRATION
@@ -25,6 +27,14 @@ def mock_db(tmp_path):
             commit_date INTEGER
         )
     """)
+    # #3220: columns here must exist in the schema the engine actually writes
+    # (recorders/record_keeper.py). This fixture previously invented
+    # total_downstream / total_upstream -- columns the real file_data schema has
+    # NEVER had -- so every test passed against a fictional DB while production
+    # crashed on the missing columns. They are transitive reach counts written
+    # only to the JSON audit, never persisted. Do NOT add them back.
+    # (doc_loc is intentionally omitted: test_rehydrator_doc_loc_* uses this
+    # fixture as a legacy DB to exercise the absent-column default.)
     cursor.execute("""
         CREATE TABLE file_data (
             repo_name TEXT,
@@ -38,9 +48,7 @@ def mock_db(tmp_path):
             popularity INTEGER,
             author TEXT,
             ai_threat_score REAL,
-            silo_risk REAL,
-            total_downstream INTEGER,
-            total_upstream INTEGER
+            silo_risk REAL
         )
     """)
 
@@ -56,7 +64,7 @@ def mock_db(tmp_path):
     cursor.execute("""
         INSERT INTO file_data VALUES (
             'test_repo', 'hash_new_456', 'src/main.py', 'python',
-            150, 100, 45.5, 0.35, 12, 'Joe Esquibel', 85.0, 12.5, 4, 2
+            150, 100, 45.5, 0.35, 12, 'Joe Esquibel', 85.0, 12.5
         )
     """)
 
@@ -116,12 +124,24 @@ def test_rehydrator_successful_load(mock_db):
     # 3. Assert nested JSON/Dictionary reconstruction
     assert file_node["telemetry"]["ownership"] == "Joe Esquibel"
     assert file_node["telemetry"]["ai_threat_score"] == 85.0
-    assert file_node["dependency_network"]["total_downstream"] == 4
-    assert file_node["dependency_network"]["total_upstream"] == 2
+    # #3220: these columns are never persisted (real file_data has no such
+    # columns), so the rehydrator defaults them to 0 instead of raising
+    # IndexError. They are recomputed by the ripple during the incremental scan.
+    assert file_node["dependency_network"]["total_downstream"] == 0
+    assert file_node["dependency_network"]["total_upstream"] == 0
 
     # 4. Assert Delta Engine defaults were injected
     assert isinstance(file_node["raw_imports"], set)
-    assert file_node["hit_vector"] == []
+
+    # #3220: the rehydrator now reconstructs FULL vectors by inverting the recorder's
+    # schema (risk_<name> / SHORT_KEY_MAP hit columns). This mock DB has none of those
+    # columns, so both vectors come back as the correctly-sized all-zero lists (not the
+    # old lossy []). equations mirror the hit_vector as the signal-count dict.
+    assert isinstance(file_node["hit_vector"], list)
+    assert set(file_node["hit_vector"]) <= {0}
+    assert isinstance(file_node["risk_vector"], list)
+    assert set(file_node["risk_vector"]) <= {0.0}
+    assert isinstance(file_node["equations"], dict)
 
 
 # ==============================================================================
@@ -241,3 +261,123 @@ def test_rehydrator_dictionary_type_spoofing(tmp_path):
     assert result is None, (
         "Failed to reject a type-spoofed database gracefully -- crashed instead of falling back to a cold start!"
     )
+
+
+def test_rehydrator_doc_loc_defensive_default_on_legacy_db(mock_db):
+    """#2625: a pre-doc_loc database must rehydrate with doc_loc 0 (schema
+    drift protection, silo_risk precedent) -- not KeyError. The mock_db
+    fixture deliberately has no doc_loc column."""
+    result = StateRehydrator(mock_db).load_latest_state("test_repo")
+    assert result is not None
+    assert result["ram_cache"]["src/main.py"]["doc_loc"] == 0
+
+
+def test_rehydrator_doc_loc_read_back_when_present(tmp_path):
+    """#2625: with the modern schema, an unchanged file's doc_loc must
+    survive rehydration instead of silently reporting 0 documentation on
+    every incremental scan (the pre-#2625 behavior)."""
+    db_path = tmp_path / "modern.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE repo_data (repo_name TEXT, commit_hash TEXT, commit_date INTEGER)")
+    conn.execute(
+        """CREATE TABLE file_data (
+            repo_name TEXT, commit_hash TEXT, file_path TEXT, language TEXT,
+            total_loc INTEGER, coding_loc INTEGER, doc_loc INTEGER, structural_mass REAL,
+            control_flow_ratio REAL, popularity INTEGER, author TEXT,
+            ai_threat_score REAL, silo_risk REAL, total_downstream INTEGER, total_upstream INTEGER
+        )"""
+    )
+    conn.execute("INSERT INTO repo_data VALUES ('test_repo', 'hash_1', 1700000000)")
+    conn.execute(
+        "INSERT INTO file_data VALUES ('test_repo', 'hash_1', 'src/main.py', 'python', "
+        "150, 100, 42, 45.5, 0.35, 12, 'Joe Esquibel', 85.0, 12.5, 4, 2)"
+    )
+    conn.commit()
+    conn.close()
+
+    result = StateRehydrator(str(db_path)).load_latest_state("test_repo")
+    assert result is not None
+    assert result["ram_cache"]["src/main.py"]["doc_loc"] == 42
+
+
+# ==============================================================================
+# #2983: EXPLICIT BASELINE SELECTION
+# ==============================================================================
+def test_explicit_baseline_selects_that_commit(mock_db):
+    """load_state(repo, commit_hash) rehydrates THAT commit, not the newest by
+    date — the multi-commit-DB case #2983 fixes. The mock has hash_new_456 as the
+    newest by date; we ask for the older hash_old_123 and must get it back."""
+    # Give the older commit its own file state (the fixture only seeds the newer one).
+    conn = sqlite3.connect(mock_db)
+    conn.execute("""
+        INSERT INTO file_data VALUES (
+            'test_repo', 'hash_old_123', 'src/legacy.py', 'python',
+            50, 40, 10.0, 0.2, 3, 'Joe Esquibel', 10.0, 1.0
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+    result = StateRehydrator(mock_db).load_state("test_repo", "hash_old_123")
+    assert result is not None
+    assert result["commit_hash"] == "hash_old_123", "Explicit baseline was ignored!"
+    # Proves it rehydrated the OLD commit's files, not the newer-by-date commit's.
+    assert "src/legacy.py" in result["ram_cache"]
+    assert "src/main.py" not in result["ram_cache"]
+
+
+def test_explicit_baseline_missing_returns_none(mock_db):
+    """An explicit baseline that isn't recorded must refuse (return None), never
+    silently fall back to a different commit (the nonsense-delta #2983 prevents)."""
+    result = StateRehydrator(mock_db).load_state("test_repo", "deadbeef_not_here")
+    assert result is None
+
+
+def test_load_state_none_matches_legacy_latest(mock_db):
+    """load_state(repo) with no commit_hash keeps the latest-by-date behavior,
+    identical to the legacy load_latest_state alias — full backward compatibility."""
+    r = StateRehydrator(mock_db)
+    assert r.load_state("test_repo")["commit_hash"] == "hash_new_456"
+    assert r.load_state("test_repo")["commit_hash"] == r.load_latest_state("test_repo")["commit_hash"]
+
+
+# ==============================================================================
+# #3227 follow-up: the persisted raw_imports column must be hash-seed stable
+# ==============================================================================
+def test_raw_imports_persist_in_a_deterministic_order():
+    """A rehydrated file's `raw_imports` is a set, so persisting it in iteration
+    order made the column (and the edge row order #3183 assigns ids in) depend on
+    PYTHONHASHSEED. A plain sorted() is what raised TypeError over the mixed
+    str/tuple list, so the two shapes sort in separate groups."""
+    entries = {"src/util.py", "src/lib.py", "missing_pkg", ("src/lib.py", "helper"), "a/b.py"}
+
+    ordered = _ordered_raw_imports(entries)
+
+    assert ordered == [
+        "a/b.py",
+        "missing_pkg",
+        "src/lib.py",
+        "src/util.py",
+        ["src/lib.py", "helper"],
+    ]
+    # Same members in any other iteration order give the same list.
+    for _ in range(50):
+        assert _ordered_raw_imports(set(entries)) == ordered
+    assert _ordered_raw_imports(list(entries)) == ordered
+
+
+def test_raw_imports_ordering_round_trips_through_the_rehydrator():
+    """Ordering is only safe if it survives the decode: tuples come back as tuples
+    (a set needs hashable members, and the resolver distinguishes the two shapes)."""
+    entries = {"src/lib.py", ("src/lib.py", "helper"), "missing_pkg"}
+
+    restored = _json_import_set(json.dumps(_ordered_raw_imports(entries)))
+
+    assert restored == entries
+    assert ("src/lib.py", "helper") in restored
+
+
+def test_raw_imports_ordering_handles_the_empty_and_missing_cases():
+    assert _ordered_raw_imports(None) == []
+    assert _ordered_raw_imports([]) == []
+    assert _ordered_raw_imports(set()) == []

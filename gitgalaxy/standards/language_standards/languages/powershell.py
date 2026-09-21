@@ -44,8 +44,13 @@ DEFINITION: dict[str, Any] = {
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # branch: decisions that split flow. Includes ternary operators (?) and null-coalescing (??).
+        # #2545: `return` removed -- was phantom-counting every early-return function/script
+        # as a branch with no real decision point (no other checked shell/scripting or
+        # C-family sibling counts bare `return`). Already tracked under
+        # `structural_boundaries` below (`(?:return|exit)\b`), so this is a pure
+        # de-duplication. Corpus impact: powershell branch 10 (planted 3, +100%) -> exact.
         "branch": re.compile(
-            r"(?<![-$.])\b(if|else|elseif|switch|for|foreach|while|do|until|try|catch|finally|throw|trap|break|continue|return)\b|-and|-or|-not|-xor|\?\?|(?<=\s)\?(?=\s|\{)",
+            r"(?<![-$.])\b(if|else|elseif|switch|for|foreach|while|do|until|break|continue)\b|-and|-or|-not|-xor|\?\?|(?<=\s)\?(?=\s|\{)",
             re.I,
         ),
         # args: Parameters / Coupling. Captures the param block mass of functions and script files.
@@ -95,7 +100,7 @@ DEFINITION: dict[str, Any] = {
         "structural_boundaries": re.compile(
             r"(?<![-$.])\b(?:(?:function|filter|workflow|configuration|class|enum)\s+[a-zA-Z_]"
             r"|(?:process|begin|end|clean)\s*\{"
-            r"|(?:return|exit)\b(?![-])"
+            r"|(?:return|exit|throw)\b(?![-])"
             r"|using\s+(?:namespace|module)\b)",
             re.I,
         ),
@@ -154,17 +159,37 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # danger: High-Risk Execution. Dynamic code execution and process terminators.
-        "high_risk_execution": re.compile(r"\b(Invoke-Expression|iex|Stop-Process|kill|Exit)\b", re.I),
+        # #2878 contract C1b: Start-Process runs a program (Process.Start parity).
+        "high_risk_execution": re.compile(r"\b(Invoke-Expression|iex|Stop-Process|Start-Process|kill|Exit)\b", re.I),
         # io: I/O & Network Boundaries. Disk, Network, and URL fetching (Includes CERN/TBL legacy emulation triggers).
         "io": re.compile(
             r"\b(Get-Content|Set-Content|Out-File|Invoke-WebRequest|iwr|Invoke-RestMethod|irm|TcpClient|HttpListener|HTLoad|HTGet|ENQUIRE)\b",
             re.I,
         ),
         # api: Public Surface Area. Exposed surface area (Module exports and non-hidden functions).
-        "api": re.compile(
-            r"\b(Export-ModuleMember|New-Alias|CmdletBinding)\b|^[ \t]*(?!hidden\s+)[a-zA-Z_]\w*\s*\(",
-            re.I | re.M,
-        ),
+        # BUG FIX: Issue #2656. The bare-identifier alternative lacked the keyword-exclusion
+        # negative lookahead that func_start and args carry, causing 'param(', 'if (',
+        # and 'switch (' lines to miscount as API surface. Added the exclusion set.
+        # BUG FIX #2730 (api contract): the bare-identifier alternative
+        # matched `<name>(` at the start of a line, which in PowerShell is a
+        # .NET method CALL or a control-flow statement -- a reference, never
+        # a declaration (a PowerShell function is declared `function Name`,
+        # a class method `[type] Name(`). #2656's keyword exclusion could not
+        # fix that, and could not even hold the line it was written for: the
+        # exclusion set is lowercase while the pattern is `re.I`, so `If (`
+        # and `Param(` matched anyway. All 61 of its crucible matches were
+        # statements (`return (`, `throw (`, `Param(`, `If (`). Removed;
+        # PowerShell's real published surface is `Export-ModuleMember` (and
+        # the `New-Alias`/`CmdletBinding` markers), which the first
+        # alternative already owns.
+        "api": re.compile(r"\b(Export-ModuleMember|New-Alias|CmdletBinding)\b", re.I),
+        # #2774: the ORPHAN-CENSUS EXEMPTION -- see the matching note in
+        # shell.py. This rule captures the exported NAME (not the visibility
+        # modifier the `api` rule matches), and `_is_orphan` discounts only that
+        # capture's own span, so naming a function in an export statement stops
+        # counting as a use. Leading `_` keeps it out of `coding_analysis`'s
+        # rule loop and the counts schema, the same way `_scope_filters` does.
+        "_visibility_export": re.compile(r"\bExport-ModuleMember[ \t]+-Function[ \t]+([a-zA-Z_]\w*)", re.I),
         # 11. flux (State Mutation)
         # Mutation of state. Captures assignments, scoped variables, array indexing, and anchored increments.
         "state_mutation": re.compile(
@@ -279,8 +304,9 @@ DEFINITION: dict[str, Any] = {
             re.I | re.M,
         ),
         # ownership: Authorship indicators in comments or metadata.
+        # #2882 contract: C2 `Copyright:` out; `<#` help blocks
         "ownership": re.compile(
-            r"^[ \t]*#\s*(?:Author|Created by|Maintainer|Copyright):\s+([^\n]+)|\.AUTHOR\s+([^\n]+)",
+            r"^[ \t]*(?:#+|<#)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*\.AUTHOR[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -332,19 +358,33 @@ DEFINITION: dict[str, Any] = {
         # sync_locks: Barricades. Coordinated threading logic.
         "sync_locks": re.compile(r"\b(lock|Monitor|Mutex|Semaphore|atomic|WaitOne)\b", re.I),
         # 45. immutability_locks (Immutability Constraints)
-        "immutability_locks": re.compile(r"New-Variable\s+[^;]*?-Option\s+Constant|readonly", re.I),
+        "immutability_locks": re.compile(
+            r"\b(?:New|Set)-Variable\b[^;\n]*?-Option\s+(?:Constant|ReadOnly)\b", re.I
+        ),  # #2772 C3: bare `readonly` matched string prose; the -Option Constant/ReadOnly act is the lock
         # 46. cleanup (Resource Cleanup / Teardown) Resource release.
         "cleanup": re.compile(
             r"\b(dispose|Remove-Variable|Remove-Item|Remove-Module|Stop-Transcript)\b",
             re.I,
         ),
         # 47. encapsulation (Encapsulation / Access Modifiers)
-        "encapsulation": re.compile(r"\b(hidden|private)\b", re.I),
+        # #2766: anchored to declaration shapes -- the bare words matched string
+        # literals ('Private') and prose. `hidden` is the class-member modifier;
+        # private: is the scope qualifier on variables and function names.
+        "encapsulation": re.compile(r"^[ \t]*hidden[ \t]+|\$private:|\b(?:function|filter)[ \t]+private:", re.I | re.M),
         # 48. listeners (Event Listeners / Observers)
         "listeners": re.compile(r"\b(Register-ObjectEvent|on_|Connect-)\b", re.I),
         # 49. test_skip (Bypassed Tests / Ignored Specs) Safety Theater.
         "test_skip": re.compile(r"\b(pending|skip|Ignore)\b", re.I),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (PowerShell Specifics) ---
+        # auth_middleware (#3004): the credential prompt, elevation via
+        # `-Verb RunAs`, and the WindowsPrincipal role query.
+        "auth_middleware": re.compile(
+            r"\bGet-Credential\b"
+            r"|-Verb[ \t]+RunAs\b"
+            r"|\[Security\.Principal\.WindowsPrincipal\]"
+            r"|\.IsInRole\(",
+            re.I,
+        ),
         "serialization_parsing": re.compile(
             r"(?i)\b(ConvertFrom-Json|ConvertTo-Json|Import-Clixml|ConvertFrom-Csv|Import-Csv)\b"
         ),
@@ -365,5 +405,10 @@ DEFINITION: dict[str, Any] = {
         "ipc_rpc_bridges": re.compile(
             r"(?i)\b(Invoke-Command|Invoke-RestMethod|Invoke-WebRequest|Start-Process|Start-Job|Enter-PSSession)\b"
         ),
+        # system_config_mutation (#3084): contract-level absence. deferred, see
+        # 3084: Set-ItemProperty HKLM:/New-Service/netsh measured 2/124 crucible
+        # files, one a quoted list element (#2899 FP shape) -- not worth owning
+        # yet.
+        "system_config_mutation": None,
     },
 }

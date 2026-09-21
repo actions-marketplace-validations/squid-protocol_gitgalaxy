@@ -120,8 +120,14 @@ ARGS_VALID = [
 ]
 
 ARGS_INVALID = [
-    pytest.param('"fn (a: i32, b: i32)"', marks=pytest.mark.xfail(reason="Known limitation: No block shielding for args inside strings")),
-    pytest.param("// fn (a: i32, b: i32)", marks=pytest.mark.xfail(reason="Known limitation: No block shielding for args inside comments")),
+    pytest.param(
+        '"fn (a: i32, b: i32)"',
+        marks=pytest.mark.xfail(reason="Known limitation: No block shielding for args inside strings"),
+    ),
+    pytest.param(
+        "// fn (a: i32, b: i32)",
+        marks=pytest.mark.xfail(reason="Known limitation: No block shielding for args inside comments"),
+    ),
 ]
 
 
@@ -133,6 +139,34 @@ def test_zig_args_valid(payload, expected_args):
 @pytest.mark.parametrize("payload", ARGS_INVALID)
 def test_zig_args_invalid(payload):
     assert_invalid_no_match(ZIG_RULES["args"], payload, "zig.args")
+
+
+# ==============================================================================
+# GLOBALS (globals)
+# ==============================================================================
+GLOBALS_VALID = [
+    ("const MY_GLOBAL = 42;", "const MY_GLOBAL"),
+    ("var global_state: i32 = 0;", "var global_state"),
+    ("pub const MAX_CONN = 100;", "pub const MAX_CONN"),
+    ("threadlocal var tls_var: bool = false;", "threadlocal var tls_var"),
+    ("comptime const TYPE = i32;", "comptime const TYPE"),
+]
+
+GLOBALS_INVALID = [
+    "    const local_var = 1;",
+    "\tvar x = 2;",
+    "  var y = 3;",
+]
+
+
+@pytest.mark.parametrize("payload,expected_name", GLOBALS_VALID)
+def test_zig_globals_valid(payload, expected_name):
+    assert_valid_match(ZIG_RULES["globals"], payload, expected_name, "zig.globals")
+
+
+@pytest.mark.parametrize("payload", GLOBALS_INVALID)
+def test_zig_globals_invalid(payload):
+    assert_invalid_no_match(ZIG_RULES["globals"], payload, "zig.globals")
 
 
 # ==============================================================================

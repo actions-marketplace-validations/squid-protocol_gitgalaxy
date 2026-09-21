@@ -1,0 +1,404 @@
+# The `unreferenced_by_name` census contract
+
+> Filed as [#2806](https://github.com/squid-protocol/gitgalaxy/issues/2806). Same shape as
+> `docs/api_rule_contract.md` (#2730), `docs/args_rule_contract.md` (#2773) and
+> `docs/state_mutation_rule_contract.md` (#2765), with one difference worth stating up front:
+> this signal is not a rule. No language registry produces it. It is computed once per file in
+> `detector.py`'s splice, from the extracted function list and the code stream, so its contract
+> is about a **census**, not about a regex. `gitgalaxy/standards/how_to_add_a_language.md`
+> carries the one-line form (engine rule 19); this file carries the reasoning, the audit of all
+> 46 corpus languages, and the rename.
+
+## The contract
+
+> **One hit is one extracted callable unit whose name occurs nowhere in the file outside its own
+> definition.**
+
+Seven corollaries, each pinned by a test in
+`tests/core_engine/test_unreferenced_by_name_contract_2806.py`:
+
+1. **One unit is at most one hit.** The census counts callable units, not name occurrences. A
+   function named ten more times leaves the census; it does not leave it nine times.
+2. **A declaration is not a reference.** Where a language writes the name a second time as part
+   of *declaring* the unit, that occurrence does not clear the flag: Ada's `end Probe_Globals;`,
+   LiveCode's closing handler name, a K&R shell declaration that falls outside the slicer's own
+   span (discounted implicitly when the span contains no occurrence, #2727), and any form a
+   registry declares through `_visibility_export` — `export -f foo`, `namespace export foo`,
+   `Export-ModuleMember -Function foo`, `module_function :foo`, `global foo` (#2774), an m4
+   `m4_provide([foo])` / `AC_PROVIDE([foo])` (#2872) — or through `_visibility_export_list`, its
+   plural form, for the constructs that name every exported function at once: a Haskell module
+   header's parenthesised list, a Scheme `(export a b c)` clause (#2823), a makefile
+   `.PHONY: foo bar baz` prerequisite list (#2872). The two keys build one set of discounted name offsets and a
+   language declares one of them, not both; `detector.py::_export_declaration_offsets` is where
+   they meet. The discount is per name OFFSET, never per line or per construct, so a genuine
+   call that shares a line with an export still counts.
+3. **A reference is not an invocation, and this census cannot tell them apart.** Any other
+   occurrence of the name clears the flag — a call, a mention in a comment the prism left in the
+   stream, a name inside a string literal (nothing shields string literals for any signal,
+   #2535), an unrelated identifier that happens to match. That is a real limit, and it is why
+   the signal is now named for what it measures. It says *nothing else in this file names this
+   function*; it does not say *this function is dead*.
+4. **Where the language has no invoke-by-name form, the census is not computed.** A registry
+   declares `"invocation_model": "positional"` and the count is absent (0), not maximal. The
+   default is `by_name` and needs no declaration. See "The positional family" below for the bar
+   this has to clear, which is higher than it looks.
+5. **The census sees one file.** Nothing about the repository's call graph enters here. The
+   layer that knows whether anything imports this file is `galaxyscope.py`'s Contextual Baseline
+   Fix, which converts an imported file's uncalled functions into `api` (crediting only the ones
+   the language's own `api` rule did not already count, #2731). An exported-but-uncalled library
+   function is genuinely unreferenced *in its own file*, and saying so is the input that layer
+   needs.
+6. **A synthetic slicer bucket is not a callable unit.** Mode D's `__global_context__`, Mode E's
+   `<KEYWORD>_Statement`, and the igniter-keyword buckets a language's own `func_start` names
+   after a keyword (dockerfile `RUN`, css `keyframes`, html `script`) are excluded: a keyword
+   cannot be unreferenced, and counting it measures the slicer's bucketing rather than the code
+   (#2547, #2728).
+7. **An occurrence is judged by the language's own identifier lexicon.** "The name occurs" is a
+   question about the language's names, not about ASCII. A registry declares the two ways its
+   lexicon differs from the `\w`-only, case-sensitive default, as top-level keys beside
+   `lexical_family` (#3198):
+   - `identifier_case: "insensitive"` — the language resolves names without regard to case, so
+     COBOL's `perform a-para` names `A-PARA`. A case-sensitive test reads a correctly-cased call
+     site as no reference at all.
+   - `identifier_extra_chars` — characters that are part of a name beyond `\w`. COBOL's `-` is the
+     case in hand: with the default boundary, `B-PARA-EXIT` counted as a mention of `B-PARA`, so a
+     paragraph read as referenced because a *different* paragraph's name began with its name.
+
+   Both default to the old reading, so a language that declares neither is unchanged by
+   construction. Declaring one is a measured behaviour change, not a tidy-up: it moves the census
+   for that language and needs its own corpus evidence. **cobol is the only language that declares
+   either today** — the other case-insensitive languages (fortran, pli, rexx, hlasm, abap, and the
+   sql family) have the same defect latent and are audited per language in #3225, not bulk-edited.
+
+`kind` is a **census** over the extracted function population and its `unit` is **functions** —
+not hits, and not lines. A formula that adds it to a rule's hit count is adding unlike things;
+Phase 4's commensurability audit reads it here.
+
+## The rename (#2806 shape (c))
+
+| was | is |
+| --- | --- |
+| `equations["orphaned_logic"]` | `equations["unreferenced_by_name"]` |
+| `file_data.state_slop_orphans` | `file_data.state_unreferenced` |
+| `file_data.raw_state_slop_orphans` | `file_data.raw_state_unreferenced` |
+
+Both old names asserted the count was dead weight — "orphaned", "slop" — which is a claim
+corollary 3 says the measurement cannot make. `record_keeper.py` renames the columns of a
+pre-#2806 database in place (`ALTER TABLE ... RENAME COLUMN`, guarded the same way the `doc_loc`
+and `raw_arch_api` heals are): the recorded values were never wrong, only their label was, so
+there is nothing to re-scan.
+
+The consumers are unchanged by the rename and worth naming, because they are what makes the
+reading matter:
+
+- **`risk_tech_debt`** (`signal_processor.py`) weights each unit at 2.0 in `slop_stress`, and
+  multiplies the whole stress by 1.5 when a file also carries acknowledged debt. jcl scored 48.8
+  against a 38.7 corpus median almost entirely on this.
+- **The orphan → api conversion** (`galaxyscope.py`) turns an imported file's census into public
+  surface, which `risk_api_exposure` and `risk_documentation` then read.
+
+## The positional family
+
+A language joins by declaring the top-level `"invocation_model": "positional"`, and the bar is: **the
+language has no syntax at all that reaches the units its own `func_start` extracts by naming
+them.** Not "the corpus does not call them". Not "invocation is unusual". No form.
+
+Exactly one corpus language clears it today:
+
+**jcl.** A job's EXEC steps run in the order they are written, top to bottom, on every
+submission. Nothing in JCL references a step to make it run. (The unit that *can* be named is
+the PROC — `//DISPATCH EXEC ROSPROC` — which the `api` rule counts and the slicer does not
+extract as a function.) Before the declaration, 334 of 376 crucible steps (89%) read as
+unreferenced, and the 42 that cleared did so by accident rather than by being invoked: a step
+named `CREATE` beside inline SQL in a `SYSIN DD *` block, `COBOL` beside the same word inside a
+DSN, `CRTABS` repeated seven times in one job. Both the 89% and the 11% were noise, so
+suppressing the census removes a false reading in both directions, not just the loud one.
+
+**The four languages that did not clear it.** #2806 proposed the family as abap, jcl, m4,
+makefile and objective-c, all sitting at 3.25 per file in keyword-rosetta — 13 of 13 probe
+functions unreferenced, against a 2.50 median. The premise did not survive measurement. Each of
+those four has an ordinary invoke-by-name form, and the crucible shows the census seeing it
+(real-world ABAP reads 8 unreferenced subroutines in 124, a 6% rate, entirely through
+`PERFORM`). What they had in common was the *corpus*: every median language's `main` dispatches
+its three probes (`python`'s `entry()` calls `probe_branch`, `probe_io`, `probe_risk`), and in
+these four `main` declared a `dispatch`/`entry` unit that called nothing. Planting the
+language's own idiom — `PERFORM probe_branch CHANGING cv_argv.`, `[self probeBranch:argv];`,
+bare macro expansion inside `probe_dispatch`, a make prerequisite list — moves all four to the
+median with no engine change (keyword-rosetta PR; the cells are in the table below). Two of
+those plants moved a gated neighbour and both were screened before landing: abap's
+`args` cell 4 → 7, because abap's `args` rule counts the call site's `CHANGING` as a declared
+parameter (a stated-contract violation, filed as #2824 and ledgered), and m4's `args` 6 → 8,
+because m4 parameters ARE use sites and a forwarding macro genuinely has three
+(`m4-parameters-are-use-sites`, already ledgered as intended morphology).
+
+That is the general warning for the next language proposed for this family: **"the census reads
+100%" and "the language cannot be asked" are different claims, and the first is much easier to
+produce than the second.** Check the crucible before the control corpus — real code either
+contains the invocation form or it does not.
+
+## The audit — all 46 corpus languages
+
+Per-file census over `keyword-rosetta/data`, engine `fix/2806-orphan-invocation-model` against
+main `87cfc933`, corpus main `5cf94e7`. `before` is main + corpus main; `after` is this branch
+plus the corpus PR's plants. The corpus median is 2.50 in both columns (13 probe functions per
+language over 4 files, 3 of them dispatched from `main`, and the a/b/c probes are called only
+across a file boundary the census deliberately cannot see — corollary 5).
+
+| language | before | after | why it moved |
+| --- | --- | --- | --- |
+| `abap` | 3.25 | 2.50 | corpus: `FORM dispatch` now `PERFORM`s its three probes |
+| `jcl` | 3.25 | 0.00 | engine: `_invocation_model: "positional"` — not computed |
+| `m4` | 3.25 | 2.50 | corpus: `probe_dispatch` now expands `probe_branch`/`probe_io`/`probe_risk` |
+| `makefile` | 3.25 | 2.75 | corpus: `probe_dispatch` now lists all three as prerequisites. 2.75 not 2.50 because `c.mk` carries a 14th unit (`clean`) no other language has |
+| `objective-c` | 3.25 | 2.50 | corpus: `entry:` now sends `probeBranch:`/`probeIo:`/`probeRisk:` |
+| `ada` `apex` `assembly` `c` `cpp` `csharp` `dart` `embedded_python` `fortran` `go` `groovy` `java` `javascript` `kotlin` `livecode` `lua` `matlab` `perl` `php` `powershell` `python` `ruby` `rust` `scala` `shell` `solidity` `swift` `tcl` `typescript` `zig` | 2.50 | 2.50 | on the median, unchanged |
+| `cobol` | 2.75 | 2.75 | in band, and the plant was measured and then deliberately NOT made: `DISPATCH-PARA` calls nothing, and planting the canonical `PERFORM PROBE-IO.`/`PERFORM PROBE-RISK.` reads 2.25 (below the median, because `PROBE-RISK`'s `ALTER DISPATCH-PARA TO PROCEED TO PROBE-BRANCH` names the dispatch paragraph as well) at the cost of moving the **gated `branch` cell 3 → 5** — cobol's `branch` rule counts a bare out-of-line `PERFORM`, which is a call, not a branch (10% of its 21,549 crucible branch hits; recorded on #2822). Free to plant once that lands |
+| `agc_assembly` | 2.75 | 2.75 | in band. Same shape as the four plant gaps and left alone deliberately: `DISPATCH TC PROBEBR` and `PROBEBR`'s branches reach `PROBEIO`, so only `PROBERISK` is unreached, and planting a `TC PROBERISK` would add a control-flow hit to a gated cell to fix a cell that is already in band |
+| `yacc` | 3.00 | 3.00 | in band, same shape: `dispatch : probe_branch ;` names one of the three nonterminals |
+| `css` `dockerfile` `html` `markdown` `sqlite` `yaml` | 0.00 | 0.00 | no callable units to census — either nothing is extracted (html, markdown) or every extracted unit is a synthetic bucket (corollary 6). This is the *undefined* family of #2549, not this contract's. **Resolved by #2866 ("The undefined family resolved" below): css measured into the census at 2.50, the other four declared positional, markdown n/a by rule absence** |
+| `haskell` `scheme` | 0.25 | 2.50 | **#2823, fixed after this audit — see "The two languages that read the flag backwards" below.** Engine: both declare `_visibility_export_list`, so their export construct stops clearing the flag (0.25 → 3.00). Corpus: `main`'s `entry` dispatched one of its three probes, the same plant gap as the four above (3.00 → 2.50) |
+
+### What the audit found
+
+1. **The 3.25 family was two different things wearing one number**, and only measurement
+   separated them: one language that cannot answer the question, and four corpus files that
+   never asked it. `tools/language_deviations.py` reports the cell; it cannot report which.
+2. **The corpus's "identical planted intent in every language" premise is a claim to re-check,
+   not a given.** It was false for five languages here (the four above plus scheme) and remains
+   knowingly loose for two more (agc_assembly, yacc), which are recorded rather than fixed
+   because both cells are in band and both plants would move a gated neighbour.
+3. **Both tails of this metric are declaration-vs-reference errors.** #2727 fixed the
+   whole-file token count, #2774 fixed export statements for five languages, this issue fixes
+   the no-invocation case, and #2823 is the same shape once more for the two languages whose
+   declaration syntax names a function twice before anything uses it.
+
+## The two languages that read the flag backwards (#2823)
+
+The audit above closes with haskell and scheme at **0.25 unreferenced per corpus file against a
+2.50 median** — 12 of each language's 13 probe functions reading as *referenced* while nothing
+called any of them. That is #2806's defect with the sign flipped: there the census called a
+function unreferenced that the language reaches without naming it; here it called a function
+referenced on an occurrence that is a declaration.
+
+**One outside occurrence each, and it is the export.** Both languages write the name three times
+before anything uses it, but only one of the three sits outside the slicer's span:
+
+```haskell
+module A (probeGlobals, probeTest, probeSafety) where   -- outside the span: the export list
+probeGlobals :: Int -> Int                              -- INSIDE: haskell's span starts here
+probeGlobals env = env                                  -- INSIDE: the equation
+```
+
+```scheme
+(export probe-globals)          ;; outside the span
+(define (probe-globals env) env)
+```
+
+So the Haskell type signature needs no rule of its own — the span already contains it, which is
+why declaring `^([a-z]\w*)[ \t]*::` as an export form was measured and found to move nothing.
+What was missing in both cases is the export declaration, and corollary 2 already says what to do
+with it.
+
+**Why a second registry key rather than a wider first one.** `_visibility_export` records
+`m.start(1)` verbatim — the offset of its one captured name — and that is exactly right for the
+five languages that have it: assembly exports `.foo` and ruby exports `save!`, whose first and
+last characters a generic name tokenizer would not treat as part of a name, so tokenizing those
+captures would record an offset one character off and silently stop discounting them. A Haskell
+module export list holds an arbitrary number of names inside one pair of parens and cannot be a
+single capture at all. `_visibility_export_list` is therefore the plural key: its capture groups
+are *regions*, and `_export_declaration_offsets` records the start offset of every name token
+inside a region. Both keys feed one set, a language declares one of them, and
+`tests/core_engine/test_detector.py::test_the_two_export_keys_never_disagree_about_a_language`
+is the gate on that.
+
+**Both halves had to land together.** The engine change alone moves both languages to **3.00**,
+not 2.50 — past the median, not onto it — because scheme and haskell *also* carry the same plant
+gap the four languages above had, hidden until now behind the export false-negative: `main`'s
+`entry` dispatched one of its three probes instead of all three. Planting the missing calls
+(`entry argv = probeRisk (probeIo (probeBranch argv))`, and scheme's three-form body) takes both
+to 2.50, on the median.
+
+| language | main | + engine (`_visibility_export_list`) | + corpus plant |
+| --- | --- | --- | --- |
+| `haskell` | 0.25 | 3.00 | **2.50** |
+| `scheme` | 0.25 | 3.00 | **2.50** |
+
+**What the real corpus says.** haskell moves 1.4% → 27.9% unreferenced across the crucible (2 of
+147 units → 41), and every one of the 39 new hits is a pandoc utility function whose name occurs
+exactly three times in its own file — export list, type signature, equation — with no caller
+there. That is corollary 5 working as designed, not a regression: `Text.Pandoc.Shared` is a
+library module of 100 exported helpers, 36 of which nothing in that file calls, and saying so is
+the input `galaxyscope.py`'s orphan → api conversion needs. Real-world scheme does not move at
+all: neither crucible file uses an export clause outside a macro template.
+
+**One neighbour moved, and it is a pre-existing defect this made visible.** With scheme finally
+producing orphans, its `api_orphan_credit` went 0 → 3 in a/b/c — the double count #2731/#2734
+exists to prevent. `detector.py`'s `api_declared_orphans` decides whether the `api` rule already
+counted an orphan by tokenizing the api-matched line with `\b\w+\b`, and that tokenizer cannot
+produce a token containing `-`, so `probe-globals` is never recognised in `(export
+probe-globals)`. Haskell, whose names are all `\w`, demonstrates the mechanism working: its
+`api_declared_orphans` reads 3 and its credit correctly stays 0. This is the same tokenizer
+family as #2754 and it is not new — cobol carries it on main today (9 hyphenated paragraph names
+across a/b/c), and the crucible makes it much larger than the control corpus does: 4,983 → 5,122
+`api_declared_orphans` over the real corpus, +139 across zig (`@"..."` quoted identifiers), lua
+(`bit.bor`, `M.start`) and powershell, whose count is **0 for the entire language** because a
+`Verb-Noun` name always contains a hyphen. Filed as **#2827** rather than fixed here: it moves
+five languages, needs its own golden-master bless and its own cobol re-bless. The scheme cell is
+re-blessed against a keyword-rosetta ledger entry meanwhile, and comes back to 0 when #2827
+lands.
+
+## What the golden masters moved
+
+Both fixtures were re-blessed (`crucible_check.py --update --yes`, scoped with
+`tests/tools/bless_scope.py` and a full uncapped diff):
+
+- **5,636 key renames**, one pair per parsed file: section 7's label `Orphaned Logic` becomes
+  `Unreferenced By Name`. No value attached to them changed.
+- **564 value differences, every one of them jcl.** 150 `Tech Debt Exposure` (the census was
+  weighted 2.0 per unit and is now absent — `cics-java-jcics-samples` reads 0.0 where it read
+  73.11), 34 `API Exposure` and 34 `Documentation Exposure` (the orphan → api conversion has
+  nothing to convert), 33 `Structural Mass`, and 267 topological `X`/`Y`/`Z` coordinates, which
+  re-solve corpus-wide whenever any node's mass changes. The three global aggregates that moved
+  are the same change summed: `avg_tech_debt` 31.243 → 27.332, `avg_documentation` 7.942 →
+  7.753, jcl's ecosystem impact 916.94 → 877.94.
+
+No other language moved in either fixture, which is corollary 4's "unchanged by construction"
+stated as a measurement.
+
+### #2823's bless
+
+Nine value differences, identical in both fixtures, **every one of them `haskell/pandoc`** and
+nothing else in the ~80-repo corpus:
+
+| what | was | is |
+| --- | --- | --- |
+| `Shared.hs` Unreferenced By Name | 0 | 36 |
+| `Filter.hs` Unreferenced By Name | 2 | 4 |
+| `Options.hs` Unreferenced By Name | 0 | 1 |
+| those three files' Tech Debt Exposure | 0.0% / 41.35% / 0.0% | 97.04% / 85.83% / 9.7% |
+| `haskell/pandoc` avg tech debt | 3.76 | 17.51 |
+| global `avg_tech_debt` | 27.332 | 27.386 |
+
+The tech-debt rows are the census's own weight arriving downstream (`slop_stress` counts each
+unit at 2.0), and the two averages are the same change summed. **No topological `X`/`Y`/`Z`
+coordinates moved at all** — unusual for a bless, and the reason is that no node's structural
+mass changed: the census is a property of the extracted population, not of it.
+
+## Notes for the next session
+
+- The engine half is one registry key and one conditional. Nearly all of #2806's cost was
+  measurement — 46 languages × two corpora — and `orphan_probe.py`-shaped work (run
+  `splice()` per corpus file, read `usage_status` per function) is the tool that pays for
+  itself; `tests/tools/rule_probe.py` cannot do it, because this signal is not a rule.
+- **A string value inside `rules` is not a string by the time the detector reads it.**
+  `language_lens.py`'s `_calibrate_lookup_maps` compiles every `str` rule value into a regex — a
+  defensive guard for definitions loaded from external JSON — so the first version of this
+  change, which put `_invocation_model: "positional"` in `rules` beside `_scope_filters`, reached
+  `detector.py` as `re.compile("positional")` and compared unequal to `"positional"`. Every unit
+  test passed (they build the extractor straight from `LANGUAGE_DEFINITIONS`, which the lens has
+  not touched) and only a real `galaxyscope` run showed it: jcl still recorded a full census, and
+  the first golden-master bless was silently wrong. `invocation_model` is a top-level language
+  property now, beside `lexical_family`. A future non-pattern helper belongs there too, or it
+  needs an exclusion in that pre-compiler.
+- `duplicate_logic` (`state_slop_duplicates`) is the census's sibling and still carries the
+  "slop" vocabulary. It was left alone deliberately: a duplicate really is what its name says
+  (same name *and* materially the same body, #1498), so the name makes a claim the measurement
+  supports.
+- The next family in the roadmap order is #2822 (`branch`). #2823 was this one's own successor
+  and did need its corpus plant in the same wave, exactly as predicted -- run as a pair, engine
+  first, and the engine half on its own would have read 3.00 and looked like an over-correction.
+- **The remaining family.** After #2823 the census's open population is the *undefined* one:
+  css, dockerfile, html, markdown, sqlite and yaml, none of which have a callable unit to census
+  (#2549). agc_assembly, yacc and cobol are the knowingly-loose plants -- all three in band, all
+  three deliberately unplanted because the plant would move a gated neighbour, and cobol's is
+  free to make once #2822 lands. **Resolved by #2866 — see the next section.**
+- **When a fix creates orphans where there were none, re-screen every consumer of the census,
+  not just the census cell.** #2823's engine half moved no signal but its own; what moved was
+  `api_orphan_credit`, two layers downstream in `galaxyscope.py`, because scheme suddenly had
+  orphans to convert and `api_declared_orphans` could not match a hyphenated name. `rosetta_audit.py
+  --baseline-bin` is what found it -- a per-file `splice()` probe cannot, because the conversion
+  is cross-file by construction (corollary 5).
+
+## The undefined family resolved (#2866)
+
+The six languages above all recorded 0.00 against the 2.50 median, and by the report's cause
+table they were the corpus's largest open-defect share on one metric (6 of 46 cells). The
+resolution adds **no new corollary**: each language lands on one of the sentences this contract
+already states, and the whole question was which one — measured, not assumed, per language.
+
+> A census over a population that cannot exist and a census whose population answered "none"
+> both print 0, and the cell cannot say which. The fix is to make the first kind stop printing.
+
+**css is censused — the one language measured INTO the census.** `@keyframes` declares a named
+unit the language reaches by exactly that name (`animation-name: slide`, `animation: slide 2s`),
+which is corollary 4's bar *failed* in the good direction: an invoke-by-name form exists, so the
+language can be asked. The `func_start` rule now captures the keyframes custom-ident as the unit
+name (the other at-rules stay group-1 keyword buckets, excluded by derivation — the same
+two-group shape as yaml's #2767 rule), and the census runs over real names:
+
+| where | before | after | reading |
+| --- | --- | --- | --- |
+| corpus `a/b/c.css` | 0 | 3 each | the three per-file probes, uncalled — the median shape |
+| corpus `main.css` | 0 | 2 | `probe-dispatch` (the entry analogue, correctly lonely) + `probe-io`, which main declares and never animates — a plant gap; the corpus PR adds the `animation: probe-io` dispatch reference, taking css to 2.50, exactly on the median |
+| crucible, all 38 files | 0 | 0 | bootstrap/reveal reference every keyframes by `animation`; tailwind's theme.css names its four in `--animate-*` custom-property **values**, and corollary 3 counts any occurrence — a true 0, reached by measurement instead of by absence |
+
+Downstream, the #2823 lesson replayed on schedule: css's imported `a/b/c.css` now have orphans
+for `galaxyscope.py`'s conversion, so `api_orphan_credit` reads 3 per file — and this time it is
+the mechanism working, not #2827's tokenizer defect: the keyframes names never appear on css's
+`@property` api lines, so `api_declared_orphans` is 0 and the credit is the same one 25
+by-name languages already carry. Corpus cells and the two ledger entries that name css as
+"produces no orphans to convert" (`risk-api-exposure-zero-api-shortcircuit`,
+`risk-documentation-zero-evidence-guard`) move in the corpus PR.
+
+**dockerfile, sqlite, yaml and html join jcl's positional family** (corollary 4, the existing
+`invocation_model: "positional"` declaration — top-level, beside `lexical_family`, for the #2806
+pre-compiler reason). Each was held to jcl's bar — *no syntax at all reaches the units its own
+`func_start` extracts by naming them* — with the near-miss named rather than waved off:
+
+- **dockerfile**: the units are build instructions (Mode A labels), executed in written order.
+  The construct that IS reached by name — `FROM base AS builder` / `COPY --from=builder` — is
+  the named build **stage**, `class_start`'s unit since #2856, not a member of this census's
+  population.
+- **sqlite**: the units are statements (Mode E buckets, #2792), executed top to bottom. The
+  names a SQL file declares and references (tables, views) belong to container constructs; an
+  index's name is never written in the queries that use it.
+- **yaml**: the units are pipeline steps (#2767), run in document order unconditionally.
+  `needs:` reaches a **job** (`class_start`'s unit), and `steps.<id>.outputs` reads a finished
+  step's outputs through its `id:` attribute without ever causing one to run — a data handle,
+  not an invocation, and not the extracted name besides.
+- **html**: the units are `<script>`/`<style>` elements, executed in document order. What can
+  carry names is the embedded program inside them, and that belongs to the embedded language,
+  measured where a file IS that language (a `.php` host keeps `by_name` and legitimately
+  censuses a lonely embedded `function orphanJs()`; measured, not assumed).
+
+The html declaration also closes a measured defect, not just a taxonomy gap: **ten crucible
+html files carried a phantom census** (0.19/file — threejs shader examples, html5-boilerplate's
+404s, vscode's webview host, cpython's jinja layout), because an embedded segment's keyword
+bucket (`media` from an embedded `@media`, `startup` and friends from scripts) carries a name
+the HOST's keyword-bucket exclusion cannot know — `_keyword_bucket_names` derives from html's
+own `func_start` literals (`script|style`) only. Each phantom fed `slop_stress` at weight 2.0
+into `risk_tech_debt`. All ten zero under the declaration; that is the golden-master movement.
+
+**markdown declares nothing, and that is the mechanism.** It has no `func_start` rule at all
+(the lit-plane morphology, `markdown-lit-plane-morphology`), so there is no population and
+nothing for a registry property to suppress. Its cell goes **n/a by rule absence** — the #2795
+inference (`functions_found` is n/a where `func_start` is) extended to the census, report-side.
+
+**The report half (keyword-rosetta PR).** `bias_report.py` gains the census n/a inference:
+`raw_state_unreferenced` is n/a for a language when its registry declares
+`invocation_model != by_name` **or** defines no `func_start` rule. jcl's cell — 0.00, previously
+held in band only by its ledger entry — becomes n/a by the same mechanism, and
+`orphan-detection-is-name-recurrence` (which #2806/#2823 narrowed down to exactly this family)
+finally stops reproducing. Comparable census cells go 46 → 41, every one of them measured.
+
+**Verified end to end, because a registry declaration is not a regex** (the #2806 lens trap):
+one-file `galaxyscope --db-only` scans — layout.html's phantom reads 1 on main and 0 here; a
+named-but-lonely yaml step reads 0; a lonely css `@keyframes` reads 1 and an animated one 0.
+Pinned in `tests/core_engine/test_unreferenced_census_2866.py`, with the positional-family
+membership gate in `test_unreferenced_by_name_contract_2806.py::POSITIONAL_LANGUAGES`.
+
+**Known limit inherited, not created:** `_name_boundary_pattern` treats `-` as a non-word
+boundary character, so a hyphenated name that is a hyphen-prefix of another
+(`probe-io` inside `probe-io-fast`) false-clears. cobol's paragraph names and livecode have
+lived inside this limit since #2754; css joins them. It is corollary 3's "an unrelated
+identifier that happens to match" family, and it moves no corpus or crucible cell today.

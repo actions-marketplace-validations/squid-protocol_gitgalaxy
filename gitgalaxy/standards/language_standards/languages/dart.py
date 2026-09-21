@@ -42,7 +42,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch: decisions that split flow. Includes modern pattern guards (when) and null-coalescing.
         "branch": re.compile(
-            r"\b(if|else|switch|case|default|for|while|do|try|catch|finally|break|continue|when)\b|&&|\|\||\?|\?\?",
+            r"\b(if|else|switch|case|default|for|while|do|break|continue|when)\b|&&|\|\||\?|\?\?",
             re.I,
         ),
         # 2. args (Parameters / Coupling)
@@ -238,31 +238,72 @@ DEFINITION: dict[str, Any] = {
         # 7. safety_neg: Safety Bypasses. Actively bypassing sound null safety or static analysis.
         "safety_bypasses": re.compile(r"!\s*[;,\n)\.\]]|\bdynamic\b|//\s*ignore(?:_for_file)?:\s*\w+"),
         # 8. danger: High-Risk Execution. Process killers and catastrophic exit commands.
-        "high_risk_execution": re.compile(r"\b(exit|exitCode|Process\.killPid)\b", re.I),
+        # #2878 contract C5: `exitCode` is a property that records a code; it ends nothing.
+        "high_risk_execution": re.compile(r"\b(exit|Process\.killPid)\b", re.I),
         # 9. io: I/O & Network Boundaries. Disk, Network, WebSockets, and Uri parsing (Includes legacy CERN triggers).
         "io": re.compile(
+            # #2841 contract C1: these are case-sensitive type names; re.I
+            # made prose `file` a hit.
             r"\b(File|Directory|HttpClient|HttpServer|ServerSocket|WebSocket|Uri\.parse|HtmlDocument|HttpRequest|HttpResponse|HTRequest|Nexus|ENQUIRE)\b",
-            re.I,
         ),
         # 10. api: Public Surface Area. Exposed visibility (Lack of _ prefix) and routing decorators.
+        # BUG FIX #2730 (api contract), two halves:
+        #  * `@pragma` is a compiler hint (`@pragma('vm:prefer-inline')`),
+        #    not a visibility marker -- 34 of the crucible corpus's 174
+        #    matches were pragmas. Dropped.
+        #  * Dart's primary public surface is a TOP-LEVEL function whose name
+        #    does not start with `_`, which none of the remaining
+        #    alternatives could see (they count class-like declarations and
+        #    `export` directives), so a library of free functions measured 0.
+        #    Added at column 0: a top-level declaration is unindented, while
+        #    every method and nested function sits inside a body. The leading
+        #    negative lookahead keeps statement and declaration keywords out
+        #    of the return-type slot, and `[A-Za-z]` on the name keeps Dart's
+        #    `_`-prefixed private convention excluded.
         "api": re.compile(
-            r"\b(export|part\s+of)\b|@(Route|Get|Post|Mapping|visibleForTesting|pragma)\b|^[ \t]*(?:class|mixin|enum|extension|typedef)\s+(?![_])[A-Za-z]\w*",
+            r"\b(export|part\s+of)\b|@(Route|Get|Post|Mapping|visibleForTesting)\b|"
+            r"^[ \t]*(?:class|mixin|enum|extension|typedef)\s+(?![_])[A-Za-z]\w*|"
+            r"^(?!(?:import|export|part|library|class|mixin|enum|extension|typedef|abstract|final|const|var|late|external|covariant|static|return|if|for|while|switch|do|try|catch|throw|new|assert|case|default|break|continue|yield|await|async|with|implements|extends|on|in|is|as|super|this|null|true|false)\b)"
+            r"(?:void|[A-Za-z_$][\w$]*(?:<(?:[^<>]|<[^<>]*>){0,100}>)?\??(?:\[\])?)[ \t]+"
+            r"(?:get[ \t]+|set[ \t]+)?[A-Za-z]\w*[ \t]*[(<]",
             re.I | re.M,
         ),
         # 11. flux: State Mutation. State mutation (setState and reactive collection mutators).
         "state_mutation": re.compile(
-            r"\b(setState|notifyListeners|markNeedsBuild|StreamController\.add)\b|[^!=<>\+\-\*\/%&\|\s]=\s*[^=]|(?:\+\+|--)|\.(?:add|addAll|remove|insert|clear|update)\s*\(",
-            re.I,
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `setState`/`notifyListeners`/`markNeedsBuild` are the framework's write sites.
+            r"(?:^|[;{}])[ \t]*[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%&|^~]|<<|>>>?|\?\?)?=(?![=>])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_(*]"
+            r"|\b(?:setState|notifyListeners|markNeedsBuild)\s*\("
+            r"|\.(?:add|addAll|addEntries|remove|removeWhere|removeAt|insert|clear|update|sort|fillRange|setAll)\s*\(",
+            re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails) Commented out structural code or dead widgets.
         "dead_code": re.compile(
             r"//[ \t]*(?:class|mixin|void|if|for|while|print|Widget|return)\b|/\*[ \t]*(?:class|mixin|void|Widget|if|for)"
         ),
         # 13. doc: Structured Documentation. dartdoc annotations and structured comments.
-        "doc": re.compile(r"///|/\*\*|@param|@return"),
+        # BUG FIX #2672: `/**`, `///` and the doc tags (`@param`, `@return`)
+        # were independent alternatives, so one doc comment counted doc
+        # proportional to its tag density. Block form first (bounded
+        # 0,15000 chars non-greedy span, the #2658 shape), then the
+        # line-marker form so `/// @param x` is one hit per line, not two;
+        # bare tags stay last so a tag outside any doc comment still
+        # counts. No corpus movement -- the rosetta corpus only plants one
+        # of {marker, tag} for this language.
+        "doc": re.compile(r"/\*\*[\s\S]{0,15000}?\*/|///[^\n]*|@param|@return"),
         # 14. test: Testing & Assertions. Flutter test frameworks and standard expect/verify markers.
         "test": re.compile(
-            r"\b(?:test|testWidgets|group|setUp|tearDown|pumpWidget|pumpAndSettle|find\.(?:byType|text|byKey))\b|\b(?:expect|verify|when)\s*\("
+            # #2852 contract C3: bare test/group matched ordinary identifiers (a predicate parameter, a loop
+            # variable); a test-case declaration is the call with its description string
+            r"\b(?:testWidgets|setUp|tearDown|pumpWidget|pumpAndSettle|find\.(?:byType|text|byKey))\b|\b(?:test|group)\s*\(\s*['\"]|\b(?:expect|verify|when)\s*\("
         ),
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
         # 15. concurrency: Temporal Static. Event Loop primitives (Future, Stream, Isolate).
@@ -279,9 +320,10 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 16. ui_framework: UI / View Components. Flutter Component trees and DOM nodes (Includes TBL triggers).
+        # #2899: re.I dropped -- flutter's types are exact-case, and the fold made
+        # `widget`/`text` inside prose strings count.
         "ui_framework": re.compile(
-            r"\b(Widget|BuildContext|StatefulWidget|Scaffold|Container|Text|HtmlElementView|RichText|Hyperlink|SGML|HyperText|Browser)\b",
-            re.I,
+            r"\b(Widget|BuildContext|StatefulWidget|Scaffold|Container|Text|HtmlElementView|RichText|Hyperlink|SGML|HyperText|Browser)\b"
         ),
         # 17. closures: Closures / Anonymous Functions. Fat-arrows and anonymous function blocks.
         # BUG FIX (ReDoS): `[^)]*` was unbounded. Confirmed quadratic
@@ -293,10 +335,19 @@ DEFINITION: dict[str, Any] = {
         # across the whole remaining length -- O(n) work at each of
         # O(n) positions. Bounded to `{0,300}`, the same fix shape used
         # elsewhere in this sweep.
-        "closures": re.compile(r"=>|\(\s*[^)]{0,300}\)\s*(?:async\*?|sync\*?)?[ \t]*\{"),
+        # #2898: the paren-block arm matched `if (...) {` and every parameter list
+        # (3282 crucible hits). An anonymous function's list sits in expression
+        # position -- directly after `(`/`,`/`=`/`:`/`[` -- a statement keyword's never does.
+        "closures": re.compile(r"=>|(?:^|(?<=[,(=:\[]))\s*\(\s*[^)]{0,300}\)\s*(?:async\*?|sync\*?)?[ \t]*\{"),
         # 18. globals: Global / Shared State. Static class fields and environmental bindings.
+        # BUG FIX (#2651): Anchored to true column-0 (no indentation) to prevent
+        # function-local var/const declarations from being incorrectly counted as globals.
+        # #2859 (contract C1: scope, not mutability): `static var` is the mutable
+        # class-static binding and `late final` at column 0 is a top-level program
+        # binding -- both are program-scope declarations the #2858 rule did not yet
+        # see. Added beside the existing `static final`/`static const` forms.
         "globals": re.compile(
-            r"\b(static\s+final|static\s+const|Platform\.environment|window\.|Zone\.current)\b|^[ \t]*(?:final|const|var)\s+[A-Za-z_$][\w$]*[ \t]*=",
+            r"\b(static\s+(?:final|const|var)|Platform\.environment|window\.|Zone\.current)\b|^(?![ \t])(?:final|const|var|late[ \t]+final)\s+[A-Za-z_$][\w$]*[ \t]*=",
             re.I | re.M,
         ),
         # 19. decorators: Decorators / Annotations. Annotations applied to methods/classes.
@@ -305,7 +356,10 @@ DEFINITION: dict[str, Any] = {
         "generics": re.compile(r"<\s*[A-Z][^>]*>"),
         # 21. comprehensions: Iterators / Comprehensions. Collection for/if and functional pipelines.
         "comprehensions": re.compile(
-            r"\[\s*(?:for|if)\s*\([^)]*\)|\{\s*(?:for|if)\s*\([^)]*\)|\.(?:map|where|reduce|fold|expand|every|any)\s*\("
+            # #2898: the `{` arm matched statement blocks (`{ if (...)`) -- a set/map
+            # literal's brace sits in expression position (after =/,/(/:/[), a block's
+            # never does. `[` needs no guard: it can't open a code block.
+            r"\[\s*(?:for|if)\s*\([^)]*\)|(?:^|(?<=[=,(:\[]))\s*\{\s*(?:for|if)\s*\([^)]*\)|\.(?:map|where|reduce|fold|expand|every|any)\s*\("
         ),
         # 22. scientific: Numerical / Compute Libraries. math.pi, typed binary arrays, and Matrix4 vectors.
         "scientific": re.compile(
@@ -324,7 +378,11 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership: Authorship indicators.
-        "ownership": re.compile(r"//\s*(?:Author|Created by|Maintainer|Copyright):\s+([^\n]+)", re.I),
+        # #2882 contract: C2 `Copyright:` out; @author joins; the keyed line needs its marker or a capitalised tag (a `owner:` named argument is not one, C1)
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt: The Promise. Future work markers.
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -403,11 +461,25 @@ DEFINITION: dict[str, Any] = {
         # shared leading \b could only fire when a word char
         # immediately preceded it -- never true for how annotations are
         # actually written. Never matched at all.
-        "immutability_locks": re.compile(r"\b(?:const|final|readonly)\b|@immutable", re.I),
+        "immutability_locks": re.compile(
+            r"\bconst\b|@immutable", re.I
+        ),  # #2772 C1: `final` is dart's ordinary binding choice; `const` is the restricted compile-time form
         # 46. cleanup (Resource Cleanup / Teardown) Resource release.
-        "cleanup": re.compile(r"\b(dispose|close|cleanup|cancel|drop|free)\s*\(", re.I),
+        "cleanup": re.compile(
+            r"\b(?<!void )(dispose|close|cleanup|cancel|drop|free)\s*\(", re.I
+        ),  # #2888 C1: `void dispose() {` declares
         # 47. encapsulation Scope hiding (Underscore prefix).
-        "encapsulation": re.compile(r"\b(_[a-zA-Z0-9_$]+)\b|@protected|@private"),
+        # #2766: declaration-position only -- the `_` marker is part of the
+        # identifier, so the bare-word form counted every usage. `@private` dropped
+        # (not a dart/meta annotation); @protected kept (non-public intent marker).
+        "encapsulation": re.compile(
+            # The var/final arm requires `= `/`;` right after the name so `final
+            # _Type publicName` (a private-TYPE usage) doesn't count; the method arm
+            # excludes statement keywords so `return _call(...)` doesn't.
+            r"@protected\b|\b(?:class|enum|mixin|extension|typedef)[ \t]+_[\w$]+"
+            r"|^[ \t]*(?!return\b|await\b|yield\b|throw\b|case\b)(?:static[ \t]+)?(?:[\w<>,\[\]$?]+[ \t]+){1,3}_[\w$]+[ \t]*[=;(]",
+            re.M,
+        ),
         # 48. listeners (Event Listeners / Observers) Waiting for state broadcasts.
         # BUG FIX: `on\(` ends on `(` (non-word), so the shared trailing
         # \b could only fire when a word char immediately followed --
@@ -421,6 +493,13 @@ DEFINITION: dict[str, Any] = {
         # written. Never matched at all.
         "test_skip": re.compile(r"@Ignore|\b(?:test\.skip|t\.Skip|xit|mock)\b", re.I),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Dart Specifics) ---
+        # auth_middleware (#3004): Firebase/Google sign-in (flutter's dominant
+        # auth surface) and JWT verification, instance-anchored.
+        "auth_middleware": re.compile(
+            r"\bFirebaseAuth\.instance\.(?:signIn|signOut|createUser)\w*\("
+            r"|\bGoogleSignIn\("
+            r"|\bJWT\.verify\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(jsonDecode|jsonEncode|json\.decode|json\.encode|Utf8Decoder|Utf8Encoder)\b"
         ),
@@ -434,5 +513,8 @@ DEFINITION: dict[str, Any] = {
         "ipc_rpc_bridges": re.compile(
             r"\b(Isolate\.spawn|ReceivePort|SendPort|Process\.run|Process\.start|HttpClient)\b"
         ),
+        # system_config_mutation (#3084): contract-level absence. application/UI
+        # framework layer; no host-configuration vocabulary of its own.
+        "system_config_mutation": None,
     },
 }

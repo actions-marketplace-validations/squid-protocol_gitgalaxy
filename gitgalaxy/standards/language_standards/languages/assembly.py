@@ -53,9 +53,31 @@ DEFINITION: dict[str, Any] = {
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
-        # Decisions and logical jumps. EXCLUDES system exits/halts (bailout_hits).
+        # Decisions only. EXCLUDES system exits/halts (bailout_hits) and, since
+        # #2764, every UNCONDITIONAL control transfer.
+        #
+        # BUG FIX #2764: this alternation used to carry `jmp|call|ret|b|bl|bx|blr`
+        # alongside the conditional jumps. None of those is a decision -- `call` is
+        # a call, `ret` is a return, `jmp`/`b`/`bl`/`bx`/`blr` are unconditional
+        # transfers -- yet `branch` feeds avg_func_complexity, max_func_complexity,
+        # func_internal_density, cog_raw, control_flow_ratio and
+        # risk_cognitive_load, all of which are decision-DENSITY measures. Counting
+        # calls and returns made cognitive load track how many subroutines a file
+        # has, which `functions_found` already measures (measured against the
+        # keyword-rosetta control corpus: 23 of 25 branch hits were call/ret/jmp,
+        # avg_func_complexity +811% over the cross-language median).
+        # #2545 already settled the same question for high-level languages when it
+        # took bare `return` out of `branch` in kotlin/apex/objective-c/
+        # powershell/solidity/zig; `ret` IS `return`, and no other language's
+        # `branch` rule counts its call syntax. Per that precedent the tokens are
+        # RELOCATED to `structural_boundaries` (Rule 3), not deleted -- so
+        # control_flow_ratio's denominator is unchanged and no signal is lost.
+        # Side effect: ARM's single-letter `b` mnemonic no longer inflates `branch`
+        # from prose/paths (the filename inside `%include "b.asm"` matched
+        # `\bb\b`); that false positive moves with the token to the bulk
+        # structural signal, where it is not a decision claim.
         "branch": re.compile(
-            r"\b(jmp|je|jne|jz|jnz|ja|jb|jl|jg|jge|jle|jae|jbe|call|ret|b|bl|bx|blr|cbz|cbnz|tbz|tbnz|beq|bne|loop)\b",
+            r"\b(je|jne|jz|jnz|ja|jb|jl|jg|jge|jle|jae|jbe|cbz|cbnz|tbz|tbnz|beq|bne|loop)\b",
             re.I,
         ),
         # 2. args (Parameters / Coupling)
@@ -74,9 +96,16 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 3. linear (Sequential Boundaries)
-        # Data movement and arithmetic primitives. EXCLUDES: Linker visibility (api) and sections (globals).
+        # Data movement, arithmetic primitives, and unconditional control transfer
+        # (calls, returns and unconditional jumps -- structure, not decisions;
+        # #2764 relocated those here out of `branch`, the same "relocate, not
+        # delete" branch #2545 took for objective-c/solidity `return`).
+        # EXCLUDES: Linker visibility (api) and sections (globals).
+        # Longest-first ordering on the `blr|bl|bx|b` family keeps the alternation
+        # from having to backtrack off the single-letter ARM mnemonic.
         "structural_boundaries": re.compile(
-            r"\b(mov(?:abs|[sz]x|[bwlq]|aps|ups|dqu)?|vmov[a-z]+|lea|ldr[s]?[bhw]?|str[bhw]?|push|pop|add|sub|inc|dec|mul|imul|div|idiv|nop|ldp|stp)\b",
+            r"\b(mov(?:abs|[sz]x|[bwlq]|aps|ups|dqu)?|vmov[a-z]+|lea|ldr[s]?[bhw]?|str[bhw]?|push|pop|add|sub|inc|dec|mul|imul|div|idiv|nop|ldp|stp"
+            r"|jmp|call|ret|blr|bl|bx|b)\b",
             re.I,
         ),
         # 4. func_start (Executable Logic Anchors)
@@ -109,8 +138,9 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
         # 6. safety (Defensive Programming / Validation)
         # Stack preservation and defensive frame setups.
+        # C2: frame mechanics/alignment are structure; CFI/pointer-auth hardening stays.
         "safety": re.compile(
-            r"\b(enter|leave|endbr64|paciasp|autiasp|bti|retab|\.align|\.p2align)\b|\b(?:stp|ldp)\s+x29,\s*x30",
+            r"\b(endbr64|paciasp|autiasp|bti|retab)\b",
             re.I,
         ),
         # 7. safety_neg (Safety Bypasses / Unchecked Types)
@@ -125,24 +155,54 @@ DEFINITION: dict[str, Any] = {
         # 9. io (I/O & Network Boundaries)
         # System calls and hardware I/O ports.
         "io": re.compile(
-            r"\b(in|out|ins[bdw]|outs[bdw]|syscall|svc\b|int\s+0x80|sys_read|sys_open)\b",
-            re.I,
+            # #2841 contract C1: bare in/out matched comment prose; the
+            # instruction form is line-anchored with an operand.
+            r"^[ \t]*(?:in|out)[ \t]+[a-z0-9]|\b(?:ins[bdw]|outs[bdw]|syscall|svc|int\s+0x80|sys_read|sys_open)\b",
+            re.I | re.M,
         ),
         # 10. api (Public Surface Area)
         # Linker-visible global exports.
+        # BUG FIX #2730 (api contract): `EXTERN`/`IMPORT` declare a symbol
+        # defined in *another* translation unit -- they make an outside name
+        # visible HERE, the opposite direction from the contract ("a
+        # declaration that makes a named function or type visible outside
+        # this file"). Dropped; the remaining directives all publish a local
+        # symbol to the linker.
         "api": re.compile(
-            r"^[ \t]*(?:\.global|\.globl|global|EXPORT|PUBLIC|EXTERN|IMPORT)\b",
+            r"^[ \t]*(?:\.global|\.globl|global|EXPORT|PUBLIC)\b",
+            re.M | re.I,
+        ),
+        # #2774: the ORPHAN-CENSUS EXEMPTION -- see the matching note in
+        # shell.py. This rule captures the exported NAME (not the visibility
+        # modifier the `api` rule matches), and `_is_orphan` discounts only that
+        # capture's own span, so naming a function in an export statement stops
+        # counting as a use. Leading `_` keeps it out of `coding_analysis`'s
+        # rule loop and the counts schema, the same way `_scope_filters` does.
+        "_visibility_export": re.compile(
+            r"^[ \t]*(?:\.global|\.globl|global|EXPORT|PUBLIC)[ \t]+([a-zA-Z_.$][\w.$]*)",
             re.M | re.I,
         ),
         # 11. flux (State Mutation)
         # Explicit memory/register swaps and atomic increments.
-        "state_mutation": re.compile(r"\b(xchg|cmpxchg|inc|dec)\b", re.I),
+        "state_mutation": re.compile(
+            # #2765 contract (fallback family): a read-modify-write mnemonic in
+            # instruction position. Anchoring to the statement start keeps `inc` from
+            # matching the `.inc` of an `include` directive.
+            r"^[ \t]*(?:[A-Za-z_.$@][\w.$@]*:[ \t]*)?(?:xchg|cmpxchg|xadd|inc|dec|neg|not)\b",
+            re.I | re.M,
+        ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(r"(?i)(?:;|#|//)[ \t]*(?:jmp|call|mov|push|pop|cmp|add|sub)\b"),
         # 13. doc (Structured Documentation)
-        "doc": re.compile(r"^[;#@/|]+\s*@(?:param|return|brief|author|note)", re.M | re.I),
+        # #2882 contract C4: doc counts the block, not the author tag -- @author is ownership's alone.
+        "doc": re.compile(r"^[;#@/|]+\s*@(?:param|return|brief|note)", re.M | re.I),
         # 14. test (Testing & Assertions)
-        "test": re.compile(r"(?i)\b(?:describe|expect|assert|TestCase)\b|\bit[ \t]*\("),
+        # #2853 contract C3/C1: dropped the `(?i)` bare prose menu
+        # `describe|expect|assert` (comment vocabulary, and a linker `ASSERT(`
+        # guard is safety's, not a test). The real test surface in the corpus is
+        # the nasm/masm `testcase` macro table (kept, case-insensitively) and a
+        # call-anchored `it(`.
+        "test": re.compile(r"(?i)\bTestCase\b|\bit[ \t]*\("),
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
         # 15. concurrency (Asynchronous Execution)
         "concurrency": re.compile(
@@ -155,7 +215,17 @@ DEFINITION: dict[str, Any] = {
         "closures": None,
         # 18. globals (Global / Shared State)
         "globals": re.compile(
-            r"^[ \t]*(?:\.data|\.bss|\.rodata|\.comm|section\s+\.data|section\s+\.bss)\b",
+            # #2858 contract corollary 4: a section switch (`.data`, `section .bss`)
+            # is a region header, not shared state (#2805's WORKING-STORAGE
+            # precedent); the global is the labeled storage the region holds
+            # (`buf: resd 4`, `msg: .asciz "x"`, `.comm sym,4`).
+            # #2859: the label may also sit on its own line with the storage
+            # directive on the next (`msg:\n    .asciz "x"`) -- the third arm
+            # catches that two-line form. The directive allow-list keeps a label
+            # followed by an *instruction* (`loop:\n  mov ...`) from matching.
+            r"^[ \t]*(?:\.comm|\.lcomm)[ \t]+[A-Za-z_.$][\w.$]*"
+            r"|^[ \t]*[A-Za-z_.$][\w.$]*:?[ \t]+(?:\.(?:byte|word|long|quad|short|int|octa|space|zero|skip|fill|ascii|asciz|string|hword|xword)|d[bwdqt]|res[bwdqt])\b"
+            r"|^[ \t]*[A-Za-z_.$][\w.$]*:[ \t]*\n[ \t]*(?:\.(?:byte|word|long|quad|short|int|octa|space|zero|skip|fill|ascii|asciz|string|hword|xword)|d[bwdqt]|res[bwdqt])\b",
             re.M | re.I,
         ),
         # 19. decorators
@@ -184,8 +254,9 @@ DEFINITION: dict[str, Any] = {
             re.M | re.I,
         ),
         # 25. ownership (Authorship Metadata)
+        # #2882 contract: C2 `Copyright:` out; @author is ownership's (doc released it, C4)
         "ownership": re.compile(
-            r"^[;#@/|]+\s*(?:Author|Created by|Maintainer|Copyright):\s+(.*)",
+            r"^[ \t]*(?:[;#@|]+|//+|/\*+|\*+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.M | re.I,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -264,6 +335,10 @@ DEFINITION: dict[str, Any] = {
         # Framework code that explicitly bypasses verification. [cite: 788]
         "test_skip": None,
         # --- HYBRID DOMAIN SENSORS ---
+        # auth_middleware (#3004): contract-level absence. Generic assembly has
+        # no auth macro vocabulary -- a syscall number is not a named construct.
+        # (The mainframe analogue, RACROUTE, is hlasm's own rule.)
+        "auth_middleware": None,
         # serialization_parsing: Assembly has no native or universal JSON/XML/YAML
         # parsing construct -- unlike malloc/free/printf there is no single
         # ubiquitous libc convention for this, so per Strict Feature Parity
@@ -287,5 +362,9 @@ DEFINITION: dict[str, Any] = {
             r"\b(?:call|bl)\s+_?(?:fork|execve|pipe|socket|clone)\b|\bsys_(?:fork|execve|pipe|clone)\b",
             re.I,
         ),
+        # system_config_mutation (#3084): contract-level absence. userland
+        # instruction stream; no OS-configuration vocabulary in the language's
+        # own morphology.
+        "system_config_mutation": None,
     },
 }

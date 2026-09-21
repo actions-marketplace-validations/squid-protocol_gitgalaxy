@@ -51,7 +51,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch: Decisions that split the flow. Includes modern try/catch/finally and defer.
         "branch": re.compile(
-            r"\b(if|unless|elsif|else|while|until|for|foreach|given|when|next|last|redo|try|catch|finally|defer|goto|continue|default)\b|&&|\|\||//|\?|(?<!:):(?!:)"
+            r"\b(if|unless|elsif|else|while|until|for|foreach|given|when|next|last|redo|continue|default)\b|&&|\|\||//|\?|(?<!:):(?!:)"
         ),
         # 2. args: Parameters / Coupling. Captures modern signatures, traditional @_ unpacking, and shift.
         # #1209: parameter-list span wrapped in its own capture group in
@@ -118,7 +118,7 @@ DEFINITION: dict[str, Any] = {
         "_args_prototype_groups": {2},
         # 3. linear: Sequential I/O & Network Boundaries. Structural boundaries. EXCLUDES access modifiers and immutability.
         "structural_boundaries": re.compile(
-            r"\b(my|our|state|local|field|class|role|package|sub|method|return|yield|use|require|undef|do|true|false|await)\b"
+            r"\b(my|our|state|local|field|class|role|package|sub|method|return|yield|use|require|undef|do|true|false|await|goto)\b"
         ),
         # 4. func_start (Executable Logic Anchors)
         # Anchors executable logic blocks. MUST HAVE EXACTLY ONE CAPTURE GROUP for the name.
@@ -189,19 +189,48 @@ DEFINITION: dict[str, Any] = {
             r'\b(?:no\s+strict|no\s+warnings)\b|\beval\s*["\']|\beval\s*\(|\beval\s+(?!\w|{)|\bgoto\s+&'
         ),
         # 8. danger: High-Risk Execution. Process killers and raw shell execution.
-        "high_risk_execution": re.compile(r"\b(system|exec|exit|qx|CORE::dump)\b|`[^`]+`"),
+        # #2878 contract C2: `system` fires with its argument (9 crucible hits were config prose:
+        # `the current login system allows`); a backtick command is one line and not `$\``.
+        "high_risk_execution": re.compile(
+            r"\b(?:system|exec)(?:\s*\(|\s+[\$@\"\'])|\b(?:exit|qx|CORE::dump)\b|(?<!\$)`[^`\n]+`"
+        ),
         # 9. io: I/O & Network Boundaries. Disk, Network, DBI, and standard handles.
         "io": re.compile(
-            r"\b(open|close|sysopen|sysread|syswrite|opendir|closedir|DBI->connect|Mojo::UserAgent|HTTP::Tiny|LWP::UserAgent|socket|connect|bind)\b|<[A-Z_0-9]+>|<>"
+            r"\b(open|sysopen|sysread|syswrite|opendir|DBI->connect|Mojo::UserAgent|HTTP::Tiny|LWP::UserAgent|socket|connect|bind)\b|<[A-Z_0-9]+>|<>"
         ),
         # 10. api: Public Surface Area. Exposed surface area (Exports and modern routing).
+        # BUG FIX #2730 (api contract): every alternative above is a
+        # module-level export *list*, and each one also lands on a rule that
+        # already owns it (`@EXPORT_OK = (...)` is a state_mutation, `use
+        # Exporter|parent|base` an import), so the only way to move `api` was
+        # to move another planted count with it. A Perl `sub` is
+        # package-scoped and callable as `Pkg::name` from anywhere -- public
+        # by default, the same family as python/lua/scala -- so the
+        # declaration itself is the visibility marker. Leading letter
+        # required, which keeps the `_`-prefixed private-by-convention
+        # exclusion python's rule uses. Needs re.M for the `^` (Rule 13).
         "api": re.compile(
-            r'\b(?:get|post|put|del|any|patch)\s+[\'"]/[^\'"]*[\'"]|@(?:EXPORT|EXPORT_OK|EXPORT_TAGS|ISA)\b|use\s+(?:Exporter|parent|base)\b|:\s*(?:reader|writer|param)\b'
+            r'\b(?:get|post|put|del|any|patch)\s+[\'"]/[^\'"]*[\'"]|@(?:EXPORT|EXPORT_OK|EXPORT_TAGS|ISA)\b|use\s+(?:Exporter|parent|base)\b|:\s*(?:reader|writer|param)\b|'
+            r"^[ \t]*sub[ \t]+[A-Za-z]\w*",
+            re.M,
         ),
         # 11. flux: State Mutation. State mutation (assignments, array mutators, substitutions).
         # UPDATED: Removed '.=' and '=~' / '!~' to prevent massive string-builder false positives.
         "state_mutation": re.compile(
-            r"\b(?:push|pop|shift|unshift|splice|delete)\b|[\$@%][a-zA-Z_]\w*(?:->|\[|\{){0,5}\s*(?:\+|-|\*|/|\||&|\^|%|x)?=(?!=)|(?:\+\+|--)|\bs/"
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `my`/`our`/`local $x = v` declares (corollary 1). A bare `shift`/`pop` is
+            # argument unpacking (`my $self = shift`), a read of @_ (corollary 3): the
+            # list mutators count only with an explicit array/hash operand.
+            r"(?<!my )(?<!my\t)(?<!our )(?<!local )(?<!state )"
+            r"[\$@%]\$?[a-zA-Z_]\w*(?:->|\[[^\]\n]{0,60}\]|\{[^}\n]{0,60}\}){0,5}[ \t]*(?:\+|-|\*|/|\||&|\^|%|x|\.|\*\*|<<|>>|&&|\|\||//)?=(?![=>~])"
+            r"|\b(?:push|unshift|splice)\s*\(?[ \t]*[@$]|\b(?:pop|shift)\s*\(?[ \t]*@|\bdelete\s*\(?[ \t]*\$"
+            r"|[\w)\]}][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[\$@]|\bs/"
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails) Commented out structural logic.
         "dead_code": re.compile(
@@ -209,10 +238,21 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 13. doc: Structured Documentation. Structured POD documentation.
-        "doc": re.compile(r"^=(?:pod|head[1-6]|item|over|back|cut|begin|end|encoding|for)\b", re.M),
+        # BUG FIX #2672/#2670: the opener (`=pod`, `=head1`, ...) and `=cut`
+        # were independent alternatives, so one `=pod ... =cut` block
+        # counted doc=2. Pair the opener to its closing `^=cut` into one
+        # bounded (0,15000 chars) non-greedy span first (the #2658 shape);
+        # an unpaired opener (no `=cut` yet, or malformed input) still
+        # counts once via the second alternative.
+        "doc": re.compile(
+            r"^=(?:pod|head[1-6]|item|over|back|begin|end|encoding|for)\b[\s\S]{0,15000}?^=cut\b"
+            r"|^=(?:pod|head[1-6]|item|over|back|begin|end|encoding|for)\b",
+            re.M,
+        ),
         # 14. test: Testing & Assertions. Assertions and Test frameworks.
         "test": re.compile(
-            r"\b(?:Test2::V0|Test::More|cmp_ok|is_deeply|subtest|done_testing|BAIL_OUT)\b|\b(?:ok|is|isnt|like|unlike|plan|diag|note)\s*\("
+            # #2852 contract C2: a module qualifier is not a separate hit from the call it qualifies (Test::More::ok( = 1)
+            r"\b(?:(?:Test2::V0|Test::More)(?!::)|cmp_ok|is_deeply|subtest|done_testing|BAIL_OUT)\b|\b(?:ok|is|isnt|like|unlike|plan|diag|note)\s*\("
         ),
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
         # 15. concurrency: Temporal Static. Async, forks, and threads.
@@ -221,7 +261,10 @@ DEFINITION: dict[str, Any] = {
         ),
         # 16. ui_framework: UI / View Components. GUI libraries and template engines.
         "ui_framework": re.compile(
-            r"\b(Tk::|Wx::|Gtk2::|Gtk3::|Prima::|Template|HTML::Mason|Mojolicious::Plugin::TagHelpers)\b|\brender(?:_to_string)?\b|<%|%>|\[%|%\]"
+            # #2898: `<%` no longer fires inside POD formatting codes (C<%Y>) -- an
+            # uppercase letter directly before `<` is POD's C<>/B<>/L<> shape, never a
+            # Mason/embedded-template tag.
+            r"\b(Tk::|Wx::|Gtk2::|Gtk3::|Prima::|Template|HTML::Mason|Mojolicious::Plugin::TagHelpers)\b|\brender(?:_to_string)?\b|(?<![A-Z])<%|%>|\[%|%\]"
         ),
         # 17. closures: Closures / Anonymous Functions. Anonymous subroutines.
         "closures": re.compile(r"\bsub\s*(?:\([^)]*\))?[ \t]*\{"),
@@ -235,11 +278,17 @@ DEFINITION: dict[str, Any] = {
         # $!;`, `$? >> 8`). All 4 of the most common Perl magic
         # variables silently never matched.
         "globals": re.compile(
-            r"(?:\$a|\$b|\$_|\$0|%ENV|%SIG|@ARGV|@INC)\b|\$\$|\$@|\$!|\$\?|^[ \t]*our\s+[\$@%]",
+            # #2858 contract corollary 3: `$$options{...}` is a scalar deref and
+            # `$_[2]` is the argument array -- neither is the pid variable or the
+            # topic; `$ENV{PATH}` is the environment's element form.
+            r"(?:\$a|\$b|\$_|\$0|%ENV|%SIG|@ARGV|@INC)\b(?!\[)|\$ENV\{|\$\$(?![\w{$])|\$@|\$!|\$\?|^[ \t]*our\s+[\$@%]",
             re.M,
         ),
         # 19. decorators: Decorators / Annotations. Subroutine and variable attributes.
-        "decorators": re.compile(r":\s*[a-zA-Z_]\w*(?:\([^)]*\))?"),
+        # #2898: `::` package separators no longer count (2760 crucible hits) -- the
+        # double-colon guards leave only the single-colon attribute form (:shared,
+        # :SpamAssassin), which is what the sentence names.
+        "decorators": re.compile(r"(?<!:):(?!:)\s*[a-zA-Z_]\w*(?:\([^)]*\))?"),
         # 20. generics: Generics / Type Parameters. Parameterized types (via Type::Tiny/Moose).
         "generics": re.compile(r"\b(?:ArrayRef|HashRef|Map|Tuple|Dict|Maybe|InstanceOf|ConsumerOf|Enum)\[[^\]]*\]"),
         # 21. comprehensions: Iterators / Comprehensions. Map and Grep.
@@ -272,8 +321,9 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership: Authorship metadata.
+        # #2882 contract: C2 `=head1 COPYRIGHT|LICENSE` out; `=head1 AUTHORS` captures the paragraph (C3)
         "ownership": re.compile(
-            r"^=head1\s+(?:AUTHOR|COPYRIGHT|LICENSE)|#\s*(?:Author|Maintainer|Created by):\s+([^\n]+)",
+            r"^=head1[ \t]+AUTHORS?\b[^\n]*(?:\n+[ \t]*(\S[^\n]*))?|^[ \t]*(?:#+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -291,7 +341,9 @@ DEFINITION: dict[str, Any] = {
         "spec_exposure": re.compile(r"\[(?:\s*SPEC\s*-\s*\d{1,10}|spec|audit)[^\]]{0,300}\]", re.I),
         # 31. ssr_boundaries: View Horizon. Server-Side Rendering computation boundaries.
         "ssr_boundaries": re.compile(
-            r"\b(Mojolicious::Controller|Dancer2|Catalyst::Controller|render|template|reply->|to_app)\b"
+            # #2899: bare `render`/`template` matched ordinary words; anchored to the
+            # call form a server handler actually uses.
+            r"\b(Mojolicious::Controller|Dancer2|Catalyst::Controller|reply->|to_app)\b|\b(?:render|template)\s*\("
         ),
         # 32. events: Pub/Sub Network. Event-driven architecture signatures and message brokers.
         "events": re.compile(
@@ -306,7 +358,10 @@ DEFINITION: dict[str, Any] = {
         ),
         # 35. pointers: Memory Map. Explicit tracking of memory addressing or references.
         # UPDATED: Removed '\\[$@%&*]\w+' to stop flagging standard pass-by-reference variables.
-        "pointers": re.compile(r"->(?:\[[^\]]*\]|\{[^\}]*\})|@\$|%\$|\$\$|\&\$"),
+        # #2898: contract-level absence. ->{key}/->[i] and the sigil-derefs ($$, @$,
+        # %$, &$) are all GC-managed reference operations; perl exposes no raw memory
+        # address the way c/cpp/zig (which read the sentence) do.
+        "pointers": None,
         # 36. memory_alloc: Manual Memory Management. Explicit heap manipulations or reference count controls.
         "memory_alloc": re.compile(
             r"\b(Scalar::Util::weaken|Scalar::Util::isweak|Internals::SvREFCNT|Internals::SvREADONLY|undef|Devel::Peek)\b"
@@ -330,15 +385,23 @@ DEFINITION: dict[str, Any] = {
         "thread_sleeps": re.compile(r"\bsleep\b"),
         # 43. bitwise_ops (Bitwise Operations) Manipulating raw bytes and memory registers.
         # UPDATED: Added negative lookbehinds '(?<![=!])~' to ignore Perl regex operators.
-        "bitwise_ops": re.compile(r"(?<!&)&(?!&)|(?<!\|)\|(?!\|)|<<|>>|\^|(?<![=!])~"),
+        # #2899: binary `|` requires spacing so regex-literal alternation (m/a|b/) no
+        # longer counts; perl bitwise-or is conventionally written spaced.
+        "bitwise_ops": re.compile(r"(?<!&)&(?!&)|(?<= )\|(?= )|<<|>>|\^|(?<![=!])~"),
         # 44. sync_locks (Resource Management & Stability)
         "sync_locks": re.compile(r"\b(lock|threads::shared|Thread::Semaphore)\b"),
         # 45. immutability_locks (Immutability Constraints) Explicitly locking data so it cannot be mutated.
         "immutability_locks": re.compile(r"\b(Readonly|Const::Fast|Internals::SvREADONLY)\b"),
         # 46. cleanup (Resource Cleanup / Teardown) Explicitly destroying state or releasing resources.
-        "cleanup": re.compile(r"\b(DESTROY|undef|close|closedir|finish)\b|^[ \t]*END[ \t]*\{", re.M),
+        "cleanup": re.compile(
+            r"(?<!sub )\bDESTROY\b|\b(?:close|closedir)\b|\bundef\b(?=[ \t]*\(|[ \t]+[\$@%*])|->[ \t]*finish\b|\bfinish[ \t]*\(|^[ \t]*END[ \t]*\{",
+            re.M,
+        ),  # #2888 C3: `return undef` yields a value, only `undef $x` destroys one; C1/C3: `sub finish {` declares and `=head2 finish` documents; call or arrow form only
         # 47. encapsulation Explicitly hiding logic from the rest of the application.
-        "encapsulation": re.compile(r"\b(my|state|local)\b|:private\b"),
+        # #2766: contract-level absence. `my`/`state`/`local` are lexical scoping of
+        # every variable -- scope is not API visibility; perl has no per-name
+        # non-public marker (package symbols are all reachable).
+        "encapsulation": None,
         # 48. listeners (Event Listeners / Observers) Waiting to receive state from an external broadcast.
         # BUG FIX: `on\s*\(` and `subscribe\s*\(` both end in a literal
         # `(` (non-word), so the shared trailing \b could only fire when
@@ -347,8 +410,18 @@ DEFINITION: dict[str, Any] = {
         # follows the paren. Both never matched at all.
         "listeners": re.compile(r"\bon\s*\(|\bsubscribe\s*\(|\badd_listener\b"),
         # 49. test_skip (Bypassed Tests / Ignored Specs) Code that bypasses test verification.
-        "test_skip": re.compile(r"\b(skip|todo_skip)\b"),
+        # #2899: `skip` anchored to Test::More's call shapes (skip(..., skip "why", n,
+        # skip $why, n) so a hash key or POD item spelling the word no longer counts.
+        "test_skip": re.compile(r"\bskip\s*(?:\(|[\"'\$])|\btodo_skip\b"),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Perl Specifics) ---
+        # auth_middleware (#3004): a method call on an Authen:: package (the CPAN
+        # auth family), the credential check, and PAM. Arrow/call-anchored so the
+        # package name in a string and `sub check_password` never count.
+        "auth_middleware": re.compile(
+            r"\bAuthen::\w+(?:::\w+)*->\w+\("
+            r"|->check_password\("
+            r"|\bpam_authenticate\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(Storable::(?:thaw|fd_retrieve)|JSON::(?:decode_json|from_json)|YAML::(?:Load|LoadFile))\b"
         ),
@@ -367,7 +440,8 @@ DEFINITION: dict[str, Any] = {
         "regex_execution": re.compile(
             r"(=~|!~|\b(?:qr|m|s|tr|y)\b[/{}\[\]()<>!|#~^])"
         ),  # Catches Perl's native binding operators and regex quotes
-        "time_date_logic": re.compile(r"\b(localtime|gmtime|Time::HiRes|sleep|time)\b"),
+        # #2899: `time` no longer matches sigil-carrying variables ($time[5], @time).
+        "time_date_logic": re.compile(r"\b(localtime|gmtime|Time::HiRes|sleep)\b|(?<![\$@%\w])time\b(?!\s*[\[{])"),
         # BUG FIX: the whole alternation used to be wrapped in \b(...)\b.
         # \b requires a word/non-word transition; `system\s*\(` and
         # `exec\s*\(` both END in a literal `(` (non-word), so the
@@ -380,6 +454,11 @@ DEFINITION: dict[str, Any] = {
         # for the punctuation-delimited backtick form).
         "ipc_rpc_bridges": re.compile(
             r"\bsystem\s*\(|\bexec\s*\(|\bfork\b|\bIPC::Open[23]\b|\bqx\b|`.*`"
-        ),  # Backticks and qx// are shell executions
+        ),  # Backticks and qx// are shell executions,
+        # system_config_mutation (#3084): contract-level absence. config writes
+        # are file I/O or backtick/system command text (io's /
+        # high_risk_execution's); Win32::Registry-style modules are bespoke
+        # imports this contract excludes.
+        "system_config_mutation": None,
     },
 }

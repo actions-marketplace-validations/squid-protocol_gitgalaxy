@@ -2,28 +2,51 @@
 # security_auditor.py
 # GitGalaxy Phase 7.8: Advanced Machine Learning Threat Hunting (HARDENED)
 # ==============================================================================
+import importlib
 import logging
-from collections import deque
 from pathlib import Path
 from typing import ClassVar
 
-try:
-    import numpy as np
-    import pandas as pd
-    import xgboost as xgb
-
-    ML_AVAILABLE = True
-except ImportError:
-    ML_AVAILABLE = False
-
-try:
-    import networkx as nx
-
-    HAS_NETWORKX = True
-except ImportError:
-    HAS_NETWORKX = False
-
+from gitgalaxy.core.graph_engine import GraphIndex, WorkBudget, WorkBudgetExceeded, reach_counts
+from gitgalaxy.core.network_risk_sensor import PATH_METRICS_WORK_BUDGET
+from gitgalaxy.core.spatial_correlation import weighted_view
 from gitgalaxy.standards.analysis_lens import AI_THREAT_THRESHOLD, RECORDING_SCHEMAS
+
+
+def _optional_import(name: str):
+    """The module, or None when it is missing or cannot be imported."""
+    try:
+        return importlib.import_module(name)
+    except ImportError:
+        return None
+
+
+# #3028: each engine is detected on its own, so a scan can report exactly which
+# one it lacked (numpy and pandas used to hide behind "xgboost"). A package that
+# is installed but fails to import (numpy missing under pandas) counts as missing.
+np = _optional_import("numpy")
+pd = _optional_import("pandas")
+xgb = _optional_import("xgboost")
+HAS_NUMPY = np is not None
+HAS_PANDAS = pd is not None
+HAS_XGBOOST = xgb is not None
+ML_AVAILABLE = HAS_NUMPY and HAS_PANDAS and HAS_XGBOOST
+
+# Distances from an all-zero repo vector to the six centroids of the retired
+# GENERAL_REPO_INFERENCE_MODEL (#1159).
+_FROZEN_REPO_CLUSTER_DISTANCES = (
+    0.598052373041024,
+    0.443572211483091,
+    0.4795366237317021,
+    0.41416056620591,
+    0.4205215049197841,
+    0.6645988084551461,
+)
+
+
+def _or_nan(value):
+    """None ("not computed") as NaN for the feature matrix; anything else unchanged."""
+    return float("nan") if value is None else value
 
 
 class SecurityAuditor:
@@ -62,6 +85,11 @@ class SecurityAuditor:
 
         self.model = None
         self.feature_names = []
+        # #3028: True only once a run's XGBoost scores are written to its
+        # artifacts. Missing packages, a missing model file or a failed
+        # inference all leave it False, and the SQLite recorder then stores the
+        # AI threat columns as NULL instead of placeholder "Safe"/0.0 values.
+        self.inference_ran = False
 
         if ML_AVAILABLE:
             # DEFENSIVE GUARD: Bulletproof Path Resolution
@@ -90,13 +118,16 @@ class SecurityAuditor:
                     f"⚠️ XGBoost model not found at {local_model} OR {util_model}. Running graph resolution only."
                 )
         else:
-            self.logger.warning("⚠️ Pandas or XGBoost not installed in this environment. Running graph resolution only.")
+            self.logger.warning(
+                "⚠️ numpy, pandas or xgboost not installed in this environment. Running graph resolution only."
+            )
 
     def audit_repository(self, artifacts, is_shadow_patch=False):
         """
         Orchestrates the resolution of transitive dependency graphs and
         executes the XGBoost model against the generated feature matrix.
         """
+        self.inference_ran = False
         if not artifacts:
             return artifacts
 
@@ -211,6 +242,7 @@ class SecurityAuditor:
                 else:
                     artifact["is_ml_threat"] = False
 
+            self.inference_ran = True
             self.logger.info(f"XGBoost Inference Complete. Found {threats_found} potential threats.")
 
         except Exception as e:
@@ -220,8 +252,24 @@ class SecurityAuditor:
 
     def _resolve_dependency_graph(self, artifacts):
         """
-        Resolves transitive fragility and Downstream Exposure using C-optimized traversals (NetworkX)
-        if available, falling back to a pure Python BFS deque if missing.
+        Resolves each file's transitive fragility and Downstream Exposure.
+        `total_upstream` counts every file it depends on, directly or
+        transitively. `total_downstream` counts every file that depends on it.
+
+        #3040: one native implementation, the same in both modes, exact, with
+        no 500-file cap. graph_engine.reach_counts condenses the graph's
+        cycles and ORs reachability bitsets along the condensation. It gives
+        the same counts as `len(nx.descendants(G, f))` /
+        `len(nx.ancestors(G, f))`.
+
+        It replaced two implementations:
+        - networkx's calls, capped at 500
+        - a pure-Python BFS fallback that disagreed with them: it counted a
+          file on a cycle as its own dependency, and its cap check could
+          overshoot 500
+
+        Past PATH_METRICS_WORK_BUDGET, both totals and their ratios are None
+        ("not computed"), never a placeholder 0.
         """
         resolution_map = {}
         for artifact in artifacts:
@@ -237,87 +285,35 @@ class SecurityAuditor:
 
         total_repo_files = max(len(artifacts), 1)
 
-        # =========================================================
-        # FAST PATH: NetworkX (C-Backend)
-        # =========================================================
-        if HAS_NETWORKX:
-            G = nx.DiGraph()
-            for artifact in artifacts:
-                curr = artifact.get("path", "")
-                G.add_node(curr)
-                for imp in artifact.get("raw_imports", []):
-                    if imp in resolution_map:
-                        target = resolution_map[imp]
-                        if target != curr:
-                            G.add_edge(curr, target)
-
-            for artifact in artifacts:
-                path = artifact.get("path", "")
-                dir_up = len(artifact.get("raw_imports", []))
-                dir_down = artifact.get("telemetry", {}).get("popularity", 0)
-
-                if path in G:
-                    # Cap depth at 500 to prevent OOM/Stalls on massive circular monoliths
-                    tot_up = min(len(nx.descendants(G, path)), 500)
-                    tot_down = min(len(nx.ancestors(G, path)), 500)
-                else:
-                    tot_up, tot_down = 0, 0
-
-                artifact["dependency_network"] = {
-                    "direct_upstream": dir_up,
-                    "direct_downstream": dir_down,
-                    "total_upstream": tot_up,
-                    "total_downstream": tot_down,
-                    "upstream_ratio": round(tot_up / total_repo_files, 4),
-                    "downstream_ratio": round(tot_down / total_repo_files, 4),
-                }
-            return artifacts
-
-        # =========================================================
-        # FALLBACK PATH: Pure Python (Deque Optimized)
-        # =========================================================
-        outbound_graph = {artifact.get("path", ""): [] for artifact in artifacts}
-        inbound_graph = {artifact.get("path", ""): [] for artifact in artifacts}
-
+        edges: dict[tuple[str, str], float] = {}
         for artifact in artifacts:
             curr = artifact.get("path", "")
             for imp in artifact.get("raw_imports", []):
                 if imp in resolution_map:
                     target = resolution_map[imp]
                     if target != curr:
-                        if target not in outbound_graph[curr]:
-                            outbound_graph[curr].append(target)
-                        if curr not in inbound_graph[target]:
-                            inbound_graph[target].append(curr)
-
-        def get_nth_degree(start, graph, max_nodes=500):
-            """BFS using collections.deque for O(1) popping."""
-            visited = set()
-            queue = deque([start])  # <--- THE O(1) MEMORY FIX
-            while queue and len(visited) < max_nodes:
-                node = queue.popleft()  # <--- No more O(N) array shifts!
-                for neighbor in graph.get(node, []):
-                    if neighbor not in visited:
-                        visited.add(neighbor)
-                        queue.append(neighbor)
-            return len(visited)
+                        edges.setdefault((curr, target), 1.0)
+        index = GraphIndex(
+            (artifact.get("path", "") for artifact in artifacts),
+            ((src, dst, weight) for (src, dst), weight in edges.items()),
+        )
+        try:
+            descendants, ancestors = reach_counts(index, WorkBudget(PATH_METRICS_WORK_BUDGET))
+            reach = {path: (descendants[i], ancestors[i]) for i, path in enumerate(index.nodes)}
+        except WorkBudgetExceeded as e:
+            self.logger.info(f"Reach counts past their work budget, leaving them unset (None): {e}")
+            reach = {}
 
         for artifact in artifacts:
             path = artifact.get("path", "")
-            dir_up = len(artifact.get("raw_imports", []))
-            dir_down = artifact.get("telemetry", {}).get("popularity", 0)
-
-            # Reduced max_nodes to 500 to match NetworkX ceiling
-            tot_up = get_nth_degree(path, outbound_graph, max_nodes=500)
-            tot_down = get_nth_degree(path, inbound_graph, max_nodes=500)
-
+            tot_up, tot_down = reach.get(path, (None, None))
             artifact["dependency_network"] = {
-                "direct_upstream": dir_up,
-                "direct_downstream": dir_down,
+                "direct_upstream": len(artifact.get("raw_imports", [])),
+                "direct_downstream": artifact.get("telemetry", {}).get("popularity", 0),
                 "total_upstream": tot_up,
                 "total_downstream": tot_down,
-                "upstream_ratio": round(tot_up / total_repo_files, 4),
-                "downstream_ratio": round(tot_down / total_repo_files, 4),
+                "upstream_ratio": None if tot_up is None else round(tot_up / total_repo_files, 4),
+                "downstream_ratio": None if tot_down is None else round(tot_down / total_repo_files, 4),
             }
 
         return artifacts
@@ -356,14 +352,36 @@ class SecurityAuditor:
                 # 1. Base Variables
                 cfr = tel.get("control_flow_ratio", 0.0)
                 coding_loc = artifact.get("coding_loc", 0)
-                logic_loc = max(int(round(coding_loc * cfr)), 1)
-                safe_denom = max(logic_loc, coding_loc, 1)
 
-                functions = artifact.get("functions", [])
+                # #2770: `logic_loc` is `coding_loc * control_flow_ratio`, the same
+                # idiom record_keeper.py used for dependency_density until #2770
+                # retired it there. It is kept HERE, unchanged, for one reason only:
+                # `log_logic_loc` below is an input to the pre-trained model, and
+                # redefining a trained input is a retrain, not a bug fix -- the same
+                # call the frozen `func_internal_density: 0.0` placeholder documents
+                # further down. Its known defect, recorded so the retrain can price
+                # it: control_flow_ratio is 0 for any branchless file, so logic_loc
+                # collapses onto the max(..., 1) floor and the feature reads 1 for a
+                # 500-line config as readily as for a 5-line one.
+                logic_loc = max(int(round(coding_loc * cfr)), 1)
+
+                # control_flow_ratio is bounded [0, 1] by construction (branch over
+                # branch + structural_boundaries), so logic_loc <= coding_loc always
+                # and the old `max(logic_loc, coding_loc, 1)` could never select
+                # logic_loc. Written as what it always computed.
+                safe_denom = max(coding_loc, 1)
+
+                # #2691: per-function statistics describe real functions, not the
+                # slicer's synthetic top-level buckets.
+                functions = [f for f in artifact.get("functions", []) if not f.get("is_synthetic_slice")]
                 max_func_comp = max([func.get("branch", 0) for func in functions] if functions else [0])
                 avg_func_args = sum([func.get("args", 0) for func in functions]) / max(len(functions), 1)
 
                 hit_dict = {self.SIGNAL_SCHEMA[i]: hits[i] for i in range(len(self.SIGNAL_SCHEMA)) if i < len(hits)}
+                # #2813: hit_vector now carries raw counts; the trained model saw the
+                # proximity-weighted figures, so the feature frame reads the weighted
+                # view from the per-file tally (a retrain, not this fix, may drop it).
+                hit_dict = weighted_view(hit_dict, artifact.get("mitigation_telemetry") or {})
 
                 # 2. Build the Row Dictionary
                 row = {
@@ -380,13 +398,30 @@ class SecurityAuditor:
                     "log_max_func_complexity": np.log1p(np.maximum(max_func_comp, 0)),
                     "log_avg_func_args": np.log1p(np.maximum(avg_func_args, 0)),
                     "func_complexity_gini": float(tel.get("func_complexity_gini", 0.0)),
-                    "func_internal_density": float(tel.get("func_internal_density", 0.0)),
-                    "orphaned_logic": float(hit_dict.get("orphaned_logic", 0)),
+                    # func_internal_density (#2714): a permanent 0.0 placeholder,
+                    # not a live feature. No telemetry writer has ever emitted
+                    # this key -- signal_processor's telemetry_payload, the
+                    # galaxyscope augmentation block and the ecosystem pass all
+                    # skip it, and the density is computed only inside
+                    # record_keeper.py (~L496) while the file_data row is
+                    # written. The old tel.get(...) read therefore took its 0.0
+                    # default for every file, every scan, exactly like the
+                    # prompt_injection/agentic_rce placeholders documented in
+                    # analysis_lens.py. The column is frozen rather than deleted
+                    # because audit_repository aligns the frame by name via
+                    # df.reindex(columns=self.feature_names, fill_value=np.nan):
+                    # dropping it would feed a trained model NaN where it has
+                    # always seen 0.0. Populating it for real is a scored-model
+                    # input change that needs a retrain, not this fix.
+                    "func_internal_density": 0.0,
+                    "unreferenced_by_name": float(hit_dict.get("unreferenced_by_name", 0)),
                     "duplicate_logic": float(hit_dict.get("duplicate_logic", 0)),
                     "log_direct_upstream": np.log1p(np.maximum(dep.get("direct_upstream", 0), 0)),
                     "log_direct_downstream": np.log1p(np.maximum(dep.get("direct_downstream", 0), 0)),
-                    "log_total_upstream": np.log1p(np.maximum(dep.get("total_upstream", 0), 0)),
-                    "log_total_downstream": np.log1p(np.maximum(dep.get("total_downstream", 0), 0)),
+                    # #3040: a reach count past its work budget is None -> NaN,
+                    # which XGBoost reads as a missing value, never a 0.
+                    "log_total_upstream": np.log1p(np.maximum(_or_nan(dep.get("total_upstream", 0)), 0)),
+                    "log_total_downstream": np.log1p(np.maximum(_or_nan(dep.get("total_downstream", 0)), 0)),
                 }
 
                 # 3. Reconstruct Density Signatures
@@ -412,16 +447,16 @@ class SecurityAuditor:
                     raw_density = (val / safe_denom) * 100.0
                     row[f"log_density_{col_name}"] = np.log1p(np.maximum(raw_density, 0))
 
-                # Bind to the new Ecosystem Baseline variables established in the Statistical Auditor
-                row["assigned_macro_species"] = tel.get("ecosystem_baseline_cluster", 0)
-                row["primary_z_score"] = float(tel.get("ecosystem_z_score", 0.0))
-
+                # #1159: frozen. The retired repo K-Means model scored every full scan
+                # as an all-zero vector, so these are the only values the model saw.
+                row["assigned_macro_species"] = 3
+                row["primary_z_score"] = 2.272
                 for i in range(11):
-                    row[f"dist_to_{i}"] = float(tel.get(f"dist_to_{i}", 0.0))
+                    row[f"dist_to_{i}"] = _FROZEN_REPO_CLUSTER_DISTANCES[i] if i < 6 else 0.0
 
                 rows.append(row)
 
-            except Exception as e:
+            except Exception as e:  # noqa: PERF203 -- per-iteration isolation: inject a safe fallback vector instead of aborting the batch
                 self.logger.error(
                     f"Feature extraction failed for '{artifact.get('path', 'Unknown')}': {e}. Injecting safe fallback vector."
                 )

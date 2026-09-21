@@ -180,7 +180,7 @@ def parse_official_swagger(swagger_path: Path) -> set:
 
         paths = swagger_data.get("paths", {})
         for api_path, methods in paths.items():
-            for method in methods.keys():
+            for method in methods:
                 approved_apis.add(normalize_endpoint(method, api_path))
     except Exception as e:
         # Fix #165: Pipeline Assassin. Raise exception instead of sys.exit()
@@ -239,7 +239,7 @@ def calculate_api_drift(physical_endpoints: set, approved_apis: set) -> tuple:
         for app in approved_apis:
             app_meth, app_path = app.split(" ", 1)
 
-            if phys_meth == app_meth:
+            if phys_meth == app_meth:  # noqa: SIM102 -- nesting keeps the suffix-match explanation scoped to its guard
                 # Suffix Match: Physical '/profile' aligns with Swagger '/api/v1/users/profile'
                 # Because our normalizer guarantees phys_path starts with a '/',
                 # .endswith(phys_path) naturally prevents partial word bleeding.
@@ -333,7 +333,7 @@ def main():
                 try:
                     routes = parse_official_swagger(c)
                     preview_stats.append((c, len(routes), c in test_cands))
-                except Exception:
+                except Exception:  # noqa: PERF203 -- per-iteration isolation: skip a corrupt/unparsable spec, keep processing the others
                     preview_stats.append((c, 0, c in test_cands))
 
             preview_stats.sort(key=lambda x: x[1], reverse=True)
@@ -351,7 +351,7 @@ def main():
             for c in candidates:
                 try:
                     approved_apis.update(parse_official_swagger(c))
-                except RuntimeError as e:
+                except RuntimeError as e:  # noqa: PERF203 -- per-iteration isolation: skip a corrupt/unparsable spec, keep processing the others
                     print(f" ⚠️  [SKIP] Failed to parse discovered specification '{c.relative_to(source_path)}': {e}")
         else:
             swagger_path = candidates[0]
@@ -430,12 +430,21 @@ def run_api_audit(source_path: Path) -> dict:
 
     shadow_apis, ghost_apis = calculate_api_drift(physical_endpoints, approved_apis)
 
+    # SORTED, not `list(...)`: both of these are sets, and `list(set)` emits in
+    # hash order, which varies run to run. They land verbatim in the golden
+    # master (`2. Global Ecosystem Summary/ecosystem_audits/api_mapper`), so an
+    # unordered collection serialised as an ordered list made `crucible-audit`
+    # nondeterministic -- two consecutive scans of the same corpus produced the
+    # same 377 `shadow_apis` in different orders, and the fixture could never be
+    # blessed clean. Found while bumping the corpus pin to v1.3.0: the cause is
+    # long-standing, but the larger corpus changed worker scheduling enough to
+    # make it reproduce every time instead of intermittently.
     return {
         "status": "success",
-        "frameworks": list(frameworks),
+        "frameworks": sorted(frameworks),
         "shadow_count": len(shadow_apis),
         "ghost_count": len(ghost_apis),
-        "shadow_apis": list(shadow_apis),
+        "shadow_apis": sorted(shadow_apis),
     }
 
 

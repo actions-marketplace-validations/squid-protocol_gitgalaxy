@@ -88,7 +88,7 @@ _ZIG_SIMPLE_CASES = [
     ("high_risk_execution", '@panic("unreachable state");', "return error.Bad;"),
     ("io", "const file = try std.fs.cwd().openFile(path, .{});", "const x = 5;"),
     ("api", "pub fn main() void {", "fn helper() void {"),
-    ("state_mutation", "var x: i32 = 0;", "const x: i32 = 0;"),
+    ("state_mutation", "x = 1;", "var x: i32 = 0;"),  # #2765: a declaration is not a write
     ("dead_code", "// fn oldFunc() void {}", "// just a note"),
     ("doc", "/// Computes the sum of two integers.", "// just a note"),
     ("test", 'test "basic addition" {', "fn add() void {}"),
@@ -115,9 +115,10 @@ _ZIG_SIMPLE_CASES = [
     ("thread_sleeps", "std.time.sleep(1000);", "const x = 5;"),
     ("bitwise_ops", "const mask = a & b;", "const sum = a + b;"),
     ("sync_locks", "var mutex = std.Thread.Mutex{};", "const x = 5;"),
-    ("immutability_locks", "const x: i32 = 5;", "var x: i32 = 5;"),
+    # immutability_locks is None since #2772 (`const` is zig's ordinary binding);
+    # pinned in test_immutability_locks_contract_2772.py.
     ("cleanup", "defer allocator.free(buf);", "const x = 5;"),
-    ("encapsulation", "fn helper() void {", "pub fn helper() void {"),
+    # encapsulation is None since #2766 -- zig hiding is the unmarked default (no marker).
     ("test_skip", "std.testing.expect(true) catch unreachable;", "const x = 5;"),
     ("serialization_parsing", "const parsed = try std.json.parseFromSlice(T, allocator, data, .{});", "const x = 5;"),
     ("regex_execution", "const idx = std.mem.indexOf(u8, haystack, needle);", "const x = 5;"),
@@ -318,8 +319,11 @@ def test_zig_structural_boundaries_and_panics_and_aborts_shared_literals_intenti
     structural_boundaries = ZIG_RULES["structural_boundaries"]
     panics_and_aborts = ZIG_RULES["panics_and_aborts"]
 
+    # #2898 retires the `return` half of the dual: an unconditional transfer is
+    # structural_boundaries' alone. `unreachable` keeps both readings (it is a
+    # boundary AND a trap).
     assert structural_boundaries.search("return;")
-    assert panics_and_aborts.search("return;")
+    assert not panics_and_aborts.search("return;")
     assert structural_boundaries.search("unreachable;")
     assert panics_and_aborts.search("unreachable;")
 
@@ -331,11 +335,11 @@ def test_zig_encapsulation_default_private_semantics():
     semantic intent over keyword matching) -- a declaration is "encapsulated"
     precisely when it's NOT explicitly marked pub/export/extern.
     """
-    encapsulation = ZIG_RULES["encapsulation"]
-    assert encapsulation.search("fn helper() void {"), "unmarked (private-by-default) fn should match"
-    assert encapsulation.search("const secret = 42;"), "unmarked (private-by-default) const should match"
-    assert not encapsulation.search("pub fn helper() void {"), "pub fn incorrectly matched as encapsulated"
-    assert not encapsulation.search("export fn helper() void {"), "export fn incorrectly matched as encapsulated"
+    # #2766 reversed this design: counting every NOT-pub declaration measured code
+    # volume (15430 crucible hits, mostly function locals), not hiding effort. Zig
+    # has no per-name non-public marker -- hiding is the unmarked default -- so the
+    # rule is a contract-level absence.
+    assert ZIG_RULES["encapsulation"] is None
 
 
 def test_zig_lexical_family_no_block_terminator_state_to_confuse():
@@ -374,6 +378,7 @@ def test_zig_redos_immunity_sweep():
     assert ZIG_RULES["func_start"].search("pub fn main() void {")
     assert ZIG_RULES["class_start"].search("const Point = struct {")
 
+
 def test_zig_deep_structural_signatures_ambiguity():
     """
     Adversarial and deep case testing for the high-ambiguity signatures:
@@ -385,8 +390,9 @@ def test_zig_deep_structural_signatures_ambiguity():
     assert branch.search("} else if (y) {")
     assert branch.search("for (items) |item| {")
     assert branch.search("while (true) : (i += 1) {")
-    assert branch.search("try doSomething();")
-    assert branch.search("catch |err| return err;")
+    # 2822 corollary 1: zig's error-handling keywords are safety's
+    assert not branch.search("try doSomething();")
+    assert not branch.search("catch |err| return err;")
     assert branch.search("const a = b orelse c;")
     assert branch.search("a && b")
     assert branch.search("a || b")
@@ -398,44 +404,72 @@ def test_zig_deep_structural_signatures_ambiguity():
     # 2. args
     args = ZIG_RULES["args"]
     # Deep parens up to depth 4
-    deep_args = 'fn max(a: typeof(foo(bar(baz())))) void {'
+    deep_args = "fn max(a: typeof(foo(bar(baz())))) void {"
     m = args.search(deep_args)
     assert m and m.group(1) == "a: typeof(foo(bar(baz())))", "args regex should handle deep nested parens"
 
     # Missing delimiter (should not match endlessly or match invalid args)
-    assert not args.search('fn broken(a: type, ')
+    assert not args.search("fn broken(a: type, ")
 
     # 3. func_start
     func_start = ZIG_RULES["func_start"]
     # Weird modifier stacking and nested parens in attributes
     weird_func = 'pub inline extern "C" callconv(.C) align(@alignOf(T(u8, F(1)))) linksection(".text.(main)") fn @"my weird func"() void {'
     m = func_start.search(weird_func)
-    assert m and m.group(1) == '@"my weird func"', "func_start should handle complex modifier stacking and deep parens in align()"
+    assert m and m.group(1) == '@"my weird func"', (
+        "func_start should handle complex modifier stacking and deep parens in align()"
+    )
 
     # 4. class_start
     class_start = ZIG_RULES["class_start"]
-    assert class_start.search('pub const Tuple = struct {')
+    assert class_start.search("pub const Tuple = struct {")
     assert class_start.search('const @"My Tuple" = packed struct {')
-    assert class_start.search('const State = enum(u8) {')
-    assert class_start.search('const MyUnion = extern union {')
-    assert class_start.search('const E = error {')
-    assert class_start.search('const O = opaque {')
+    assert class_start.search("const State = enum(u8) {")
+    assert class_start.search("const MyUnion = extern union {")
+    assert class_start.search("const E = error {")
+    assert class_start.search("const O = opaque {")
 
     # Negative (type info)
-    assert not class_start.search('const Foo = @typeInfo(T).Struct;')
+    assert not class_start.search("const Foo = @typeInfo(T).Struct;")
 
     # 5. structural_boundaries
     struct_bounds = ZIG_RULES["structural_boundaries"]
-    assert struct_bounds.search('var x: i32 = 0;')
-    assert struct_bounds.search('return 5;')
-    assert struct_bounds.search('defer file.close();')
-    assert struct_bounds.search('errdefer |err| log(err);')
-    assert struct_bounds.search('unreachable;')
-    assert struct_bounds.search('resume frame;')
-    assert struct_bounds.search('suspend {}')
-    assert struct_bounds.search('await p;')
-    assert struct_bounds.search('usingnamespace std;')
+    assert struct_bounds.search("var x: i32 = 0;")
+    assert struct_bounds.search("return 5;")
+    assert struct_bounds.search("defer file.close();")
+    assert struct_bounds.search("errdefer |err| log(err);")
+    assert struct_bounds.search("unreachable;")
+    assert struct_bounds.search("resume frame;")
+    assert struct_bounds.search("suspend {}")
+    assert struct_bounds.search("await p;")
+    assert struct_bounds.search("usingnamespace std;")
 
     # Negative (exact identifier escapes)
     assert not struct_bounds.search('const @"var" = 5;')
     assert not struct_bounds.search('const @"return" = 5;')
+
+
+def test_zig_return_not_counted_as_branch_regression():
+    """#2545: `return` must not phantom-count as a branch -- rust, zig's closest
+    sibling with the same error-propagation-via-return idiom, doesn't count it
+    either. Still tracked under structural_boundaries."""
+    branch = ZIG_RULES["branch"]
+    structural = ZIG_RULES["structural_boundaries"]
+
+    assert not branch.search("return x;"), "bare return must not count as branch"
+    assert not branch.search("fn f() i32 { return 1; }"), "return in a real function must not count as branch"
+    assert branch.search("if (x) return 1;"), "the real if must still count as branch"
+    assert len(branch.findall("if (x) return 1;")) == 1, "only the if should match, not the return"
+    assert structural.search("return x;"), "return must still be tracked via structural_boundaries"
+
+
+def test_zig_globals_anchor_bug_regression():
+    """#2651: `globals` rule anchored to column-0 to prevent function-local
+    declarations from being counted as globals."""
+    globals_rule = ZIG_RULES["globals"]
+
+    assert globals_rule.search("const MY_GLOBAL = 42;"), "true top-level const must count as global"
+    assert globals_rule.search("var global_state: i32 = 0;"), "true top-level var must count as global"
+
+    assert not globals_rule.search("    const local_var = 1;"), "indented const must NOT count as global"
+    assert not globals_rule.search("\tvar local_var: i32 = 0;"), "tab-indented var must NOT count as global"

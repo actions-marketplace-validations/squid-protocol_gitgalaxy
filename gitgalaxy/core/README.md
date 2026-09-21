@@ -34,9 +34,57 @@ This file categorizes different keyword terms into structural signature counts. 
 * **Fluid-State Language Switching:** Rather than failing on polyglot files, the engine dynamically swaps syntax registries mid-file. It uses scope-aware handshakes to isolate and parse embedded languages (e.g., evaluating SQL execution inside a Python string, or extracting JavaScript logic nested within HTML blocks) without losing context.
 * **AST-Free Cyclomatic Complexity:** Instead of compiling an Abstract Syntax Tree, this module counts control-flow branch signatures (conditionals, loops, switches) directly from the lexical stream as a fast proxy for cyclomatic complexity, in the same linear-time pass covered by the throughput benchmark above. It does not infer algorithmic (Big-O) complexity or recursion depth from indentation shape -- an earlier heuristic that attempted this was removed after proving unreliable in practice (whitespace geometry doesn't measure algorithmic complexity, and name-occurrence recursion detection false-positived on docstrings, comments, and logging calls).
 
+#### Proximity correlations (`spatial_correlation.py`) — the dampener/amplifier pairs
+
+After raw counting, six signal-pair correlations look at *where* hits sit relative to each
+other — within a character radius **and** (post-#346/#348) inside the same detected function —
+and tally the pairings in the per-file `mitigation_telemetry`. These were previously invisible
+outside the source (#2546 — the #1096 keyword-rosetta control corpus had to rediscover the flux
+weighting by micro-repro), so the full set is documented here.
+
+**A recorded count is a count (#2813, contract roadmap Phase 2 / decision D1).** The pairs
+used to add their weights into the recorded counts in place, so `state_mutation` in every
+recorder, golden master and corpus manifest was `raw + 2 × cascading`. They now write only
+the tally; the score layer (`signal_processor.py`, the ML feature frame, the statistical
+gates) reads the **weighted view** — `core.spatial_correlation.weighted_count()`, driven by
+the `PROXIMITY_WEIGHTS` table — which is exactly the figure the recorded count used to carry,
+so every risk score is unchanged by construction. The audit report shows the tally and the
+weighted figure side by side in "6. Contextual Mitigations & Amplifications"; the
+`file_data` / SARIF / SQLite / corpus numbers are the raw counts.
+
+| Pair (targets ← context) | Radius | Telemetry key (tally) | Weighted view = raw + … |
+|---|---|---|---|
+| `high_risk_execution` ← `safety` | 500 | `mitigated_danger` | −1 per mitigated hit (the "Silencer Region") |
+| `concurrency` ← `state_mutation` (unless `sync_locks` ≤300 away) | 150 | `amplified_race_conditions` | +5 per race-condition pairing |
+| `memory_alloc` ← `cleanup` | 800 | `mitigated_memory_allocs` | −1 per alloc with a same-function cleanup |
+| `memory_scraping` ← `exfiltration_camouflage` | 200 | `amplified_exfiltration` | +100 per confirmed pairing |
+| `state_mutation` ← `branch` | 150 | `amplified_cascading_flux` | **+2 per cascading hit → ×3 net** (the flux weighting, #2546) |
+
+The flux row deserves the detail: state mutated near control flow is deliberately weighted ×3
+(feeding `risk_state_flux` / cognitive-load scoring), scoped per mutation to a 150-char radius
+within the same function — **not** a blanket per-function toggle. Known amplifier FP: in
+languages whose branch rules don't shield string literals (#2535), a branch keyword inside a
+string creates phantom branch context and triples real nearby mutations in the weighted view —
+that fix belongs to #2535. Semantics are pinned by
+`tests/core_engine/test_spatial_correlation.py`'s flux micro-repros.
+
+Two same-shaped adjustments live outside this table and still edit a recorded value in place:
+the `rce_funnel` ×50 in `detector.py`'s `coding_analysis()` and the Active Hemorrhage
+(`sec_hardcoded_secrets` +50 per leak near a telemetry sink, tallied as `amplified_leaks`) in
+`galaxyscope.py`'s Phase 5.5.
+
 ### 5. `network_risk_sensor.py` (The Topology Mapper)
 **Role:** Dependency Graphing.
 Once files are structurally parsed, this module wires them together into a Directed Acyclic Graph (DAG) using their raw import statements. It executes PageRank mathematics to determine each file's absolute **Dependency Blast Radius**, identifies **Architectural Choke Points**, and classifies their **Ecosystem Role** (Producer vs. Consumer).
+
+### 5a. `mainframe_boundary.py` + `invocation_resolver.py` (The Mainframe Boundary, #3200/#3201)
+**Role:** The named call graph and dataset lineage, beside the dependency graph.
+The counted rules say *that* a COBOL program calls out and touches files (`ipc_rpc_bridges` → `arch_ipc`, `io` → `arch_io`); they cannot say *what*. `mainframe_boundary.py` extracts the names — COBOL `CALL`, CICS `LINK`/`XCTL PROGRAM(...)`, JCL `EXEC PGM=`, and `SELECT ... ASSIGN TO <ddname>` with the `OPEN` modes actually used — reading the **prism code stream**, so a commented-out `CALL` can never draw an edge. `invocation_resolver.py` then resolves those names across the whole repository and emits the `call`/`exec` rows of `edge_data`.
+
+Three properties worth knowing before extending either:
+* **A language opts in with a top-level `boundary_extraction` declaration**, never a key inside `rules` — `language_lens.py` re.compile()s every string value in `rules` (#2806). Dialects: `cobol`, `jcl`, and `csd` (the CICS transaction map, #3211-followup — `DEFINE TRANSACTION(...) PROGRAM(...)` decks plus the `EXEC CICS RETURN/START/RUN TRANSID(...)` in-source routing).
+* **Resolution is by PROGRAM-ID, nearest-wins.** That is deliberately *not* `network_risk_sensor.py`'s rule: an import names a file, a called program is chosen by library concatenation order. Both share one proximity definition (`path_proximity.py`), and they disagree about what a tie means — a call picks one, an import that is still ambiguous draws nothing (#3199). The import resolver additionally disqualifies a candidate that declares a PROGRAM-ID, which is exactly the file a `CALL` wants.
+* **These edges never enter the DAG.** PageRank, popularity, blast radius and every risk score are unaffected; only `edge_data` grows, under its own `edge_kind`.
 
 ### 6. `spatial_mapper.py` (The Positioning Engine)
 **Role:** 3D Geometric Resolution.

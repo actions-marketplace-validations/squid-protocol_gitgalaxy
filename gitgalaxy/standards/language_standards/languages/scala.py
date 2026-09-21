@@ -43,7 +43,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch: decisions that split flow. Includes Scala 3 if-then and match-case.
         "branch": re.compile(
-            r"\b(if|then|else|match|case|try|catch|finally|for|while|do|throw|yield)\b|&&|\|\|",
+            r"\b(if|else|match|case|for|while|do|yield)\b|&&|\|\|",
             re.I,
         ),
         # 2. args: Parameters / Coupling. Captures parameters in method signatures and lambdas.
@@ -73,7 +73,7 @@ DEFINITION: dict[str, Any] = {
         ),
         # 3. linear: Sequential I/O & Network Boundaries. Structural boundaries. EXCLUDES access modifiers and val/var.
         "structural_boundaries": re.compile(
-            r"\b(lazy|type|opaque|class|trait|object|enum|extension|import|export|return|extends|with|derives|new|given|using)\b"
+            r"\b(lazy|type|opaque|class|trait|object|enum|extension|import|export|return|extends|with|derives|new|given|using|then|try|catch|finally|throw)\b"
         ),
         # 4. func_start: Executable Logic Anchors. Anchors executable logic. EXCLUDES structural headers.
         "func_start": re.compile(
@@ -118,9 +118,8 @@ DEFINITION: dict[str, Any] = {
         ),
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
         # 6. safety: Defensive Programming. Monadic error handling (Option/Try) and assertions.
-        "safety": re.compile(
-            r"\b(Option|Some|None|Try|Success|Failure|Either|Left|Right|sealed|require|assert|assume)\b|\|\s*Null\b"
-        ),
+        # C1: constructors/types/sealed/| Null invisible. Try kept: guarded-region opener (immutability_locks dual pre-exists — doc-noted).
+        "safety": re.compile(r"\b(require|assert|assume)\b|\bTry\s*[({]"),
         # 7. safety_neg: Safety Bypasses. Actively bypassing type safety (asInstanceOf, .get).
         # BUG FIX: `@unchecked` is `@`-prefixed -- the shared leading
         # \b could only fire when a word char immediately preceded the
@@ -130,7 +129,10 @@ DEFINITION: dict[str, Any] = {
         # leading \b fires correctly.)
         "safety_bypasses": re.compile(r"\b(?:null|asInstanceOf|isInstanceOf|Any|AnyRef)\b|\.get\b(?!Class)|@unchecked"),
         # 8. danger: High-Risk Execution. Process killers and catastrophic exit commands.
-        "high_risk_execution": re.compile(r"\b(System\.exit|sys\.exit|Thread\.stop|Runtime\.getRuntime\.exec)\b"),
+        # #2878 contract C1b: the parenthesised getRuntime() spelling and sys.process join.
+        "high_risk_execution": re.compile(
+            r"\b(System\.exit|sys\.exit|Thread\.stop|Runtime\.getRuntime(?:\(\))?\.exec|sys\.process)\b"
+        ),
         # 9. io: I/O & Network Boundaries. Filesystem, Network, and Http Clients (Includes CERN triggers).
         "io": re.compile(
             r"\b(Source|java\.io|java\.nio|Files\.|Socket|ServerSocket|sttp|Http|WSClient|HTLoad|HTGet|ENQUIRE)\b"
@@ -142,7 +144,19 @@ DEFINITION: dict[str, Any] = {
         ),
         # 11. flux: State Mutation. State mutation (var and mutable collection updates).
         "state_mutation": re.compile(
-            r"\b(var|scala\.collection\.mutable|AtomicReference|AtomicInteger)\b|^[ \t]*[a-zA-Z_]\w*[ \t]*=",
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `var x = v` declares and `mutable`/`Atomic*` name mutable state (corollaries
+            # 1 and 2). `=>` (case / lambda) and `==` are excluded; a trailing-comma line
+            # is a named argument.
+            r"(?:^|[;{}])[ \t]*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\([^()\n]{0,80}\))*"
+            r"[ \t]*(?:[-+*/%])?=(?![=>])(?![^\n(]{0,300},[ \t]*$)"
+            r"|\.(?:update|append|addOne|prepend|remove|clear|put|getAndSet|compareAndSet|incrementAndGet|decrementAndGet|set)\s*\(",
             re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails) Commented out structural code or logic trails.
@@ -150,7 +164,11 @@ DEFINITION: dict[str, Any] = {
             r"//[ \t]*(?:def|val|var|class|object|trait|if|match|println|import)\b|/\*[ \t]*(?:def|val|class|object)"
         ),
         # 13. doc: Structured Documentation. Scaladoc documentation (/**) and annotations.
-        "doc": re.compile(r"/\*\*|@param|@return|@tparam|@throws|@see|@note"),
+        # BUG FIX #2672: pair `/**` with its closing `*/` into one bounded
+        # (0,15000 chars) non-greedy span so a Scaladoc block counts once,
+        # not once per tag inside it (the #2658 shape). Bare tags stay last
+        # so a tag outside any doc block still counts.
+        "doc": re.compile(r"/\*\*[\s\S]{0,15000}?\*/|@param|@return|@tparam|@throws|@see|@note"),
         # 14. test: Testing & Assertions. ScalaTest, MUnit, and standard expect/verify markers.
         # BUG FIX: `test\s*\(` ends on `(` (non-word), so the shared
         # trailing \b could never fire. Never matched.
@@ -190,7 +208,9 @@ DEFINITION: dict[str, Any] = {
             r"\b(implicit|given|using|inline|extension|TypeTag|ClassTag|scala\.reflect|Typeable|Dynamic|summon|derives)\b"
         ),
         # 24. import (Dependency Inclusions)
-        "import": re.compile(r"\b(?:import|export)\s+[\w.{}\s,]+", re.M),
+        # #2875 contract C2: one statement is one hit -- the old class included `\s`, so
+        # a block of eight import lines (and the def after them) was ONE match.
+        "import": re.compile(r"(?:^|[;{])[ \t]*(?:import|export)[ \t]+[\w.*]+(?:[ \t]*\{[^{}\n]*\})?", re.M),
         "_dependency_capture": re.compile(
             # =====================================================================
             # [ FUTURE LLM CONTEXT: THE DYNAMIC EXECUTION SHIFT (SCALA) ]
@@ -237,9 +257,10 @@ DEFINITION: dict[str, Any] = {
         # Javadoc, and how java's own ownership rule already handles
         # it) is `@author Jane Doe`, with no colon at all. The colon
         # requirement meant the real Scaladoc tag never matched.
+        # #2882 contract: C2 `Copyright:` out; a person's name is not a rule (C1)
         "ownership": re.compile(
-            r"@author\s+([^\n]+)|(?:Created by|Maintainer|Copyright|Tim Berners-Lee):\s+([^\n]+)",
-            re.I,
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt: The Promise. Future work markers.
@@ -316,9 +337,13 @@ DEFINITION: dict[str, Any] = {
         # 44. sync_locks (Resource Management & Stability) Coordinated threading.
         "sync_locks": re.compile(r"\b(synchronized|volatile|Semaphore|Mutex|lock|unlock)\b"),
         # 45. immutability_locks (Immutability Constraints) Immutability.
-        "immutability_locks": re.compile(r"\b(val|final|sealed|readonly|Object\.freeze|immutable)\b"),
+        "immutability_locks": re.compile(
+            r"\bfinal[ \t]+val\b|\bimmutable\.[A-Z]\w*"
+        ),  # #2772 C1: `val` is scala's ordinary binding and `sealed` locks a hierarchy, not data; `final val` and choosing collection.immutable are the added locks
         # 46. cleanup (Resource Cleanup / Teardown) Resource release.
-        "cleanup": re.compile(r"\b(dispose|close|cleanup|cancel|free|bracket|finally|onException)\b"),
+        "cleanup": re.compile(
+            r"\b(?<!def )(?:dispose|close|cleanup|cancel|free)\b[ \t]*\(|\.(?:dispose|close|cleanup|cancel|free)\b|\b(?:bracket|finally|onException)\b"
+        ),  # #2888 C1/C3: `def close():` declares and a token in a log string is a name; call or receiver form only
         # 47. encapsulation (Encapsulation / Access Modifiers)
         "encapsulation": re.compile(r"\b(private|protected)\b|private\[[^\]]+\]"),
         # 48. listeners (Event Listeners / Observers) Waiting for state broadcasts.
@@ -329,6 +354,14 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"\b(ignore|pending|skip|xit|xdescribe)\b"),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Scala Specifics) ---
+        # auth_middleware (#3004): Play/Silhouette's secured action (anchored to
+        # use, never a bare mention), Spring's annotation on scala services, and
+        # the credential check.
+        "auth_middleware": re.compile(
+            r"\bSecuredAction[ \t]*[({.]"
+            r"|@PreAuthorize\("
+            r"|\bcheckPassword\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(io\.circe|decode\[|asJson|Json\.parse|Json\.toJson|upickle\.default)\b"
         ),
@@ -343,5 +376,8 @@ DEFINITION: dict[str, Any] = {
         # BUG FIX: `Process\s*\(` ends on `(` -- same bug. Never
         # matched the common `Process("cmd")` form (a quote follows).
         "ipc_rpc_bridges": re.compile(r"\b(?:ActorSystem|ActorRef|sys\.process\._|Future\.apply)\b|\bProcess\s*\("),
+        # system_config_mutation (#3084): contract-level absence. JVM app layer;
+        # same reasoning as java -- no host-config primitive of its own.
+        "system_config_mutation": None,
     },
 }

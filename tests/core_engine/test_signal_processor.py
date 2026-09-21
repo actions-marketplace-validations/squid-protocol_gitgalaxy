@@ -125,9 +125,7 @@ def test_signal_processor_empty_tiny_file_scores_true_zero(processor):
     zero signals was still forced to 5.0.
     """
     meta, sig = create_synthetic_star(processor, "blank_init", 2)
-    meta["lang_id"] = "rust"  # tier1 (irc=0) -- tier2/3 languages carry a nonzero
-    # irc floor that keeps total_density above 0 even with no raw signals, so this
-    # carve-out can only ever fire for tier1 languages. See _get_tier().
+    meta["lang_id"] = "rust"  # zero strictness gaps (irc=0); see analysis_lens.LANGUAGE_STRICTNESS
     res = processor.calculate_risk_vector(meta, sig)
 
     idx_cog = processor.RISK_SCHEMA.index("cognitive_load")
@@ -165,17 +163,45 @@ def test_signal_processor_encapsulation_ratio_all_global_still_zero(processor):
     assert res["telemetry"]["encapsulation_ratio"] == 0.0
 
 
-def test_signal_processor_small_file_floor_still_applies(processor):
+def test_signal_processor_small_file_scores_on_counts(processor):
     """
-    Proves the small-file 5.0 floor is untouched for files under 15 LOC that
-    DO have some signal -- only the provably-empty <=2 LOC case should get
-    the true-zero carve-out.
+    #2655: the old flat 5.0 small-file floor (`loc < 15`) is gone. A file below
+    the evidence-mass floor is scored on its COUNTS, as if it were
+    EVIDENCE_MASS_FLOOR lines long -- so a 10-LOC file with 3 branches must score
+    exactly what a 49-LOC file with 3 branches scores, and exactly what a
+    50-LOC file with 3 branches scores (the floor is continuous, not a cliff).
     """
-    meta, sig = create_synthetic_star(processor, "small_but_real", 10, {"branch": 3})
-    res = processor.calculate_risk_vector(meta, sig)
-
     idx_cog = processor.RISK_SCHEMA.index("cognitive_load")
-    assert res["risk_vector"][idx_cog] == 5.0, "Small file with real signal should still hit the 5.0 floor!"
+    scores = {}
+    for loc in (3, 10, 14, 15, 16, 49, 50):
+        meta, sig = create_synthetic_star(processor, f"small_{loc}", loc, {"branch": 3})
+        scores[loc] = processor.calculate_risk_vector(meta, sig)["risk_vector"][idx_cog]
+
+    assert scores[10] != 5.0 or scores[49] == 5.0, "The flat 5.0 floor should no longer exist"
+    assert len(set(scores.values())) == 1, f"Identical signals must score identically below the floor: {scores}"
+    assert 0.0 < scores[10] < 20.0, f"3 branches per 50 lines is low, not zero and not red: {scores[10]}"
+
+    # Flag + mass are exposed so consumers can tell a count-regime score apart.
+    meta, sig = create_synthetic_star(processor, "flagged", 10, {"branch": 3})
+    tel = processor.calculate_risk_vector(meta, sig)["telemetry"]
+    assert tel["mass_floored"] is True
+    assert tel["evidence_mass"] == processor.EVIDENCE_MASS_FLOOR
+    meta, sig = create_synthetic_star(processor, "unflagged", 120, {"branch": 3})
+    tel = processor.calculate_risk_vector(meta, sig)["telemetry"]
+    assert tel["mass_floored"] is False
+    assert tel["evidence_mass"] == 120.0
+
+
+def test_signal_processor_branchless_file_zero_cog_at_any_length(processor):
+    """
+    #2655: "no branches, no cognitive load" used to apply only above 50 LOC, so a
+    branchless file with state mutation scored ~6 at 50 lines and 0.0 at 51. The
+    rule now applies at every length.
+    """
+    idx_cog = processor.RISK_SCHEMA.index("cognitive_load")
+    for loc in (2, 10, 30, 50, 51, 200):
+        meta, sig = create_synthetic_star(processor, f"flux_only_{loc}", loc, {"state_mutation": 6, "branch": 0})
+        assert processor.calculate_risk_vector(meta, sig)["risk_vector"][idx_cog] == 0.0, loc
 
 
 # ==============================================================================
@@ -352,8 +378,70 @@ def test_signal_processor_aggregations(processor):
     assert isinstance(summary, dict)
 
     forensics = processor.generate_forensic_report(parsed)
-    assert "cumulative_risk" in forensics, "Forensic report missing cumulative risk!"
-    assert "highest" in forensics["cumulative_risk"], "Forensic report missing highest risk array!"
+    # #3112: the report no longer carries a "cumulative_risk" composite -- it
+    # was a unitless sum over 13 independently scaled vectors, ~31% of which
+    # was ceiling-defaulted or ablated to zero. file_impact is the unit-honest
+    # ranking that replaced it; assert the replacement exists rather than just
+    # asserting the absence, so this test still pins a real contract.
+    assert "cumulative_risk" not in forensics, "The cumulative-risk composite was removed in #3112"
+    assert "file_impact" in forensics, "Forensic report missing the file_impact ranking!"
+
+
+def test_ecosystem_baseline_is_the_composition_repo_archetype(processor):
+    """
+    #1159: the retired repo K-Means model ran before file archetypes were
+    assigned, so it scored every repo as an all-zero vector ("Cluster 3").
+    The baseline now reports the composition repo archetype and its fit z,
+    and no longer writes per-file cluster telemetry.
+    """
+    stars = []
+    for i in range(3):
+        m, sig = create_synthetic_star(processor, f"f{i}", 100, {"branch": 5})
+        out = processor.calculate_risk_vector(m, sig)
+        m.update(telemetry=out["telemetry"], risk_vector=out["risk_vector"], file_impact=out["file_impact"])
+        stars.append(m)
+
+    summary = processor.summarize_galaxy_metrics(stars, [])
+
+    inner = summary["summary"]
+    assert inner["repo_composition_archetype"]
+    assert summary["repo_macro_species"] == {
+        "name": inner["repo_composition_archetype"],
+        "z_score": inner["repo_composition_z"],
+    }
+    for m in stars:
+        assert "ecosystem_baseline_cluster" not in m["telemetry"]
+        assert "dist_to_0" not in m["telemetry"]
+
+
+def test_systemic_bottlenecks_rank_only_computed_metrics(processor):
+    """
+    #3027: each bottleneck ranking multiplies one centrality metric by a risk.
+    A file whose metric was not computed (None -- a centrality past its work
+    budget, or a failed computation) must not enter that ranking; read as
+    0.0 it used to fill every list with zero-score files picked by path order.
+    """
+    files = []
+    for name, net in (
+        ("computed", {"normalized_blast_radius": 2.0, "betweenness_score": 0.3, "closeness_score": 0.4}),
+        ("zero_dep", {"normalized_blast_radius": 1.0, "betweenness_score": None, "closeness_score": None}),
+    ):
+        meta, sig = create_synthetic_star(processor, name, 100, {"branch": 10, "state_mutation": 20})
+        scored = processor.calculate_risk_vector(meta, sig)
+        meta["telemetry"] = scored["telemetry"]
+        meta["risk_vector"] = scored["risk_vector"]
+        meta["file_impact"] = scored["file_impact"]
+        meta["telemetry"]["network_metrics"] = net
+        files.append(meta)
+
+    bottlenecks = processor.generate_forensic_report(files)["systemic_bottlenecks"]
+
+    def paths(key):
+        return [entry["path"] for entry in bottlenecks[key]]
+
+    assert paths("cascading_state_mutation") == ["src/computed.py"]
+    assert paths("fragile_dependency_chain") == ["src/computed.py"]
+    assert sorted(paths("undocumented_critical_path")) == ["src/computed.py", "src/zero_dep.py"]
 
 
 # ==============================================================================
@@ -403,6 +491,40 @@ def test_signal_processor_doc_and_secrets_bypass(processor):
     assert 100.0 in res_sec["risk_vector"], "Critical Leak failed to spike the Secrets Risk to 100%!"
 
 
+def test_signal_processor_doc_language_secrets_risk_not_blanket_zeroed(processor):
+    """
+    #2978: the Static Literature Override zeroes the whole risk_vector for
+    doc_languages (markdown/plaintext/rst/text) except churn/documentation --
+    but a hardcoded credential in a README or plaintext config is a real leak.
+    secrets_risk must be carved out of the blanket zero and reflect a real
+    sec_hardcoded_secrets hit the same way it does for non-doc languages,
+    instead of silently reading 0 no matter how many leaks are present.
+    """
+    idx_secrets = processor.RISK_SCHEMA.index("secrets_risk")
+
+    meta_clean, sig_clean = create_synthetic_star(processor, "readme_clean", 50)
+    meta_clean["lang_id"] = "markdown"
+    res_clean = processor.calculate_risk_vector(meta_clean, sig_clean)
+    assert res_clean["risk_vector"][idx_secrets] == 0.0, "Clean markdown should have zero secrets risk!"
+
+    meta_leaky, sig_leaky = create_synthetic_star(
+        processor, "readme_leaky", 50, {"sec_hardcoded_secrets": 5, "debug_prints": 3}
+    )
+    meta_leaky["lang_id"] = "markdown"
+    res_leaky = processor.calculate_risk_vector(meta_leaky, sig_leaky)
+    assert res_leaky["risk_vector"][idx_secrets] > 0.0, "Markdown with a real leak must not read 0 secrets risk!"
+
+    meta_plain, sig_plain = create_synthetic_star(processor, "notes_leaky", 50, {"sec_hardcoded_secrets": 5})
+    meta_plain["lang_id"] = "plaintext"
+    res_plain = processor.calculate_risk_vector(meta_plain, sig_plain)
+    assert res_plain["risk_vector"][idx_secrets] > 0.0, "Plaintext with a real leak must not read 0 secrets risk!"
+
+    # The rest of the doc_languages bypass must stay intact -- this is a narrow
+    # carve-out, not a reversion of the override.
+    idx_cog = processor.RISK_SCHEMA.index("cognitive_load")
+    assert res_leaky["risk_vector"][idx_cog] == 0.0, "Cognitive load must stay bypassed for doc languages!"
+
+
 def test_signal_processor_doc_and_secrets_churn_survives_normalization(processor):
     """
     Regression test for #245: documentation and critical-leak overrides must
@@ -445,6 +567,78 @@ def test_signal_processor_doc_and_secrets_churn_survives_normalization(processor
     assert meta_sec["risk_vector"][churn_idx] > 0.0, (
         "Critical-secret-leak file's churn was silently zeroed by global normalization!"
     )
+
+
+# ==============================================================================
+# TEST 12.5: RAW COUNTS ARE COUNTS (#2813, contract roadmap Phase 2 / D1)
+# The proximity weights moved out of the recorded counts into the per-file
+# tally; the score layer must reproduce the old figures from raw + tally.
+# ==============================================================================
+def test_signal_processor_weighted_view_is_score_neutral(processor):
+    """A file scored from raw counts + the proximity tally must produce byte-identical
+    risk_vector and file_impact to the same file scored from the old in-place
+    weighted counts -- while hit_vector now carries the raw counts and the telemetry
+    carries the tally and the weighted figures under their own key."""
+    raw = {
+        "branch": 6,
+        "state_mutation": 3,
+        "high_risk_execution": 2,
+        "concurrency": 1,
+        "memory_alloc": 2,
+        "safety": 1,
+        "func_start": 2,
+    }
+    tally = {
+        "amplified_cascading_flux": 2,  # x3 on two of the three mutations
+        "mitigated_danger": 1,  # one of the two danger hits silenced
+        "amplified_race_conditions": 1,  # +5
+        "mitigated_memory_allocs": 1,  # one alloc cleaned up
+    }
+    old_weighted = dict(raw)
+    old_weighted["state_mutation"] = 3 + 2 * 2
+    old_weighted["high_risk_execution"] = 2 - 1
+    old_weighted["concurrency"] = 1 + 5
+    old_weighted["memory_alloc"] = 2 - 1
+
+    meta_new, sig_new = create_synthetic_star(processor, "raw_counts", 120, raw)
+    meta_new["mitigation_telemetry"] = tally
+    meta_old, sig_old = create_synthetic_star(processor, "raw_counts", 120, old_weighted)
+
+    res_new = processor.calculate_risk_vector(meta_new, sig_new)
+    res_old = processor.calculate_risk_vector(meta_old, sig_old)
+
+    assert res_new["risk_vector"] == res_old["risk_vector"], "Every risk score must be unchanged by construction"
+    assert res_new["file_impact"] == res_old["file_impact"], "Structural magnitude reads the weighted flux/concurrency"
+    assert res_new["telemetry"]["archetype_fingerprint"] == res_old["telemetry"]["archetype_fingerprint"]
+
+    idx = {k: processor.SIGNAL_SCHEMA.index(k) for k in ("state_mutation", "high_risk_execution", "concurrency")}
+    assert res_new["hit_vector"][idx["state_mutation"]] == 3, "hit_vector carries the raw count"
+    assert res_new["hit_vector"][idx["high_risk_execution"]] == 2
+    assert res_new["hit_vector"][idx["concurrency"]] == 1
+    assert res_old["hit_vector"][idx["state_mutation"]] == 7, "the old star really was weighted"
+
+    tel = res_new["telemetry"]
+    assert tel["mitigation_telemetry"] == tally, "the detector's tally reaches the recorders"
+    assert tel["weighted_signals"] == {
+        "state_mutation": 7,
+        "high_risk_execution": 1,
+        "concurrency": 6,
+        "memory_alloc": 1,
+    }, "the weighted figures the counts used to carry, under their own key"
+    assert res_old["telemetry"]["weighted_signals"] == {}, "no tally, nothing weighted"
+
+
+def test_signal_processor_weighted_view_tolerates_missing_or_list_tally(processor):
+    """Minified / inert files never ran the correlation pass; a legacy list in the slot
+    (the galaxyscope:ignore suppressions) must not break scoring either."""
+    meta, sig = create_synthetic_star(processor, "no_tally", 50, {"state_mutation": 4, "branch": 2})
+    res_plain = processor.calculate_risk_vector(meta, sig)
+
+    meta["mitigation_telemetry"] = ["state_flux"]
+    res_list = processor.calculate_risk_vector(meta, sig)
+
+    assert res_plain["risk_vector"] == res_list["risk_vector"]
+    assert res_plain["telemetry"]["weighted_signals"] == {}
 
 
 # ==============================================================================
@@ -524,20 +718,52 @@ def test_signal_processor_ai_topology(processor):
     assert "Cognitive Choke Point" in insights, "Failed to detect high Betweenness!"
 
 
+def test_signal_processor_ai_topology_skips_uncomputed_metrics(processor):
+    """
+    #3027: a None blast radius / betweenness means "not computed" (past its
+    work budget, or a failed computation). The posture insights that need them are skipped --
+    a placeholder 0.0 used to produce a false "Containment (Low Risk)" verdict.
+    """
+    m1, sig1 = create_synthetic_star(processor, "orchestrator", 100, {"llm_orchestrator": 10})
+    tel1 = processor.calculate_risk_vector(m1, sig1)
+    m1["telemetry"] = tel1["telemetry"]
+    m1["hit_vector"] = tel1["hit_vector"]
+    m1["telemetry"]["network_metrics"] = {
+        "pagerank_score": None,
+        "normalized_blast_radius": None,
+        "betweenness_score": None,
+        "ecosystem_role": "Core Hub",
+    }
+
+    insights = " ".join(processor.summarize_galaxy_metrics([m1], [])["ai_topology"]["insights"])
+
+    assert "Structural Posture" in insights  # ecosystem_role is exact in every mode
+    assert "Containment" not in insights
+    assert "catastrophically" not in insights
+    assert "Cognitive Choke Point" not in insights
+
+
 # ==============================================================================
 # TEST 17: STRUCTURAL METRICS (Graveyard & Spec Match)
 # ==============================================================================
 def test_signal_processor_structural_metrics(processor):
-    """Ensures Graveyard and Spec Match exposures calculate correctly."""
+    """Ensures Graveyard and Spec Match exposures calculate correctly.
+
+    #3111: spec alignment is now opt-in and OFF by default, so this test --
+    which exercises the FORMULA, not the default -- builds its own processor
+    with the vector enabled. The default-off behaviour is asserted separately
+    in tests/tools_recorders/test_report_surface_3111_3114.py.
+    """
+    spec_processor = SignalProcessor(aperture_config={"SPEC_ALIGNMENT": True})
 
     # Graveyard (High dead code)
     m_grave, sig_grave = create_synthetic_star(processor, "dead_code", 100, {"dead_code": 80})
 
     # Spec Match (0 specs for 10 functions = 100% risk)
-    m_spec, sig_spec = create_synthetic_star(processor, "spec", 100, {"func_start": 10, "spec_exposure": 0})
+    m_spec, sig_spec = create_synthetic_star(spec_processor, "spec", 100, {"func_start": 10, "spec_exposure": 0})
 
     r_grave = processor.calculate_risk_vector(m_grave, sig_grave)
-    r_spec = processor.calculate_risk_vector(m_spec, sig_spec)
+    r_spec = spec_processor.calculate_risk_vector(m_spec, sig_spec)
 
     idx_grave = processor.RISK_SCHEMA.index("dead_code")
     idx_spec = processor.RISK_SCHEMA.index("spec_match")
@@ -545,6 +771,14 @@ def test_signal_processor_structural_metrics(processor):
     assert r_grave["risk_vector"][idx_grave] > 50.0, "Graveyard risk failed to register!"
     assert r_spec["risk_vector"][idx_spec] == 100.0, (
         "Spec match risk failed to register maximum exposure on undocumented functions!"
+    )
+
+    # And the default really is off -- the same inputs measure nothing.
+    assert (
+        processor.calculate_risk_vector(*create_synthetic_star(processor, "spec", 100, {"func_start": 10}))[
+            "risk_vector"
+        ][idx_spec]
+        == 0.0
     )
 
 
@@ -562,7 +796,7 @@ def test_signal_processor_design_slop(processor):
         processor,
         "sloppy_debt",
         100,
-        {"planned_debt": 10, "orphaned_logic": 5, "duplicate_logic": 2},
+        {"planned_debt": 10, "unreferenced_by_name": 5, "duplicate_logic": 2},
     )
 
     r_clean = processor.calculate_risk_vector(m_clean, sig_clean)
@@ -739,9 +973,14 @@ def test_signal_processor_extension_deception(processor):
 # ==============================================================================
 def test_signal_processor_catastrophic_fallbacks(processor):
     """Ensures the physics engine survives catastrophic type errors and empty data sets."""
-    # 1. Force a catastrophic math crash (string instead of int)
+    # 1. Force a catastrophic crash early in per-file processing (before the risk
+    # math), so the fallback must zero the risk vector. A str `functions` breaks
+    # the function-classification loop (iterating chars, `.get` on a str). coding_loc
+    # alone no longer crashes here since file archetype classification moved to
+    # record_keeper.
     m_crash, sig_crash = create_synthetic_star(processor, "crash", 100)
     m_crash["coding_loc"] = "THIS_WILL_BREAK_MATH"
+    m_crash["functions"] = "THIS_WILL_BREAK_MATH"
 
     r_crash = processor.calculate_risk_vector(m_crash, sig_crash)
 
@@ -1024,26 +1263,87 @@ def test_signal_processor_load_bearer_penalty(processor):
 
 
 # ==============================================================================
-# TEST 40: OPAQUE EXECUTION RISK (Documentation Risk)
+# TEST 40: DOCUMENTATION COVERAGE RATIO (#2908 Phase 3)
 # ==============================================================================
-def test_signal_processor_opaque_execution_risk(processor):
-    """Proves that heavy-impact functions lacking docstrings spike documentation risk."""
-    # 1. High-impact function WITH a docstring
-    m_doc, sig_doc = create_synthetic_star(processor, "documented_heavy", 100, {"doc": 10})
-    m_doc["functions"] = [{"name": "heavy_func", "loc": 50, "impact": 60.0, "docstring": True}]
-
-    # 2. High-impact function WITHOUT a docstring
-    m_blind, sig_blind = create_synthetic_star(processor, "blind_heavy", 100, {"doc": 10})
-    m_blind["functions"] = [{"name": "heavy_func", "loc": 50, "impact": 60.0, "docstring": False}]
-
-    r_doc = processor.calculate_risk_vector(m_doc, sig_doc)
-    r_blind = processor.calculate_risk_vector(m_blind, sig_blind)
-
+def test_signal_processor_documentation_coverage_ratio(processor):
+    """The per-unit contract (docs/risk_documentation_contract.md §1) through the
+    full calculate_risk_vector path: an undocumented unit exposes its weight, a
+    documented one exposes nothing, and the score is their ratio -- the old
+    opaque-execution/impact term is gone (impact ranks the hitlist, D1)."""
     idx_doc = processor.RISK_SCHEMA.index("documentation")
 
-    assert r_blind["risk_vector"][idx_doc] > r_doc["risk_vector"][idx_doc], (
-        "Opaque execution risk failed to penalize undocumented heavy functions!"
-    )
+    def score(functions):
+        m, sig = create_synthetic_star(processor, "units", 100, {"doc": 10})
+        m["functions"] = functions
+        return processor.calculate_risk_vector(m, sig)["risk_vector"][idx_doc]
+
+    unit = {"name": "f", "loc": 50, "impact": 60.0, "hit_vector": {}}
+    documented = score([{**unit, "is_public": True, "is_documented": True}])
+    blind = score([{**unit, "is_public": True, "is_documented": False}])
+    assert blind > documented, "An undocumented public unit must outscore a documented one!"
+    assert blind == 100.0 and documented == 0.0, "One-unit files read the pure ratio (D5: no damping)"
+
+
+def test_signal_processor_documentation_acceptance_pins(processor):
+    """The #2908 acceptance table, pinned exactly: the rosetta a/b/c shape (3 public
+    units, 0 documented) reads 100; the main shape (4 public units, `entry`
+    documented) reads 75; the same file at 0 public reads the unweighted ratio;
+    no units emits 0.0 (n/a is the reporting layer's inference, D6); reflection
+    raises the weight of ITS unit (#2719)."""
+    abc = [{"name": n, "is_public": True, "is_documented": False, "hit_vector": {}} for n in ("a", "b", "c")]
+    assert processor._calc_documentation(abc) == 100.0
+
+    main = [
+        {"name": "entry", "is_public": True, "is_documented": True, "hit_vector": {}},
+        *({"name": n, "is_public": True, "is_documented": False, "hit_vector": {}} for n in ("a", "b", "c")),
+    ]
+    assert processor._calc_documentation(main) == 75.0
+
+    # The api-contract split surfaced on purpose: entry not in the name set -> 6/7.
+    main_entry_private = [dict(u, is_public=(u["name"] != "entry")) for u in main]
+    assert processor._calc_documentation(main_entry_private) == pytest.approx(100.0 * 6.0 / 7.0)
+
+    # Phase-2 amendment: mains with units_public=0 read the unweighted ratio.
+    unweighted = [dict(u, is_public=False) for u in main]
+    assert processor._calc_documentation(unweighted) == 75.0
+
+    assert processor._calc_documentation([]) == 0.0
+
+    # The slicer's synthetic buckets are not units (#2691/#2792): a file whose
+    # "functions" are all buckets is the n/a class, not 100 -- sqlite's
+    # CREATE_Statement buckets put a/b/c at 100 until this filter.
+    buckets = [
+        {
+            "name": "CREATE_Statement",
+            "is_public": False,
+            "is_documented": False,
+            "hit_vector": {},
+            "is_synthetic_slice": True,
+        },
+        {
+            "name": "__global_context__",
+            "is_public": False,
+            "is_documented": False,
+            "hit_vector": {},
+            "is_synthetic_slice": True,
+        },
+    ]
+    assert processor._calc_documentation(buckets) == 0.0
+    assert processor._calc_documentation(buckets + abc) == 100.0
+
+    reflective = [
+        {"name": "static", "is_public": False, "is_documented": False, "hit_vector": {}},
+        {
+            "name": "dynamic",
+            "is_public": False,
+            "is_documented": False,
+            "hit_vector": {"reflection_metaprogramming": 3},
+        },
+    ]
+    # weights 1 and 4, both exposed -> still 100; document the dynamic one -> 1/5.
+    assert processor._calc_documentation(reflective) == 100.0
+    reflective[1]["is_documented"] = True
+    assert processor._calc_documentation(reflective) == 100.0 * (1.0 / 5.0)
 
 
 # ==============================================================================
@@ -1059,7 +1359,7 @@ def test_signal_processor_tech_debt_slop(processor):
         processor,
         "fragile_slop",
         500,
-        {"fragile_debt": 2, "orphaned_logic": 2, "duplicate_logic": 1},
+        {"fragile_debt": 2, "unreferenced_by_name": 2, "duplicate_logic": 1},
     )
 
     r_debt = processor.calculate_risk_vector(m_debt, sig_debt)
@@ -1160,16 +1460,21 @@ def test_signal_processor_darkness_ratio(processor):
 # ==============================================================================
 # TEST 47: TIER 3 LANGUAGE FALLBACK
 # ==============================================================================
-def test_signal_processor_tier_3_language(processor):
-    """Ensures esoteric/unstructured languages trigger Tier 3 physics modifiers."""
-    m_t3, sig_t3 = create_synthetic_star(processor, "esoteric", 100, {"branch": 20})
-    # "haskell" is not in the Tier 1 or Tier 2 explicit sets
-    m_t3["lang_id"] = "haskell"
-
-    r_t3 = processor.calculate_risk_vector(m_t3, sig_t3)
-
-    # If it didn't crash, the _get_tier fallback successfully returned "tier3" and pulled the correct physics vars
-    assert r_t3 is not None, "Tier 3 language fallback crashed the physics engine!"
+def test_signal_processor_unknown_language_gets_no_language_term(processor):
+    """#2718: an unknown language is scored with NO language-level correction (irc 0,
+    ot 1.0, fidelity 1.0) -- the opposite of the old fall-through to the harshest tier.
+    haskell, which used to land there for not being in a hand list, resolves to its
+    own strictness row (all four columns True) and the same zero irc."""
+    for lang in ("haskell", "no-such-language"):
+        m, sig = create_synthetic_star(processor, "esoteric", 100, {"branch": 20})
+        m["lang_id"] = lang
+        assert processor.calculate_risk_vector(m, sig) is not None
+        irc, ot, fid = processor._language_constants(lang)
+        assert (irc, ot) == (0, 1.0), lang
+        if lang == "no-such-language":
+            # nothing measured -> nothing scaled; haskell, by contrast, carries the
+            # fidelity the corpus measured for its own rules (safety over-fires: 0.67)
+            assert all(v == 1.0 for v in fid.values()), lang
 
 
 # ==============================================================================
@@ -1461,8 +1766,11 @@ def test_signal_processor_ecosystem_native_match_is_neutral(processor):
 # The pre-trained archetype models (function: 62-dim, file: 115-dim,
 # per-language: 74-dim) carry no feature-name metadata and no training script
 # lives in this repo, while the live feature vectors are 5-dim (function) and
-# 83-dim (file). They have never matched, and the old distance loops silently
-# truncated to the shorter sequence -- producing confidently-wrong labels.
+# 83-dim (file) -- 84 candidate features since #3084's system_config_mutation
+# append, but the self-describing brains keep reading their own recorded 83
+# until the owed retrain. They have never matched, and the old distance loops
+# silently truncated to the shorter sequence -- producing confidently-wrong
+# labels.
 # These tests pin the loud-failure guard: a mismatch must yield "Unclassified"
 # (plus one warning per vector/centroid length pair), never a truncated label.
 
@@ -1492,105 +1800,340 @@ def test_classify_archetype_matching_dims_classifies_normally(processor):
     assert set(fingerprint) == {"cluster_near", "cluster_far"}
 
 
-def test_function_archetype_unclassified_when_model_dims_mismatch(processor, caplog):
+def _five_geometry_model(archetypes, names):
+    """A minimal new-contract function model over the 5 geometry features only
+    (no DNA densities, so hit_vector is irrelevant). Used to exercise the
+    classifier without pinning to the full 38-D shipped model."""
+    return {
+        "FEATURE_NAMES": ["log_loc", "log_complexity", "log_args", "keyword_density", "func_internal_density"],
+        "FEATURE_WEIGHTS": [1.0, 1.0, 1.0, 1.0, 1.0],
+        "SCALER_MEDIANS": [0.0, 0.0, 0.0, 0.0, 0.0],
+        "SCALER_IQRS": [1.0, 1.0, 1.0, 1.0, 1.0],
+        "CAP_VALUES": {},
+        "DNA_SOURCES": {},
+        "cluster_names": names,
+        "ARCHETYPES_K2": archetypes,
+    }
+
+
+def test_function_archetype_unclassified_when_model_dims_mismatch(processor, monkeypatch):
     """
-    The shipped GENERAL_FUNCTION_INFERENCE_MODEL is 62-dim while the live
-    per-function vector is 5-dim (#1157): classification must fail loudly and
-    leave every function "Unclassified" instead of a truncated label.
+    A model whose centroids don't match the built feature-vector length must
+    leave every function "Unclassified" rather than emit a truncated label
+    (the length guard in signal_processor's nearest-centroid loop).
     """
-    functions = [
-        {
-            "name": "hot_path",
-            "loc": 30,
-            "branch": 25,
-            "args": 4,
-            "keyword_density": 0.15,
-            "control_flow_ratio": 0.9,
-            "cf_ratio": 0.9,
-        }
-    ]
+    # FEATURE_NAMES declares 5 features but centroids are length 3 -> all skipped.
+    bad_model = _five_geometry_model({"0: A": [0.0, 0.0, 0.0], "1: B": [9.0, 9.0, 9.0]}, ["A", "B"])
+    monkeypatch.setattr("gitgalaxy.metrics.signal_processor.analysis_lens.GENERAL_FUNCTION_INFERENCE_MODEL", bad_model)
+    functions = [{"name": "hot_path", "loc": 30, "branch": 25, "args": 4, "keyword_density": 0.15, "hit_vector": {}}]
     meta, sig = create_synthetic_star(processor, "mismatch", 50, functions=functions)
     processor.calculate_risk_vector(meta, sig)
 
     assert functions[0]["archetype"] == "Unclassified"
-    assert any("Archetype dimension mismatch" in r.message for r in caplog.records), (
-        "The 5-vs-62 mismatch should be logged loudly"
-    )
 
 
 def test_function_archetype_classified_when_model_matches_live_dims(processor, monkeypatch):
     """
-    With a model that actually matches the 5-dim live vector, the shared
-    classifier should still classify the function (regression guard for the
-    #1157 refactor that routes function classification through
-    _classify_archetype). The shipped model keys are "fxn_cluster_N", which
-    the name-mapping code passes through verbatim (only space-numbered keys
-    like "Cluster 0" map onto the cluster_names list).
+    With a model whose centroids match the built vector length, the function is
+    classified to the nearest centroid's plain cluster name (regression guard
+    for the 38-D rosetta classifier). A loc=30/branch=25 function sits near the
+    "Dense Logic" centroid, not the zero "Tiny Stub" one.
     """
-    fake_model = {
-        "SCALER_MEDIANS": [0.0, 0.0, 0.0, 0.0, 0.0],
-        "SCALER_IQRS": [1.0, 1.0, 1.0, 1.0, 1.0],
-        "ARCHETYPES_K2": {
-            "fxn_cluster_0": [0.0, 0.0, 0.0, 0.0, 0.0],
-            "fxn_cluster_1": [10.0, 10.0, 10.0, 10.0, 10.0],
-        },
-        "cluster_names": ["Utility/Helper", "State Mutator"],
-    }
-    monkeypatch.setattr("gitgalaxy.metrics.signal_processor.analysis_lens.GENERAL_FUNCTION_INFERENCE_MODEL", fake_model)
-
-    functions = [
-        {
-            "name": "mutator",
-            "loc": 30,
-            "branch": 25,
-            "args": 4,
-            "keyword_density": 0.15,
-            "control_flow_ratio": 0.9,
-            "cf_ratio": 0.9,
-        }
-    ]
+    good_model = _five_geometry_model(
+        {"0: Tiny Stub": [0.0, 0.0, 0.0, 0.0, 0.0], "1: Dense Logic": [3.4, 3.3, 1.6, 0.15, 0.83]},
+        ["Tiny Stub", "Dense Logic"],
+    )
+    monkeypatch.setattr("gitgalaxy.metrics.signal_processor.analysis_lens.GENERAL_FUNCTION_INFERENCE_MODEL", good_model)
+    functions = [{"name": "mutator", "loc": 30, "branch": 25, "args": 4, "keyword_density": 0.15, "hit_vector": {}}]
     meta, sig = create_synthetic_star(processor, "match", 50, functions=functions)
     processor.calculate_risk_vector(meta, sig)
 
-    assert functions[0]["archetype"] == "fxn_cluster_1"
+    assert functions[0]["archetype"] == "Dense Logic"
 
 
-def test_file_archetype_unclassified_when_model_dims_mismatch(processor, caplog):
-    """
-    The shipped GENERAL_FILE_INFERENCE_MODEL is 115-dim while the live
-    raw_vector is 83-dim (#1158): every executable file must become
-    "Unclassified" rather than being labeled from a truncated comparison.
-    """
-    meta, sig = create_synthetic_star(processor, "file_mismatch", 50, {"branch": 20})
+def test_file_archetype_deferred_to_record_keeper(processor):
+    """File-level archetype classification moved out of signal_processor: it now
+    happens in record_keeper post-assembly, from the fully-computed file metrics +
+    the function->file composition rollup, against the self-describing brain
+    (FEATURE_NAMES-ordered, so a dimension mismatch is structurally impossible).
+    signal_processor emits a placeholder that record_keeper overwrites."""
+    meta, sig = create_synthetic_star(processor, "file_defer", 50, {"branch": 20})
+    res = processor.calculate_risk_vector(meta, sig)
+    assert res["telemetry"]["archetype"] == "Unclassified"
+
+
+def test_record_keeper_classifies_file_archetype_from_self_describing_brain(monkeypatch):
+    """record_keeper._classify_file_archetype builds the vector in FEATURE_NAMES
+    order from the file's metrics (telemetry + engineered) and per-LOC signal
+    densities (via DNA_SOURCES), RobustScales, applies FEATURE_WEIGHTS, and takes
+    the nearest centroid -- the new home of file archetype classification."""
+    from gitgalaxy.recorders import record_keeper as rk_mod
+    from gitgalaxy.recorders.record_keeper import RecordKeeper
+
+    fake = {
+        "FEATURE_NAMES": ["func_z_max", "log_density_struct_branch"],
+        "FEATURE_WEIGHTS": [1.0, 1.0],
+        "CAP_VALUES": {},
+        "DNA_SOURCES": {"log_density_struct_branch": "branch"},  # column stem -> signal key
+        "SCALER_MEDIANS": [0.0, 0.0],
+        "SCALER_IQRS": [1.0, 1.0],
+        "cluster_names": ["file_cluster_0", "file_cluster_1"],
+        "ARCHETYPES_K2": {"file_cluster_0": [50.0, 10.0], "file_cluster_1": [0.0, 0.0]},
+    }
+    monkeypatch.setattr(rk_mod, "GENERAL_FILE_INFERENCE_MODEL", fake)
+    rk = RecordKeeper()
+    rk._prep_file_brain()
+    base_ctx = {
+        "coding_loc": 100.0,
+        "func_z_max": 0.0,
+        "func_z_mean": 0.0,
+        "func_z_median": 0.0,
+        "pct_z_above_5": 0.0,
+        "pct_z_above_15": 0.0,
+        "micro": {},
+        "precalc": {},
+    }
+    hv_zero = [0] * len(rk.SIGNAL_SCHEMA)
+    # A quiet, branch-free file lands on the all-zero centroid.
+    assert rk._classify_file_archetype(base_ctx, hv_zero) == "file_cluster_1"
+    # A branch-heavy, high-outlier file lands on the far centroid; the density
+    # feature is reconstructed from the `branch` signal via DNA_SOURCES.
+    hv_hot = list(hv_zero)
+    hv_hot[rk.SIGNAL_SCHEMA.index("branch")] = 100
+    hot_ctx = dict(base_ctx, func_z_max=50.0)
+    assert rk._classify_file_archetype(hot_ctx, hv_hot) == "file_cluster_0"
+
+
+# ==============================================================================
+# gitgalaxy#2994: MEASUREMENT TIERS -- TIER 1/3 (FAMILIES & RELATIONS)
+# ==============================================================================
+def test_signal_processor_surface_families_are_raw_sums(processor):
+    """Tier 1: a file's per-family value is the RAW SUM of its member signal
+    counts. `guards` = safety + immutability_locks + encapsulation;
+    `danger` = safety_bypasses + high_risk_execution + inline_asm +
+    panics_and_aborts (see analysis_lens.SURFACE_FAMILIES)."""
+    meta, sig = create_synthetic_star(
+        processor,
+        "families_sum",
+        200,
+        {
+            "safety": 4,
+            "immutability_locks": 2,
+            "encapsulation": 1,
+            "safety_bypasses": 3,
+            "high_risk_execution": 1,
+        },
+    )
+    res = processor.calculate_risk_vector(meta, sig)
+    families = res["telemetry"]["surface_families"]
+
+    assert families["guards"] == 4 + 2 + 1
+    assert families["danger"] == 3 + 1
+    # A family with no fired members sums to a true 0, not absent/None.
+    assert families["crypto"] == 0
+
+
+def test_signal_processor_surface_families_covers_every_declared_family(processor):
+    """Every key in SURFACE_FAMILIES must appear in telemetry["surface_families"]
+    for every file, even when every member is 0 -- consumers (record_keeper,
+    the LLM brief) read this dict by family name unconditionally."""
+    meta, sig = create_synthetic_star(processor, "empty_families", 50)
+    res = processor.calculate_risk_vector(meta, sig)
+    assert set(res["telemetry"]["surface_families"].keys()) == set(processor.SURFACE_FAMILIES.keys())
+    assert all(v == 0 for v in res["telemetry"]["surface_families"].values())
+
+
+def test_signal_processor_surface_relations_formulas(processor):
+    """Tier 3: guard_balance_ratio = guards / (danger + 1); alloc_cleanup_pairing
+    = cleanup / (memory + 1). The +1 denominators mean a danger-free /
+    memory-free file never divides by zero."""
+    meta, sig = create_synthetic_star(
+        processor,
+        "relations",
+        200,
+        {
+            "safety": 6,  # guards = 6
+            "safety_bypasses": 1,  # danger = 1
+            "cleanup": 5,  # cleanup = 5
+            "pointers": 1,  # memory = 1
+        },
+    )
+    res = processor.calculate_risk_vector(meta, sig)
+    relations = res["telemetry"]["surface_relations"]
+
+    assert relations["guard_balance_ratio"] == round(6 / (1 + 1), 4)
+    assert relations["alloc_cleanup_pairing"] == round(5 / (1 + 1), 4)
+
+
+def test_signal_processor_surface_relations_plus_one_denominator_on_zero(processor):
+    """A file with zero danger/memory signals must not raise ZeroDivisionError
+    -- the +1 denominator is the whole point of the formula."""
+    meta, sig = create_synthetic_star(processor, "no_danger_no_memory", 50, {"safety": 3, "cleanup": 2})
+    res = processor.calculate_risk_vector(meta, sig)
+    relations = res["telemetry"]["surface_relations"]
+
+    assert relations["guard_balance_ratio"] == round(3 / (0 + 1), 4)
+    assert relations["alloc_cleanup_pairing"] == round(2 / (0 + 1), 4)
+
+
+def test_signal_processor_surface_families_are_raw_truth_despite_suppression(processor):
+    """The suppression-interplay contract (gitgalaxy#2994): families sum
+    raw_signals, NOT the mitigation-suppressed exposure_vector. A file whose
+    legacy risk_safety_score is zeroed by an inline `galaxyscope:ignore`
+    must still show a nonzero `guards` family total -- the family is "raw
+    truth by construction," independent of what the legacy sigmoid displays."""
+    meta, sig = create_synthetic_star(
+        processor,
+        "suppressed_but_raw",
+        100,
+        {"safety": 8, "immutability_locks": 2},
+    )
+    meta["mitigations"] = ["safety_score"]  # suppresses risk_safety_score (legacy "guard_balance")
+
     res = processor.calculate_risk_vector(meta, sig)
 
-    assert res["telemetry"]["archetype"] == "Unclassified"
-    assert any("Archetype dimension mismatch" in r.message for r in caplog.records), (
-        "The 83-vs-115 mismatch should be logged loudly"
+    idx_safety = processor.RISK_SCHEMA.index("safety_score")
+    assert res["risk_vector"][idx_safety] == 0.0, "legacy risk_safety_score must be suppressed to 0.0"
+    assert res["telemetry"]["surface_families"]["guards"] == 8 + 2, (
+        "the guards family sum must survive the legacy vector's suppression -- it reads raw_signals, "
+        "not the suppressed exposure_vector"
     )
 
 
-def test_file_archetype_classified_when_model_matches_live_dims(monkeypatch):
-    """
-    With an 83-dim model matching the live raw_vector, file-level classification
-    still labels files through _classify_archetype (regression guard for #1158's
-    loud-failure guard not over-correcting into always-Unclassified).
-    """
-    from gitgalaxy.metrics.signal_processor import SignalProcessor
-
-    n_dims = len(SignalProcessor.SIGNAL_SCHEMA) - 19 + 7  # filtered signals + 7 engineered
-    fake_model = {
-        "SCALER_MEDIANS": [0.0] * n_dims,
-        "SCALER_IQRS": [1.0] * n_dims,
-        "ARCHETYPES_K2": {
-            "file_cluster_0": [100.0] * n_dims,
-            "file_cluster_1": [0.0] * n_dims,
-        },
-    }
-    monkeypatch.setattr("gitgalaxy.metrics.signal_processor.analysis_lens.GENERAL_FILE_INFERENCE_MODEL", fake_model)
-    processor = SignalProcessor()
-
-    meta, sig = create_synthetic_star(processor, "file_match", 50, {"branch": 20})
+# ==============================================================================
+# gitgalaxy#2994: MEASUREMENT TIERS -- TIER 2 (SNAPSHOT PERCENTILES)
+# ==============================================================================
+def _star_with_families(processor, name, **raw_signals):
+    meta, sig = create_synthetic_star(processor, name, 100, raw_signals)
     res = processor.calculate_risk_vector(meta, sig)
+    meta["telemetry"] = res["telemetry"]
+    meta["risk_vector"] = res["risk_vector"]
+    meta["file_impact"] = res["file_impact"]
+    return meta
 
-    assert res["telemetry"]["archetype"] == "file_cluster_1"
+
+def test_signal_processor_percentiles_hazen_average_rank(processor):
+    """Hazen plotting position: pct = (avg_rank - 0.5) / N * 100. Four files
+    with strictly increasing `safety` counts (0, 0, 5, 10) rank as
+    [25.0, 25.0, 62.5, 87.5] -- the two zeros tie and share the mean rank."""
+    files = [
+        _star_with_families(processor, "f0a", safety=0),
+        _star_with_families(processor, "f0b", safety=0),
+        _star_with_families(processor, "f5", safety=5),
+        _star_with_families(processor, "f10", safety=10),
+    ]
+    processor.summarize_galaxy_metrics(files, [])
+
+    pcts = [f["telemetry"]["surface_percentiles"]["fam"]["guards"] for f in files]
+    assert pcts == [25.0, 25.0, 62.5, 87.5]
+
+
+def test_signal_processor_percentiles_all_zero_series_reads_zero(processor):
+    """An all-zero series (no file in the snapshot has this surface at all)
+    must read 0.0 for every file -- NOT the 50.0 a naive average-rank tie
+    computation would give a tied field of zeroes. Absent signal must not
+    read as median."""
+    files = [
+        _star_with_families(processor, "a", safety=3),
+        _star_with_families(processor, "b", safety=7),
+        _star_with_families(processor, "c", safety=1),
+    ]
+    processor.summarize_galaxy_metrics(files, [])
+
+    # None of these files fired any `crypto` family member.
+    assert all(f["telemetry"]["surface_percentiles"]["fam"]["crypto"] == 0.0 for f in files)
+
+
+def test_signal_processor_percentiles_single_file_snapshot_reads_fifty(processor):
+    """N=1: a series the file actually HAS reads 50.0 (nothing to rank
+    against => true middle); a series it measures zero on reads 0.0 -- the
+    all-zero rule takes precedence at every N, including N=1. An absent
+    surface must never read as a misleading mid-band 50."""
+    files = [_star_with_families(processor, "solo", safety=9)]
+    processor.summarize_galaxy_metrics(files, [])
+
+    percentiles = files[0]["telemetry"]["surface_percentiles"]
+    # guards family fired (safety=9) -> the honest "true middle" at N=1.
+    assert percentiles["fam"]["guards"] == 50.0
+    # crypto family entirely absent -> 0.0 even at N=1.
+    assert percentiles["fam"]["crypto"] == 0.0
+    # legacy-vector series behave identically: this fixture's risk_vector
+    # carries cognitive_load == 0, so the all-zero rule applies there too.
+    assert percentiles["vec"]["cognitive_load"] == 0.0
+
+
+def test_signal_processor_percentiles_written_for_every_family_and_vector(processor):
+    """telemetry["surface_percentiles"] must carry exactly the 22 families
+    (under "fam") and the 13 RISK_SCHEMA slugs (under "vec")."""
+    files = [
+        _star_with_families(processor, "a", safety=3),
+        _star_with_families(processor, "b", safety=1),
+    ]
+    processor.summarize_galaxy_metrics(files, [])
+
+    percentiles = files[0]["telemetry"]["surface_percentiles"]
+    assert set(percentiles["fam"].keys()) == set(processor.SURFACE_FAMILIES.keys())
+    assert set(percentiles["vec"].keys()) == set(processor.RISK_SCHEMA)
+
+
+def test_signal_processor_percentiles_rank_off_post_normalization_churn(processor):
+    """Ordering regression guard (gitgalaxy#2994): _compute_snapshot_percentiles
+    must run AFTER _normalize_temporal_metrics, because Pass 2 rewrites
+    risk_vector[churn_idx] in place from a raw frequency into a log1p-
+    normalized 0-100 score. Two files with wildly different raw churn
+    frequencies must rank by their NORMALIZED churn (both scores in the
+    0-100 range, ordered by relative frequency), not by the pre-normalization
+    raw seismic-frequency numbers -- which would still rank the same way by
+    coincidence for a monotonic transform, so this pins the actual values
+    seen, not just the order, to catch a reordering regression."""
+    churn_idx = processor.RISK_SCHEMA.index("churn")
+
+    hot = {
+        "is_git_tracked": True,
+        "mtime": 100,
+        "repo_min_time": 0,
+        "repo_max_time": 110,
+        "commit_count": 1000,
+    }
+    cold = {
+        "is_git_tracked": True,
+        "mtime": 100,
+        "repo_min_time": 0,
+        "repo_max_time": 110,
+        "commit_count": 1,
+    }
+
+    meta_hot, sig_hot = create_synthetic_star(processor, "hot", 100)
+    meta_hot["temporal_telemetry"] = hot
+    meta_cold, sig_cold = create_synthetic_star(processor, "cold", 100)
+    meta_cold["temporal_telemetry"] = cold
+
+    for meta, sig in ((meta_hot, sig_hot), (meta_cold, sig_cold)):
+        res = processor.calculate_risk_vector(meta, sig)
+        meta["telemetry"] = res["telemetry"]
+        meta["risk_vector"] = res["risk_vector"]
+        meta["file_impact"] = res["file_impact"]
+
+    # Before summarize_galaxy_metrics runs Pass 2, churn is still the 0.0
+    # placeholder calculate_risk_vector left in exposure_vector["churn"].
+    assert meta_hot["risk_vector"][churn_idx] == 0.0
+    assert meta_cold["risk_vector"][churn_idx] == 0.0
+
+    processor.summarize_galaxy_metrics([meta_hot, meta_cold], [])
+
+    # Pass 2 must have already rewritten both risk_vector[churn_idx] values
+    # (proving normalization ran) before the percentile pass ranked them.
+    assert meta_hot["risk_vector"][churn_idx] > meta_cold["risk_vector"][churn_idx] > 0.0
+
+    # The hotter file must rank at the top of the churn percentile series.
+    hot_pct = meta_hot["telemetry"]["surface_percentiles"]["vec"]["churn"]
+    cold_pct = meta_cold["telemetry"]["surface_percentiles"]["vec"]["churn"]
+    assert hot_pct == 75.0  # 2 files, hot ranks 2nd -> (2-0.5)/2*100
+    assert cold_pct == 25.0  # cold ranks 1st -> (1-0.5)/2*100
+
+
+def test_signal_processor_percentiles_empty_galaxy_survives(processor):
+    """Zero files must not crash _compute_snapshot_percentiles (mirrors the
+    existing empty-state guard on _normalize_temporal_metrics)."""
+    summary = processor.summarize_galaxy_metrics([], [])
+    assert summary == {}

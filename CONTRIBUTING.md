@@ -78,7 +78,54 @@ When you modify GitGalaxy's core engine, several CI workflows will rigorously te
    - Run `python tests/tools/tree_sitter_accuracy_audit.py --ci --all`.
    - If your regex fix legitimately drops false positives causing ground truth drift, regenerate the baseline: `python tests/tools/tree_sitter_accuracy_audit.py --regenerate --lang <lang>`
 
+4. **Cross-Language Consistency (`rosetta-audit`, the [keyword-rosetta](https://github.com/squid-protocol/keyword-rosetta) corpus)**
+   This runs the control corpus's verifier across all 46 language folders against your engine build,
+   then re-runs anything that failed against a build of the branch you target, so it can tell
+   "this PR moves the corpus" from "the corpus is behind main" (the latter is a notice, not a
+   failure). Unlike the three baselines above, the expected values live in *another repository* —
+   you cannot re-bless them here, and you do not have to before merging.
+   - Run it locally: `python tests/tools/rosetta_audit.py` (needs `../keyword-rosetta` and `galaxyscope` on PATH).
+   - If the drift is an unintentional regression: fix the engine change.
+   - If the drift is an intentional, corpus-visible improvement: add the `rosetta:rebless-owed` label
+     (the check goes green with the languages still listed), merge, then open the re-bless PR in
+     keyword-rosetta against engine main. Full detail in
+     [`docs/self_scan/ROSETTA_AUDIT.md`](docs/self_scan/ROSETTA_AUDIT.md). There is no pin on
+     either side and nothing to reset afterwards.
+
 If your PR touches any baseline fixtures, **explain why in the PR description** (e.g. "improved the Rust parser, now correctly detects async trait bounds"). A CI check flags any PR that modifies these files so it's never invisible in a large diff.
+
+---
+
+## 🍴 Corpus-backed checks
+
+Four checks scan the [language-crucible](https://github.com/squid-protocol/language-crucible)
+corpus rather than just this repo:
+
+- `crucible-audit (full-precision)` and `crucible-audit (zero-dependency)`
+- `tree-sitter-accuracy-audit`
+- `tri-comparison-audit`
+
+**These now run normally on fork PRs.** They clone the corpus at a ref taken from the
+`LANGUAGE_CRUCIBLE_REF` Actions variable, and GitHub withholds repository variables — like
+secrets — from `pull_request` runs raised from a fork. The corpus repo is public and needs no
+credentials to clone, though, so when that variable is unavailable the workflows fall back to
+`PINNED_TAG` in [`tests/_crucible_pin.py`](tests/_crucible_pin.py), which is committed here and
+therefore readable on a fork run. You will see a `Corpus pin read from the repo` notice in the
+job log when the fallback is used; the audit itself is the real thing, and a failure is a real
+failure worth reading.
+
+> **Historical note.** Before this fallback existed these four checks failed instantly on every
+> fork PR, and CONTRIBUTING told you to ignore them because a maintainer would re-run them from
+> a branch in this repo. That is no longer necessary — treat a red corpus-backed audit on your
+> fork PR as genuine signal.
+
+If you are moving the pin, bump it in **both** places — `tests/_crucible_pin.py` and the
+`LANGUAGE_CRUCIBLE_REF` repository variable. Nothing enforces that they match; see that file's
+docstring for why the pin is deliberately duplicated.
+
+`rosetta-audit` needs no escape hatch: it always checks out keyword-rosetta's `main` (that repo is
+public), so it runs for real on a fork PR too. Every other check — `full-suite`, the `smoke-test` matrix,
+`ruff-audit`, `mypy-audit`, `ast-accuracy-audit` — runs normally on a fork PR too.
 
 ---
 

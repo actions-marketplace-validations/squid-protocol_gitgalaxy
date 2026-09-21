@@ -90,30 +90,28 @@ _OBJC_SIMPLE_CASES = [
     ("bitwise_ops", "NSUInteger mask = flags & 0x0F;", "if (a && b) {"),
     ("import", "#import <Foundation/Foundation.h>", "// #import <Foundation/Foundation.h>"),
     # --- Deep Adversarial Cases ---
-    ("branch", "@try\n{", "@trycatch"),
+    ("branch", "do {\n} while (x);", "@try\n{"),  # 2822 corollary 1
     ("branch", "else if (x) {", "something_else"),
-    ("branch", "int x = a ? b : c;", "NSString *url = @\"https://try.example.com\";"),
-    ("branch", "@finally {", "@finallysomething"),
-    ("branch", "    goto label;", "gotofail"),
-
-    ("args", ": (NSString *)name", "if (a) {"),
-    ("args", ":(id<MyProto>)arg", "while (1) {"),
+    ("branch", "int x = a ? b : c;", 'NSString *url = @"https://try.example.com";'),
+    ("branch", "case 2:", "@finally {"),  # 2822 corollary 1
+    ("branch", "default:", "    goto label;"),  # 2822 corollary 3
+    # #2773: a selector span only counts under a `-`/`+` method-declaration
+    # lead -- on its own it is a message send, not a parameter surface.
+    ("args", "- (void): (NSString *)name", "if (a) {"),
+    ("args", "+ (void):(id<MyProto>)arg", "while (1) {"),
     ("args", "^(int a, int b) {", "catch (NSException *e) {"),
     ("args", "void my_func(int a, void (*cb)(int)) {", "sizeof(int);"),
-    ("args", ":(void(^)(BOOL, NSError *))completion", "__attribute__((unused))"),
-
+    ("args", "- (void):(void(^)(BOOL, NSError *))completion", "__attribute__((unused))"),
     ("func_start", "- (void)doThing:(id)arg;", "void(^my_block)(void) = ^{"),
     ("func_start", "- (NSDictionary<NSString *, id> *)doThing {", "@interface Foo"),
     ("func_start", "+ (id<MyProto>)doThing {", "int x = 1;"),
     ("func_start", "static void (*my_func_ptr)(int) {", "struct Node {"),
-    ("func_start", "extern \"C\" void my_export_func(void);", "typedef int MyInt;"),
-
+    ("func_start", 'extern "C" void my_export_func(void);', "typedef int MyInt;"),
     ("class_start", "@interface MyClass // comment", "@interfaceFoo"),
     ("class_start", "@implementation MyClass {", "@implementationBar"),
     ("class_start", "@interface MyClass /* comment */", "my_struct"),
     ("class_start", "@interface MyClass: NSObject", "@class Foo;"),
     ("class_start", "@interface MyClass (Category)", "int my_interface = 1;"),
-
     ("structural_boundaries", "@interface Foo : NSObject", "@interfaceFoo"),
     ("structural_boundaries", "__strong id obj = nil;", "my_strong_var"),
     ("structural_boundaries", "@synthesize prop = _prop;", "@synthesize_it"),
@@ -139,6 +137,9 @@ def test_objectivec_args_control_flow_shield():
     assert pattern.search("- (void)doThing:(NSString *)name;")
     assert pattern.search("^(int x) { return x; }")
     assert pattern.search("myCFunction(int a, int b) {")
+    # #2773: a bare call statement is not a declaration.
+    assert not pattern.search("myCFunction(a, b);"), "args hallucinated on a call statement"
+    assert not pattern.search("[self doThing:name];"), "args hallucinated on a message send"
     assert not pattern.search("if (x) {"), "args hallucinated on an if statement"
     assert not pattern.search("while (x) {"), "args hallucinated on a while statement"
 
@@ -218,7 +219,8 @@ def test_objectivec_at_prefixed_directives_regression():
     always written. None of these ever actually matched real code.
     """
     r = OBJC_RULES
-    assert r["branch"].search("@try { f(); }")
+    # @try left branch in #2822 (corollary 1); safety below still owns it
+    assert not r["branch"].search("@try { f(); }")
     assert r["safety"].search("@catch (NSException *e) {}")
     assert r["structural_boundaries"].search("@interface Foo : NSObject")
     assert r["structural_boundaries"].search("@end")
@@ -261,3 +263,102 @@ def test_objectivec_globals_bracket_message_regression():
     pattern = OBJC_RULES["globals"]
     assert pattern.search("id app = [UIApplication sharedApplication];")
     assert pattern.search("id ws = [NSWorkspace sharedWorkspace];")
+
+
+def test_objectivec_return_not_counted_as_branch_regression():
+    """#2545: `return` must not phantom-count as a branch -- C, objc's own base
+    language, doesn't count it either. Moved to structural_boundaries (not just
+    deleted, since objc had no other rule tracking it)."""
+    branch = OBJC_RULES["branch"]
+    structural = OBJC_RULES["structural_boundaries"]
+
+    assert not branch.search("return x;"), "bare return must not count as branch"
+    assert not branch.search("- (int)f { return 1; }"), "return in a real method must not count as branch"
+    assert branch.search("if (x) return 1;"), "the real if must still count as branch"
+    assert len(branch.findall("if (x) return 1;")) == 1, "only the if should match, not the return"
+    assert structural.search("return x;"), "return must now be tracked via structural_boundaries"
+    # 2822 corollary 3: goto is an unconditional transfer, moved to
+    # structural_boundaries exactly like return was.
+    assert not branch.search("goto fail;")
+    assert structural.search("goto fail;")
+
+
+def test_objectivec_structural_boundaries_redos_immune_after_return_addition():
+    assert_redos_immune(OBJC_RULES["structural_boundaries"], "return " * 20000, timeout_sec=3.0)
+
+
+def test_objectivec_doc_block_and_line_marker_count_once_regression():
+    """
+    #2672: `/\\*\\*`/`/\\*!`/`///` and the doc tags (`@param`, `@brief`, ...)
+    were independent alternatives, so one doc comment counted doc
+    proportional to its tag density -- the #2658 shape. Off-corpus only
+    (the rosetta corpus plants one of {marker, tag} for objective-c, so
+    this does not move the corpus). Both block openers (standard and
+    NeXT-style `/*!`) pair into a single bounded (0,15000 chars) non-greedy
+    span; the line-marker form (`///`) now swallows the rest of its line so
+    a tag on the same line as the marker is one hit.
+    """
+    doc = OBJC_RULES["doc"]
+
+    block = "/**\n * @brief thing\n * @param x in\n */\n"
+    assert len(doc.findall(block)) == 1, "a single /** doc block must count once, not once per tag"
+
+    next_block = "/*!\n * @brief thing\n * @param x in\n */\n"
+    assert len(doc.findall(next_block)) == 1, "a single /*! doc block must count once, not once per tag"
+
+    one_line = "/// @param x in\n"
+    assert len(doc.findall(one_line)) == 1, "a single `///` line with a tag must count once, not twice"
+
+    two_blocks = "/*!\n * @brief one\n */\nvoid f();\n/*!\n * @brief two\n */\n"
+    assert len(doc.findall(two_blocks)) == 2, "two separate doc blocks must still count as 2"
+
+
+def test_objectivec_doc_bare_tag_outside_block_still_counts_regression():
+    """#2672: a doc tag outside any doc comment must still count."""
+    doc = OBJC_RULES["doc"]
+    assert doc.search("@discussion leftover outside any doc block")
+    assert doc.search("@brief leftover outside any doc block")
+
+
+def test_objectivec_doc_block_redos_immune_regression():
+    """#2672 ReDoS probes: unterminated `/**`, `/*!`, and a very long unterminated `///` line must fail closed quickly."""
+    assert_redos_immune(OBJC_RULES["doc"], "/**" + "x" * 200000, timeout_sec=3.0)
+    assert_redos_immune(OBJC_RULES["doc"], "/*!" + "x" * 200000, timeout_sec=3.0)
+    assert_redos_immune(OBJC_RULES["doc"], "///" + "x" * 200000, timeout_sec=3.0)
+
+
+def test_objectivec_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    A method declared in an `@interface` -- Objective-C's primary public
+    surface -- was invisible to the C-level export macros.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = OBJC_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search("- (void) linkTo:(Anchor *)destination;"), "@interface method declaration"
+    assert api.search("+ (BOOL) follow;"), "class method declaration"
+    assert api.search("extern int HTAccMgr;"), "extern declaration (kept)"
+
+    # #2940 (contract corollary 3) REVERSES the earlier "@implementation method
+    # body" exclusion: Objective-C has no method-level visibility, so a method
+    # DEFINITION is the public-by-default marker the way C's column-0 function
+    # declarator (#2907), matlab's column-0 `function` and abap's `FORM` are.
+    assert api.search("- (void) doWork {"), "method definition (public by default, #2940)"
+    assert api.search("- (int)probeGlobals:(int)env {"), "typed-selector definition (#2940)"
+
+    # Not declarations -- must not match.
+    assert not api.search("+ ((slotNumber/10)%3)* 40;"), "wrapped arithmetic continuation"
+    assert not api.search("+ ((slotNumber/10)%3)* 40 {"), "arithmetic continuation before a block"
+    assert not api.search("[self doWork];"), "message send is a reference, not a declaration"
+
+    # ReDoS detonation on an unclosed method type cast.
+    assert_redos_immune(api, "- (" + "a " * 40000, timeout_sec=3.0)

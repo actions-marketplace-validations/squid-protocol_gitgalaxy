@@ -105,7 +105,7 @@ diff be" is answered from data instead of a guess informed only by the issue tex
 
 - **`docs/gitgalaxy_architecture_brief.md`** — auto-committed on every merge to main (a byproduct
   of the CI scan that also produces SARIF/SBOM), so it's always close to current HEAD. This scan
-  always installs `networkx`/`tiktoken`/`xgboost`/`pandas`/`numpy` first (`gitgalaxy.yml`'s
+  always installs `tiktoken`/`xgboost`/`pandas`/`numpy` first (`gitgalaxy.yml`'s
   "Install GitGalaxy & Full Precision Engines" step) — confirm by checking the brief's own
   Section 0 traceability table, which reports `Zero-Dependency Mode: Inactive (Full Precision)`.
   Use it for *repo-wide* framing before a large refactor: Section 7 has the actual blast-radius
@@ -136,13 +136,15 @@ diff be" is answered from data instead of a guess informed only by the issue tex
       "SELECT directory_group, COUNT(*) files, SUM(total_loc) loc, SUM(function_count) funcs
        FROM file_data GROUP BY directory_group ORDER BY loc DESC LIMIT 8;"
     ```
-  - **Full-precision dependencies required:** `pagerank_score`, `normalized_blast_radius`, and
-    other network/ML-derived columns need `networkx`, `tiktoken`, `numpy`, `pandas`, `xgboost`,
-    and `pyyaml` importable in whatever environment runs the scan — without all of them,
-    galaxyscope silently drops into Zero-Dependency Mode and those columns come back NULL (this
+  - **Full-precision dependencies required:** every graph column is native and needs
+    no optional package (networkx left the runtime in #3041); token mass and the ML columns need
+    `tiktoken`, `numpy`, `pandas`, `xgboost`, and `pyyaml` importable in whatever environment runs
+    the scan — without all of them, galaxyscope drops into Zero-Dependency Mode and those columns
+    come back NULL (`pagerank_score`/`normalized_blast_radius` are computed natively in both modes
+    since #3027; `docs/zero_dependency_mode.md` has the per-column list) (this
     is *not* caused by `--db-only` itself, which only selects which recorder writes output; a
     local dev venv missing one of these packages was the actual cause the one time this bit us).
-    `self_scan.py` now checks for all six before scanning and aborts loudly if any are missing,
+    `self_scan.py` now checks for all five before scanning and aborts loudly if any are missing,
     rather than silently producing a degraded DB — if you hit that, `pip install` whatever it
     lists. CI's copy (the `gitgalaxy-self-scan-db` artifact) always has these installed first, so
     it's always full-precision; only a local run can be affected.
@@ -166,8 +168,17 @@ few minutes this way, instead of hours of pure static reading):
   is in play, before assuming the signal count itself is what's wrong.
 - Cross-reference the aggregated per-file numbers in the recorder DB this same run produces
   (`<scratch-dir>/<repo>_galaxy_master.db`, `file_data` table) — column names are the
-  `record_keeper.py`-renamed form of the raw equation keys (e.g. `orphaned_logic` →
-  `state_slop_orphans`, `api` → `arch_api`; confirm via `.schema file_data` since this evolves).
+  `record_keeper.py`-renamed form of the raw equation keys (e.g. `unreferenced_by_name` →
+  `state_unreferenced`, `api` → `arch_api`; confirm via `.schema file_data` since this evolves).
+- **A unit test does not exercise the config pipeline, and for a REGISTRY DECLARATION that
+  difference is the whole bug.** Tests and the probe scripts build `StructuralExtractor` from
+  `LANGUAGE_DEFINITIONS` directly; a real scan first goes through `language_lens.py`, whose
+  `_calibrate_lookup_maps` compiles every **string** value inside a language's `rules` into a
+  regex (a guard for definitions loaded from external JSON), and then through galaxyscope's
+  `copy.deepcopy` + `PROJECT_OVERRIDES` merge. A non-pattern helper key therefore belongs at the
+  TOP LEVEL of the definition, beside `lexical_family` -- put one in `rules` and it silently
+  becomes `re.compile("...")` with every test still green (#2806, which also blessed a wrong
+  golden master before a one-file scan caught it).
 - For a control/golden corpus already checked out locally (e.g. `keyword-rosetta`,
   `language-crucible`), point `galaxyscope` straight at it this way instead of writing a
   standalone repro script — the census requires git-tracked files (see `census-requires-git-
@@ -265,6 +276,74 @@ produced a false "zero diff" pass locally while CI correctly failed on real outp
 #579/#723, 2026-07-28). Never point `LANGUAGE_CRUCIBLE_PATH`/a shared venv at this without
 confirming which checkout its editable install actually resolves to
 (`python -c "import gitgalaxy; print(gitgalaxy.__file__)"` from inside that venv).
+
+**Scoping a bless: `crucible_check.py` shows you only a fraction of the diff.** Its output is
+capped twice -- `tests/golden_diff.py` prints 50 differences, and `crucible_check.py`'s wrapper
+keeps a 4000-char window of that -- so a run reporting "581 differences" surfaces about 28.
+GATING-style scoped-diff review ("every unrelated mover is attributed to a named PR, or the
+bless waits") is therefore **impossible from its output alone**: on 2026-09-02 all 28 surfaced
+diffs were groovy and said nothing about the other 18 languages that had moved. Regenerate the
+audit and diff it yourself:
+
+```sh
+# GITGALAXY_DISABLE_GIT_HISTORY=1 is NOT optional (#2985): test_golden_crucible.py sets it
+# (and so does update_golden_master.py), so the committed fixtures have every git-derived
+# field ablated. Omit it here and you get ~8,500 phantom differences on top of the real
+# ones -- Architect ("Unknown Architect" -> your git identity), Raw Churn Frequency,
+# Authorship Centralization, Instability/Volatility Exposure -- and a wasted rescan cycle
+# before you work out none of them are yours.
+GITGALAXY_DISABLE_GIT_HISTORY=1 \
+.crucible_venvs/zero_dependency/bin/galaxyscope <language-crucible>/data \
+    --output /tmp/gm/ --file-speed --splicing-speed          # same flags as tests/test_golden_crucible.py
+python -c "
+import sys; sys.path.insert(0,'tests'); import golden_diff as gd
+g=gd.load_and_sanitize('tests/golden_master_zero_dep_audit.json')
+a=gd.load_and_sanitize('/tmp/gm/data_galaxy_audit.json')
+for d in gd.deep_compare(g,a): print(d)"
+```
+
+Expect most of the volume to be topological `X`/`Y`/`Z` coordinates: the 3D layout re-solves
+corpus-wide whenever any node's mass changes, so a single-language fix ripples coordinates
+across every language in the corpus. Those are attributable as a class; filter them out and
+scope the remainder, which is what actually needs a per-language explanation.
+
+**The corpus-backed audit runners need the main `.venv`, and they refuse to pass on nothing.**
+`tests/tools/tree_sitter_accuracy_audit.py`, `tests/tools/tri_comparison_chart.py` and
+`tests/tools/rosetta_audit.py` all need `galaxyscope` on `PATH` (the main `.venv` has it plus
+`tree_sitter_language_pack`; neither crucible venv has both). Since #2682 a run that checked zero
+languages, or a baselined language whose scan could not run, is a hard failure — previously
+`tri_comparison_chart.py --ci` skipped every language and printed `all OK` with exit 0 when
+`galaxyscope` was missing. Run them as:
+
+```sh
+PATH="$PWD/.venv/bin:$PATH" .venv/bin/python tests/tools/tree_sitter_accuracy_audit.py --ci --all
+PATH="$PWD/.venv/bin:$PATH" .venv/bin/python tests/tools/tri_comparison_chart.py --all --ci
+PATH="$PWD/.venv/bin:$PATH" .venv/bin/python tests/tools/rosetta_audit.py      # needs ../keyword-rosetta
+```
+
+and still glance at the summary line's language count (30, 3 and 46 respectively as of 2026-09-03).
+
+## Re-running the OS x Python matrix on a PR's current head
+
+`full-suite-gate.yml` (the "Full Suite Gate (All OS x Python)" check) triggers on
+`pull_request: types: [labeled]`, not on `synchronize`. That was deliberate — per-label runs had
+put 48 jobs on one SHA and pushed the queue to 23-65 minutes — but it means **the matrix runs
+once, against the SHA that carried the label, and a commit pushed afterwards never goes through
+it.** #3207 merged a Windows-only fix that way: it was correct and test-covered, but the matrix
+never saw it.
+
+So after pushing to a PR that has already been labelled, re-run it deliberately:
+
+```bash
+gh workflow run "Full Suite Gate (All OS x Python)" --ref <branch>       # trimmed PR grid
+gh workflow run "Full Suite Gate (All OS x Python)" --ref <branch> -f full_matrix=true   # 12-way
+gh run list --workflow full-suite-gate.yml --branch <branch> --limit 3   # find the run
+```
+
+The trimmed grid is what a label gives you (all four Pythons on ubuntu, floor+ceiling on Windows
+and macOS); `full_matrix=true` is the untrimmed 12-way grid a `v*` tag gets. Removing and
+re-adding a label still works and is equivalent to the first form. Don't reach for `synchronize`
+as a fix — that hands back the queue cost the label-only rule bought (#3209).
 
 ## Logging cases where GitGalaxy beats tree-sitter/AST ground truth
 

@@ -14,6 +14,8 @@ import re
 from collections import Counter, defaultdict
 from typing import Any
 
+from gitgalaxy.core.rule_prefilter import derive_literal_gate, fold_haystack
+
 logger = logging.getLogger("security_lens")
 
 
@@ -171,8 +173,35 @@ class SecurityLens:
                 re.I,
             ),
             # 13. Raw Database Sinks
+            # gitgalaxy#3019: the verb must be invoked ON a receiver. The previous
+            # form was bare alternatives (`\b(?:execute|query|raw|cursor|...)\b\s*\(`),
+            # which claimed 240 hits across 76 crucible files, most of them not
+            # database sinks at all:
+            #   - `Query(` x63 -- FastAPI's query-PARAMETER helper (and GraphQL's
+            #     `Query(`). This alone drove the ~0% precision of the API-near-sink
+            #     correlation (#3018): fastapi's test_annotated.py, a file with no
+            #     database code whatsoever, scored 13 "confirmed SQL injections".
+            #   - bare `execute(` x95 -- overwhelmingly DECLARATIONS, not calls
+            #     (`fun execute(): Response`, `function execute(`, `void execute(`).
+            #   - `raw(` x16, `CURSOR (` x2 (a COBOL cursor declaration, not a query).
+            #   - `\s*` let the verb and its paren sit on DIFFERENT LINES, which is
+            #     how one hit landed on the word "raw" inside an English prose comment.
+            # A receiver anchor excludes every one of those shapes by construction: a
+            # declaration has no receiver, and neither does `Query(...)`.
+            #
+            # `->` is not optional. Perl DBI's `$sth->execute()` / `$insert->execute(
+            # $value, $sortorder)` (bugzilla) are genuine sinks, and a `\.`-only anchor
+            # would silently drop every one of them -- trading a false-positive problem
+            # for a worse false-negative one.
+            #
+            # `cursor` is deliberately absent: `conn.cursor()` creates a cursor, it does
+            # not execute a query. Its execution shows up as `.execute(` on the next line.
+            #
+            # Measured on the language-crucible corpus: 240 hits/76 files -> 146/28.
             "db_hooks": re.compile(
-                r"\b(?:execute|query|raw|cursor|execute_sql|executeBatch|query_db)\b\s*\(",
+                r"(?:\.|->)[ \t]*(?:execute|executemany|executescript|executeBatch|executeQuery"
+                r"|executeUpdate|query|rawQuery|prepareStatement|createStatement)[ \t]*\("
+                r"|\b(?:execute_sql|query_db|mysqli_query|pg_query|pg_exec|sqlite3_exec|sqlite3_prepare)[ \t]*\(",
                 re.I,
             ),
             # 14. Unicode Steganography (GlassWorm-style invisible payload smuggling, #1150)
@@ -197,12 +226,70 @@ class SecurityLens:
             # reads (common benign self-inspection, e.g. version banners) --
             # only the unambiguous "self-path handed straight into a mutating
             # call" shape qualifies.
+            # A worm's defining mechanical trait: duplicating or overwriting
+            # itself. The precision rule that shipped in #1150/#1169 is kept
+            # exactly -- the self-reference token has to visibly, directly feed
+            # a copy/write call, never merely appear nearby -- and only the
+            # ways it can *reach* that call are broadened (#1172, #1174).
+            #
+            # #1172: `__FILE__` was already an accepted token, but no PHP or
+            # Ruby copy/write function was ever paired with it, so that half of
+            # the alternation was dead: `__FILE__` appears only in PHP/Ruby
+            # source, which never calls `shutil.copy`. PowerShell and Shell are
+            # added for the same reason they matter in the wild -- self-copy to
+            # a startup folder or cron directory is the classic dropper
+            # persistence step.
+            #
+            # #1174: two shapes that are equally worm-like slipped through the
+            # literal-first-argument rule -- a single bounded path-normalization
+            # wrapper (`os.path.abspath(__file__)`), and read-then-write
+            # (`fs.writeFileSync(dest, fs.readFileSync(__filename))`), which is
+            # a self-copy spelled as two calls.
+            #
+            # Every quantifier here is bounded (Engine Rule 14); `$0` is only
+            # ever accepted as a literal argument to `cp`/`install`, since it is
+            # otherwise ubiquitous in usage banners and logging.
             "self_propagation": re.compile(
-                r"\b(?:fs\.(?:copyFileSync|writeFileSync|appendFileSync|renameSync)|"
-                r"shutil\.(?:copy2?|copyfile|move)|os\.rename)"
-                r"\s*\([ \t]*(?:__filename|__dirname|import\.meta\.url|__file__|__FILE__)\b",
+                # 1. copy/write/rename call taking the self-reference as its
+                #    first argument, optionally through ONE normalizer.
+                r"\b(?:fs\.(?:copyFileSync|writeFileSync|appendFileSync|renameSync)"
+                r"|shutil\.(?:copy2?|copyfile|move)|os\.rename"
+                r"|FileUtils\.(?:cp|copy|mv)|File\.write"
+                r"|file_put_contents|copy|rename"
+                r"|Copy-Item|Move-Item"
+                r")\s*\(\s*"
+                r"(?:(?:os\.path\.(?:abspath|realpath|normpath)|path\.resolve|Resolve-Path|realpath)\s*\([ \t]*){0,1}"
+                r"[\"']?(?:__filename|__dirname|import\.meta\.url|__file__"
+                r"|\$PSCommandPath|\$MyInvocation\.MyCommand\.Path|\$0)\b"
+                # 2. shell / powershell command form -- no parentheses at all.
+                r"|\b(?:cp|install|Copy-Item|Move-Item)\b[ \t]+"
+                r"(?:-{1,2}[A-Za-z-]{1,20}(?:[ \t]+[A-Za-z0-9._/=-]{1,32})?[ \t]+){0,3}"
+                r"[\"']?(?:\$0|\$PSCommandPath|\$MyInvocation\.MyCommand\.Path)\b"
+                # 3. read-then-write: writing elsewhere the bytes it just read
+                #    of itself. Bounded, lazy gap over a negated class.
+                r"|\b(?:fs\.(?:writeFileSync|appendFileSync)|File\.write|file_put_contents"
+                r"|shutil\.copyfileobj)\s*\([^)\n]{0,120}?"
+                r"(?:fs\.readFileSync|File\.read|file_get_contents|open)\s*\(\s*"
+                r"(?:(?:os\.path\.(?:abspath|realpath|normpath)|path\.resolve|realpath)\s*\([ \t]*){0,1}"
+                r"[\"']?(?:__filename|__dirname|import\.meta\.url|__file__)\b",
                 re.I,
             ),
+        }
+
+        # ---> LITERAL PREFILTER GATES (#3173) <---
+        # Each THREAT_SIGNATURE is a keyword alternation; derive a one-of required-
+        # literal gate once (the AST walk costs ~100x a small-file finditer, so it is
+        # amortized here, never per file). `prefer_selective=True` makes the derivation
+        # keep each branch's strong keyword literal instead of a bare `(`/`=`/`.` that
+        # the length floor would otherwise drop -- without it only 2/13 gate; with it
+        # 10/13 do. A gate is None (run ungated) for signatures with a genuinely
+        # literal-free branch (reflection_metaprogramming's zero-width class,
+        # unicode_steganography's char-class run, bitwise_ops's operator chains).
+        # The gate is strictly ONE-SIDED: a rejection provably means zero regex
+        # matches (see tests/tools/scan_content_gate_parity.py). 12/13 signatures are
+        # case-insensitive, so every derived gate folds; we fold the haystack once.
+        self._signature_gates: dict[str, Any] = {
+            key: derive_literal_gate(regex, prefer_selective=True) for key, regex in self.THREAT_SIGNATURES.items()
         }
 
     def _calculate_shannon_entropy(self, data: str) -> float:
@@ -250,18 +337,18 @@ class SecurityLens:
 
         is_auto_gen = bool(self.auto_gen_shield.search(content[:2000]))
 
-        # PERFORMANCE OPTIMIZATION: O(1) Offset Map for Taint Analysis
-        # Only tracks lines where an actual threat signature triggered, skipping blank space.
-        threat_lines = defaultdict(set)
         # Line positions for the four signals below, keyed the same way
         # detector.py's own threat_locations are (rule_name -> [1-indexed line
         # numbers]) -- exposed via scan_content()'s return so galaxyscope.py can
-        # fold them into the shared, persisted ledger (#348). Previously this
-        # position data was computed (via threat_lines above) but only ever
-        # used internally for this function's own taint check, then discarded.
+        # fold them into the shared, persisted ledger (#348).
         positions: dict[str, list[int]] = defaultdict(list)
         if not is_auto_gen:
             line_starts = [0] + [m.end() for m in re.finditer(r"\n", safe_content)]
+
+        # Case-folded copy of the ReDoS-armored haystack, computed once and shared by
+        # every case-insensitive literal gate below (#3173). Lazily populated on the
+        # first folding gate so gate-free / auto-gen files never pay for it.
+        folded_safe: str | None = None
 
         for key, regex in self.THREAT_SIGNATURES.items():
             if is_auto_gen and key == "homoglyphs":
@@ -269,28 +356,51 @@ class SecurityLens:
                 snippets.setdefault(key, [])
                 continue
 
-            # Ensure we add to the fallback screen hits rather than overwriting them.
-            # (Applying the safe_content patch here to ensure ReDoS armor remains intact).
-            new_hits = regex.findall(safe_content)
-            counts[key] = counts.get(key, 0) + len(new_hits)
             snippets.setdefault(key, [])
 
-            if len(new_hits) > 0:
-                for match in regex.finditer(safe_content):
-                    snip = match.group(0).strip()
-                    if len(snippets[key]) < 3 and snip not in snippets[key]:
-                        snippets[key].append(snip)
+            # ---> LITERAL PREFILTER (#3173) <---
+            # Skip the regex sweep entirely when the signature's required-literal gate
+            # proves the ReDoS-armored haystack cannot match. The gate is strictly
+            # one-sided (a rejection == zero matches), so the recorded counts/snippets/
+            # positions are identical to running the full sweep -- we only bypass work.
+            # counts.setdefault preserves any minified fast-screen hits seeded above.
+            gate = self._signature_gates.get(key)
+            if gate is not None:
+                gate_literals, gate_needs_fold = gate
+                if gate_needs_fold:
+                    if folded_safe is None:
+                        folded_safe = fold_haystack(safe_content)
+                    gate_hay = folded_safe
+                else:
+                    gate_hay = safe_content
+                if not any(lit in gate_hay for lit in gate_literals):
+                    counts.setdefault(key, 0)
+                    continue
 
-                    # Map the exact line indexes of critical threats for the Taint Tracker
-                    if not is_auto_gen and key in {
-                        "io",
-                        "high_risk_execution",
-                        "db_hooks",
-                        "hardcoded_secrets",
-                    }:
-                        line_idx = bisect.bisect_right(line_starts, match.start()) - 1
-                        threat_lines[line_idx].add(key)
-                        positions[key].append(line_idx + 1)  # 1-indexed, matching detector.py's convention
+            # A single finditer pass serves both the count and the snippet/position
+            # harvest -- len(findall()) equals the number of finditer matches, so
+            # counting as we iterate is output-identical while halving the regex
+            # work on every threat-bearing file (#3173). We still ADD to any fallback
+            # screen hits rather than overwriting them, and the safe_content haystack
+            # keeps the 250-char ReDoS armor intact.
+            new_hits = 0
+            for match in regex.finditer(safe_content):
+                new_hits += 1
+                snip = match.group(0).strip()
+                if len(snippets[key]) < 3 and snip not in snippets[key]:
+                    snippets[key].append(snip)
+
+                # Map the exact line indexes of critical threats for the persisted ledger (#348)
+                if not is_auto_gen and key in {
+                    "io",
+                    "high_risk_execution",
+                    "db_hooks",
+                    "hardcoded_secrets",
+                }:
+                    line_idx = bisect.bisect_right(line_starts, match.start()) - 1
+                    positions[key].append(line_idx + 1)  # 1-indexed, matching detector.py's convention
+
+            counts[key] = counts.get(key, 0) + new_hits
 
         # ---> 3. SHANNON ENTROPY (Obfuscation Detection) <---
         entropy_hits = 0
@@ -313,76 +423,8 @@ class SecurityLens:
             counts["entropy"] = entropy_hits
             snippets["entropy"] = entropy_snippets
 
-        # ---> 4. DATA FLOW & TAINT TRACKING (O(H) Offset Mapper) <---
-        taint_hits = 0
-        taint_snippets: list[str] = []
-
-        has_global_io = counts.get("io", 0) > 0
-        has_global_danger = counts.get("high_risk_execution", 0) > 0
-        has_global_db = counts.get("db_hooks", 0) > 0
-
-        if has_global_io and (has_global_danger or has_global_db) and not is_auto_gen:
-            tainted_vars = set()
-            common_keywords = {
-                "const",
-                "let",
-                "var",
-                "def",
-                "String",
-                "int",
-                "val",
-                "final",
-                "char",
-                "bool",
-                "auto",
-                "global",
-                "local",
-                "new",
-                "await",
-            }
-
-            # Only iterate over the specific lines that triggered an initial threat
-            for line_idx in sorted(threat_lines.keys()):
-                threats = threat_lines[line_idx]
-                line = safe_lines[line_idx]
-
-                has_io = "io" in threats
-                has_danger = "high_risk_execution" in threats
-                has_db = "db_hooks" in threats
-
-                # Scenario A: Same-Line Detonation
-                if has_io and (has_danger or has_db):
-                    taint_hits += 1
-                    if len(taint_snippets) < 3:
-                        taint_snippets.append(f"[I/O -> Exec/DB]: {line[:60]}...")
-
-                # Scenario B: Left-Hand Side (LHS) Assignment Extraction
-                if has_io:
-                    # Prevent splitting on comparison operators (==, ===, !=, !==, <=, >=)
-                    if re.search(r"[=!<>]=", line):
-                        assign_op = None
-                    else:
-                        assign_op = ":=" if ":=" in line else "=" if "=" in line else None
-
-                    if assign_op:
-                        lhs = line.split(assign_op)[0]
-                        possible_vars = re.findall(r"\b[a-zA-Z_]\w*\b", lhs)
-                        for v in possible_vars:
-                            if v not in common_keywords:
-                                tainted_vars.add(v)
-
-                # Scenario C: Downward Flow Scan (Check Execution Sink)
-                # Because execution requires a sink, the sink line MUST be in threat_lines!
-                if (has_danger or has_db) and tainted_vars:
-                    for t_var in tainted_vars:
-                        # O(1) string check before running full regex
-                        if t_var in line and re.search(rf"\b{re.escape(t_var)}\b", line):
-                            taint_hits += 1
-                            if len(taint_snippets) < 3:
-                                taint_snippets.append(f"[Taint -> Exec/DB]: {line[:60]}...")
-
-        counts["tainted_injection"] = taint_hits
-        snippets["tainted_injection"] = taint_snippets
+        # Data-flow taint tracking removed (#3101): the tainted_injection signal was
+        # score-dead since #1020 and measured ~0% precision / ~0% recall on the corpus.
 
         return {"counts": counts, "snippets": snippets, "positions": dict(positions)}
 
@@ -398,10 +440,9 @@ class SecurityLens:
             return threats
 
         expected_magic = self.MAGIC_BYTES.get(ext.lower())
-        if expected_magic:
-            if not raw_bytes.startswith(expected_magic):
-                threats["sec_extension_mismatch"] = 1
-                threats["threat_snippet"] = f"Expected {expected_magic}, found mismatch"
+        if expected_magic and not raw_bytes.startswith(expected_magic):
+            threats["sec_extension_mismatch"] = 1
+            threats["threat_snippet"] = f"Expected {expected_magic}, found mismatch"
 
         for header in self.THREAT_HEADERS:
             if header in raw_bytes:

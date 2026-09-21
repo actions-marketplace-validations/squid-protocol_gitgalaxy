@@ -38,8 +38,12 @@ DEFINITION: dict[str, Any] = {
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch: decisions that split flow. Includes switch on/when and DML try-catch.
+        # #2545: `return` removed -- was phantom-counting every early-return method as a
+        # branch with no real decision point (java, apex's own JVM-family sibling, doesn't
+        # count it either). Already tracked under `structural_boundaries` below, so this is
+        # a pure de-duplication. Corpus impact: apex branch 19 (planted 3, +280%) -> exact.
         "branch": re.compile(
-            r"\b(if|else|switch\s+on|when|for|while|do|try|catch|finally|break|continue|return)\b|&&|\|\||\?|\?\?",
+            r"\b(if|else|switch\s+on|when|for|while|do|break|continue)\b|&&|\|\||\?|\?\?",
             re.I,
         ),
         # 2. args: Parameters / Coupling. Captures method parameters and trigger event signatures.
@@ -58,10 +62,53 @@ DEFINITION: dict[str, Any] = {
             # multi-line SObject-builder calls) can't be parsed as "return type = new,
             # name = ClassName". Mirrors csharp's own GHOST ARGS SHIELD, which already
             # excludes `new` from its equivalent prefix group.
+            # #2783: the return-type group's trailing `?` is GONE -- it made the whole
+            # prefix optional, and since the annotation and modifier runs are both
+            # zero-allowed the method arm degenerated to `^[ \t]*IDENT(...)`, which is
+            # exactly the shape of a bare call statement. `args` matches the parameters a
+            # callable DECLARES (docs/args_rule_contract.md); a call site consumes a
+            # parameter surface, it does not publish one -- so `isAccessible(value);`,
+            # `probeRisk(argv);` and `return (Double) x.get('total');` all scored as
+            # declared parameter lists. Unlike groovy (#2782) Apex has no `def`:
+            # every method declaration carries an explicit return type (`void` included),
+            # and a constructor carries the class name in that position (`public Foo(x)`
+            # backtracks to return-type=`public`, name=`Foo`, so constructors are kept).
+            # A `(?=[ \t\n]*\{)` body-terminator lookahead -- javascript's anchor, and the
+            # other shape #2773 used -- was rejected because it cannot reach Apex's
+            # bodiless interface and `abstract` method declarations, and relaxing it to
+            # `[{;]` would re-admit `foo(x);` calls verbatim. Mandatory return type is what
+            # `java` ("Standard Methods MUST have a return type") and `csharp` -- the same
+            # C-family rule, same shape -- already do. `args` has NO downstream validator,
+            # so this arm has to be right on its own; the `func_start` sibling below keeps
+            # its `?` because #1221's gating lookahead already demands one of the three
+            # prefixes AND `_slice_by_braces` re-checks every match for a real body.
+            # `return` joins `new` in the return-type slot's exclusion (csharp branch 1
+            # excludes both, plus if/for/while/switch/yield/delegate/event): no Apex
+            # declaration can return a type named `return`, but `return doWork(x);` is a
+            # call whose two tokens otherwise satisfy "type name(...)" exactly.
+            # NOT fixed here and still counted: a SOQL clause inside `[...]` whose shape is
+            # `KEYWORD FUNC(arg)` -- `SELECT SUM(Amount) total` reads as type=`SELECT`,
+            # name=`SUM`. That is a different defect (a whole sub-language being scanned as
+            # Apex statements, which wants a scope filter, not a keyword list); 1 hit in
+            # language-crucible, 0 in keyword-rosetta, unchanged by this commit.
             r"^[ \t]*(?:@[\w.]+\b(?:\s*\((?:[^)(]|\([^)(]*\))*\))?\s*){0,5}"
             r"(?:(?:public|private|global|protected|static|override|virtual|abstract|testMethod)\s+){0,5}"
-            r"(?:(?!new\b)[a-zA-Z_][\w.]*(?:\s*<(?:[^<>]|<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>)*>)?(?:\s*\[\s*\])*\s+)?(?!(?:class|interface|enum|if|for|while|switch|catch)\b)([a-zA-Z_]\w*)\s*(\([^)]*\))|"
-            r"^[ \t]*trigger\s+([a-zA-Z_]\w*)\s+on\s+[a-zA-Z_]\w*\s*(\([^)]*\))",
+            r"(?:(?!(?:new|return)\b)[a-zA-Z_][\w.]*(?:\s*<(?:[^<>]|<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>)*>)?(?:\s*\[\s*\])*\s+)(?!(?:class|interface|enum|if|for|while|switch|catch)\b)([a-zA-Z_]\w*)\s*(\([^)]*\))|"
+            r"^[ \t]*trigger\s+([a-zA-Z_]\w*)\s+on\s+[a-zA-Z_]\w*\s*(\([^)]*\))|"
+            # #2783 branch 3 (constructors): an Apex constructor legally carries NO access
+            # modifier (`MyClass(Integer x) {`, default private), which is the one real
+            # declaration shape the mandatory return type above cannot reach -- it is
+            # lexically identical to a bare call. Anchored the way `java`/`csharp` anchor
+            # their own Branch 2 ("Constructors lack return types, so they MUST be anchored
+            # to `:` or `{`"): on the body `{` that FOLLOWS the parameter list. A call
+            # statement is followed by `;`, never `{`, so this cannot re-admit the shape
+            # branch 1 just stopped matching. Placed LAST so the method and trigger arms
+            # keep their capture-group indices (`_calculate_block_metrics` reads
+            # `group(lastindex)`, and this arm likewise ends on its parameter-list group).
+            r"^[ \t]*(?:@[\w.]+\b(?:\s*\((?:[^)(]|\([^)(]*\))*\))?\s*){0,5}"
+            r"(?:(?:public|private|global|protected|static|override|virtual|abstract|testMethod)\s+){0,5}"
+            r"(?!(?:new|return|class|interface|enum|if|else|for|while|do|switch|catch|try|finally)\b)"
+            r"([a-zA-Z_]\w*)\s*(\([^)]*\))(?=[ \t\n]*\{)",
             re.M | re.I,
         ),
         # 3. linear: Sequential I/O & Network Boundaries. Structural boundaries. EXCLUDES access modifiers and sharing keywords.
@@ -131,8 +178,11 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 8. danger: High-Risk Execution. Dynamic SOQL, mass deletion, and hardcoded IDs.
+        # #2878 contract: C6 Database.query is safety_bypasses' alone (batch4 dual retired);
+        # C4/C5 `delete` is single-record DML, `undelete` restores, a hard-coded ID is not a
+        # site; emptyRecycleBin (whole-store, C4), abortJob (termination, C1) are this signal's.
         "high_risk_execution": re.compile(
-            r"\b(Database\.query|delete|undelete|emptyRecycleBin|purgeOldAsyncJobs)\b|\'[a-z0-9]{15,18}\'",
+            r"\b(emptyRecycleBin|abortJob|purgeOldAsyncJobs)\b",
             re.I,
         ),
         # 9. io: I/O & Network Boundaries. SOQL/SOSL queries, HTTP callouts, and batch boundaries.
@@ -147,7 +197,20 @@ DEFINITION: dict[str, Any] = {
         ),
         # 11. flux: State Mutation. State mutation (DML operations and standard assignments).
         "state_mutation": re.compile(
-            r"\b(insert|update|upsert|delete|merge)\b|^[ \t]*(?:this\.)?[a-z_]\w*\s*[-+*/%]?=|\.(?:add|addAll|remove|put|clear|set)\s*\(",
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # A DML statement writes the database. `delete`/`undelete` are the
+            # `high_risk_execution` rule's tokens and `.clear(` is `cleanup`'s (corollary 4).
+            r"^[ \t]*(?:insert|update|upsert|merge)[ \t]+[a-z_(\[]|\bDatabase\.(?:insert|update|upsert|merge)\s*\("
+            r"|(?:^|[;{}])[ \t]*[a-z_]\w*(?:\.[a-z_]\w*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%&|^]|<<|>>)?=(?![=>])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_(*]"
+            r"|\.(?:add|addAll|remove|put|putAll|set)\s*\(",
             re.I | re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails) Commented out structural code or queries.
@@ -156,7 +219,12 @@ DEFINITION: dict[str, Any] = {
             re.I | re.M,
         ),
         # 13. doc: Structured Documentation. ApexDoc annotations and metadata blocks.
-        "doc": re.compile(r"/\*\*|@description|@param|@return|@author|@date|@example", re.I),
+        # #2672: block form first (`/** ... */`, bounded/non-greedy, identical shape to
+        # #2658's python fix) so a whole ApexDoc comment -- markers plus every tag inside
+        # it -- counts once, not once per marker plus once per tag. `@author` removed from
+        # the bare-tag fallback entirely: it's owned by `ownership` (the #2659 shape); see
+        # that rule's own comment for the companion colon-optional relaxation this required.
+        "doc": re.compile(r"/\*\*[\s\S]{0,15000}?\*/|@description|@param|@return|@date|@example", re.I),
         # 14. test: Testing & Assertions. Salesforce test execution and assertion markers.
         "test": re.compile(
             r"@isTest|@TestSetup|@TestVisible|\b(?:Test\.startTest|Test\.stopTest|System\.assert|Assert\.(?:isTrue|isNotNull|areEqual)|Test\.setMock)\b",
@@ -205,17 +273,35 @@ DEFINITION: dict[str, Any] = {
         # 24. import: Dependency Inclusions.
         # Apex lacks a native import keyword. Cross-package dependencies are established via
         # reflection (Type.forName) or explicitly namespaced static invocations.
-        "import": re.compile(
-            r"\bType\.forName\b|(?!(?:System|Database|Schema|Auth|Cache|Chatter|EventBus|Limits|Messaging|RestContext|Test)\b)\b[a-zA-Z_]\w*\.[A-Z]\w*\b",
-            re.I,
-        ),
+        # #2671: the whole pattern was compiled with re.IGNORECASE (needed so
+        # `Type.forName`/`TYPE.FORNAME` both match), which also neutralised the `[A-Z]`
+        # guard meant to isolate a genuine type reference (lowercase receiver, capitalised
+        # member) -- under re.I, `[A-Z]` matches any letter, so the alternative degraded to
+        # "any word.word" and every ordinary method call (foo.bar, conn.clear, Logger.info)
+        # counted as an import. `(?-i:...)` locally turns case-insensitivity back OFF for
+        # just the member-name class, so the guard actually guards while `Type.forName` and
+        # the namespace-exclusion lookahead stay case-insensitive as before.
+        # #2875 contract C3: a qualified `Receiver.Member` is a reference, not a binding
+        # (apex has no import statement; every class in the org is visible). The
+        # dynamic loader `Type.forName(` is the language's one load form. #2671 scoped
+        # the reference arm's guard; the contract retires the arm.
+        "import": re.compile(r"\bType[ \t]*\.[ \t]*forName[ \t]*\(", re.I),
         "_dependency_capture": re.compile(
             r"\bType\s*\.\s*forName\s*\(\s*['\"]([^'\"]+)['\"](?:[ \t\n]*,[ \t\n]*['\"]([^'\"]+)['\"])?\s*\)",
             re.I,
         ),
         # 25. ownership: Authorship indicators.
+        # #2672: `@author` requiring a colon (`@author:\s+`) meant idiomatic, colon-less
+        # ApexDoc (`@author Joe`) was never claimed by ownership at all -- it was
+        # doc-only (before this fix, double-counted there too). Now that `doc` drops
+        # `@author` entirely (see that rule's comment), the bare form would be lost with
+        # nowhere left to count it. Relaxed to colon-optional for just the `@author`
+        # alternative; the remaining prose-risky alternatives (Author|Created by|
+        # Maintainer|Copyright|Tim Berners-Lee) stay colon-required so ordinary prose
+        # ("the Author of this module") still can't false-positive.
+        # #2882 contract: C2 `Copyright:` out; a person's name is not a rule (C1)
         "ownership": re.compile(
-            r"(?:@author|Author|Created by|Maintainer|Copyright|Tim Berners-Lee):\s+([^\n]+)",
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
             re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -277,7 +363,9 @@ DEFINITION: dict[str, Any] = {
         # 45. immutability_locks (Immutability Constraints) Immutability (constants).
         "immutability_locks": re.compile(r"\b(static\s+final|final|const)\b", re.I),
         # 46. cleanup (Resource Cleanup / Teardown) Recycle bin management.
-        "cleanup": re.compile(r"\b(emptyRecycleBin|Database\.rollback|clear)\s*\(", re.I),
+        "cleanup": re.compile(
+            r"\b(Database\.rollback|clear)\s*\(", re.I
+        ),  # #2878 C6: emptyRecycleBin is high_risk_execution\'s
         # 47. encapsulation (Encapsulation / Access Modifiers)
         "encapsulation": re.compile(r"\b(private|protected)\b", re.I),
         # 48. listeners (Event Listeners / Observers) Triggers listening for events.

@@ -63,8 +63,8 @@ DB_PATH = SELF_SCAN_DIR / "gitgalaxy_master.db"
 # the recorder (repo_name column) and StateRehydrator.load_latest_state() key on.
 PROJECT_NAME = REPO_ROOT.name
 
-# Mirrors the HAS_NETWORKX / HAS_TIKTOKEN / ML_AVAILABLE / HAS_PYYAML checks in
-# galaxyscope.py / network_risk_sensor.py / security_auditor.py. Without every
+# Mirrors missing_dependencies() in galaxyscope.py (HAS_TIKTOKEN / HAS_PYYAML, plus
+# security_auditor.py's HAS_NUMPY / HAS_PANDAS / HAS_XGBOOST) (networkx is not one: the engine never uses it, #3041). Without every
 # one of these, galaxyscope silently drops into "Zero-Dependency Mode" --
 # pagerank_score and normalized_blast_radius (and other network/ML-derived
 # columns) get written as NULL instead of erroring, since zero-dependency mode
@@ -72,7 +72,7 @@ PROJECT_NAME = REPO_ROOT.name
 # the full ML stack isn't wanted. But for THIS repo's own self-scan, silently
 # degraded output defeats the point -- callers query this DB assuming full
 # precision. Fail loudly before wasting a scan on a DB nobody wanted.
-FULL_PRECISION_PACKAGES = ("networkx", "tiktoken", "numpy", "pandas", "xgboost", "yaml")
+FULL_PRECISION_PACKAGES = ("tiktoken", "numpy", "pandas", "xgboost", "yaml")
 
 
 def _check_full_precision_deps() -> None:
@@ -82,7 +82,7 @@ def _check_full_precision_deps() -> None:
             "self-scan aborted -- missing full-precision dependencies: "
             + ", ".join(missing)
             + "\nWithout these, galaxyscope silently degrades to Zero-Dependency Mode and "
-            "pagerank_score/normalized_blast_radius (and other network/ML-derived columns) "
+            "token mass and the ML columns "
             "come back NULL instead of erroring. Install them into this environment first:\n"
             "    pip install " + " ".join(pkg if pkg != "yaml" else "pyyaml" for pkg in missing)
         )
@@ -219,16 +219,16 @@ def print_summary(ran: bool) -> None:
         print(f"   {total_files} files, {total_funcs} functions, {total_classes} classes indexed.")
 
         # Belt-and-suspenders: _check_full_precision_deps() confirms the
-        # packages are importABLE, not that galaxyscope actually used them --
-        # an internal exception during graph-building could still leave these
-        # NULL even with every dependency present. Verify the real output.
-        (with_pagerank,) = conn.execute("SELECT COUNT(*) FROM file_data WHERE pagerank_score IS NOT NULL").fetchone()
-        if total_files and with_pagerank == 0:
+        # packages are importABLE, not that galaxyscope actually used them.
+        # Verify the real output. #3027: this used to test "pagerank_score is
+        # NULL for every file", but PageRank is now computed natively in
+        # zero-dependency mode too, so read the scan's own mode flag instead.
+        zero_dep_row = conn.execute("SELECT MAX(is_zero_dependency_mode) FROM repo_data").fetchone()
+        if total_files and zero_dep_row and zero_dep_row[0]:
             print(
-                "⚠️  pagerank_score/normalized_blast_radius are NULL for every file -- this scan "
-                "ran in Zero-Dependency Mode despite full-precision packages being importable. "
-                "Blast-radius queries against this DB will return nothing; check galaxyscope's "
-                "stderr output above for why.",
+                "⚠️  This scan ran in Zero-Dependency Mode despite full-precision packages being "
+                "importable: token mass and ML columns are "
+                "NULL. Check galaxyscope's stderr output above for why.",
                 file=sys.stderr,
             )
     finally:

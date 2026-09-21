@@ -63,7 +63,7 @@ DEFINITION: dict[str, Any] = {
         # Control flow jumps. Includes modern coroutine jumps (co_yield, co_await).
         # EXCLUDES exceptions (bailout_hits).
         "branch": re.compile(
-            r"\b(if|else|switch|case|default|for|while|do|catch|break|continue|goto|co_yield|co_await)\b|&&|\|\||\?"
+            r"\b(if|else|switch|case|default|for|while|do|break|continue|co_yield|co_await)\b|&&|\|\||\?"
         ),
         # 2. args (Parameters / Coupling)
         # Parameter blocks of functions and lambdas. Bounded to prevent ReDoS on massive signatures.
@@ -98,7 +98,7 @@ DEFINITION: dict[str, Any] = {
         # 3. linear (Sequential Boundaries)
         # Structural boundaries. EXCLUDES: Access modifiers (encapsulation) and const (freeze_hits).
         "structural_boundaries": re.compile(
-            r"\b(namespace|using|class|struct|enum|union|template|typename|concept|requires|auto|return|void|inline|virtual|explicit|friend|module|export|import|typedef)\b"
+            r"\b(namespace|using|class|struct|enum|union|template|typename|concept|requires|auto|return|void|inline|virtual|explicit|friend|module|export|import|typedef|goto)\b"
         ),
         "func_start": re.compile(
             # =====================================================================
@@ -266,10 +266,13 @@ DEFINITION: dict[str, Any] = {
         "safety_bypasses": re.compile(r"\bstd::any\b|\bvoid\s*\*|catch\s*\(\s*\.\.\.\s*\)"),
         # 8. danger (High-Risk Execution / System Calls)
         # Process killers and low-level blits. EXCLUDES prints (Phase 5).
-        "high_risk_execution": re.compile(r"\b(system|memcpy|memset|abort|exit|std::terminate|longjmp|setjmp)\b"),
+        # #2878 contract C2: call form -- Godot's `bool exit = false; exit = true;` is an
+        # identifier, `"Thread exit status"` is prose; C5 memcpy/memset are memory primitives,
+        # not a danger family; setjmp is the landing point, longjmp the site.
+        "high_risk_execution": re.compile(r"\b(?:system|abort|exit|_Exit|quick_exit|std::terminate|longjmp)\s*\("),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
-            r"\b(std::fstream|std::ifstream|std::ofstream|std::filesystem|fopen|fclose|fread|fwrite|socket|recv|send|asio::|curl_easy_perform|std::cin)\b"
+            r"\b(std::fstream|std::ifstream|std::ofstream|std::filesystem|fopen|fread|fwrite|socket|recv|send|asio::|curl_easy_perform|std::cin)\b"
         ),
         # 10. api (Public Surface Area)
         # Code exposed to the world. Explicit visibility and module exports.
@@ -290,7 +293,27 @@ DEFINITION: dict[str, Any] = {
         # 11. flux (State Mutation)
         # Mutation of state. Includes moves and increments.
         "state_mutation": re.compile(
-            r"\b(mutable|std::move|std::exchange|std::swap|std::atomic)\b|(?<![=!<>])=(?![=])|&(?!\s*const)|\+\+|--|(?:\+=|-=|\*=|/=|%=|<<=|>>=|&=|\|=|\^=)"
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `mutable` / `std::atomic` name mutable state (contract corollary 2), `std::move`
+            # is a cast and `&` a borrow (corollary 3): none of them writes anything.
+            # `std::swap`/`std::exchange` and the container mutators do.
+            # #3072: the call parens in the swap/mutator arms bind with `[ \t]*`,
+            # not `\s*` -- the paren must open on the same line as the method
+            # name. That loses only the pathological `x.push_back\n(v)` layout
+            # (zero occurrences corpus-wide when narrowed) and makes every arm
+            # provably newline-free, which is what lets this rule opt into
+            # `_line_gates` below.
+            r"(?:^|[;{}(),])[ \t]*\**[A-Za-z_]\w*(?:(?:\.|->)[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*[ \t]*(?:[-+*/%&|^]|<<|>>)?=(?![=])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_(*]"
+            r"|\bstd::(?:swap|exchange)[ \t]*\(|\bstd::mem::(?:swap|replace)[ \t]*\("
+            r"|\.(?:push_back|emplace_back|emplace|insert|erase|clear|pop_back|pop_front|push_front|resize|assign|swap)[ \t]*\(",
+            re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         # Commented-out execution logic indicating dead features. MUST enforce that the structural keyword immediately follows the comment token.
@@ -302,8 +325,17 @@ DEFINITION: dict[str, Any] = {
             r"(?://|/\*)[ \t]*(?:if|for|while|auto|class|struct|std::cout|std::print|printf|void|int|return)\b"
         ),
         # 13. doc (Structured Documentation)
+        # BUG FIX #2672: `/**`, `///` and the Doxygen tags (`@param`,
+        # `\param`, ...) were independent alternatives, so one Doxygen
+        # comment counted doc proportional to its tag density. Block form
+        # first (bounded 0,15000 chars non-greedy span, the #2658 shape),
+        # then the line-marker form so `/// @param x` is one hit per line,
+        # not two; bare tags stay last so a tag outside any doc comment
+        # still counts. No corpus movement -- the rosetta corpus only
+        # plants one of {marker, tag} for this language.
         "doc": re.compile(
-            r"///|/\*\*|@param|@return|@brief|@details|@tparam|\\param|\\return|\\brief|\\details|\\tparam"
+            r"/\*\*[\s\S]{0,15000}?\*/|///[^\n]*|@param|@return|@brief|@details|@tparam"
+            r"|\\param|\\return|\\brief|\\details|\\tparam"
         ),
         # 14. test (Testing & Assertions)
         # Triggers indicating internal verification. Anchors explicit GTest/Catch2 macros and prevents prose collisions.
@@ -329,7 +361,14 @@ DEFINITION: dict[str, Any] = {
         ),
         # 18. globals (Global / Shared State)
         "globals": re.compile(
-            r"\b(extern|static(?!\s*assert)|thread_local|inline\s+constexpr)\b|^[ \t]*(?:static|extern)\s+[\w:<>_]+\s+[a-zA-Z_]\w*[ \t]*=",
+            # #2858 contract: `static`/`extern`/`thread_local` on a DATA declaration
+            # is a binding with program lifetime (file scope, class-static or a
+            # function-static); on a procedure it declares linkage, not state
+            # (corollary 4: `static void f();`, `extern "C" {`). The lookahead stops
+            # at `=`, so `static T x = f();` still counts; `static thread_local` is
+            # one declaration, one hit.
+            r"\b(?:(?:extern|static)(?![ \t]*(?:assert\b|\"))(?:[ \t]+thread_local)?|thread_local)\b(?![^;=\n({]{0,200}\()"
+            r"|(?<!static )\binline[ \t]+constexpr\b",
             re.M,
         ),
         # 19. decorators (Decorators / Annotations)
@@ -366,7 +405,11 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"(?:@author|\\author|Author:|Created by:|Copyright)\s+(.*)", re.I),
+        # #2882 contract: C2 the copyright notice and the license's own prose out (62 -> 1); \author, keyed lines, Xcode's dated `Created by` in
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|\\author[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*//+[ \t]*Created[ \t]+by[ \t]+(\S[^\n]*?)[ \t]+on[ \t]+\d[^\n]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -383,7 +426,9 @@ DEFINITION: dict[str, Any] = {
         # 31. ssr_boundaries (Server-Side Rendering)
         "ssr_boundaries": re.compile(r"\b(FCGI_Accept|render_template|Inja::|ctemplate::)\b"),
         # 32. events (Event Emitters / Pub-Sub)
-        "events": re.compile(r"\b(emit|signal|slot|notify|publish|subscribe|boost::signals2)\b"),
+        # #2899: `signal` anchored to its call form so the word inside prose strings
+        # no longer counts.
+        "events": re.compile(r"\b(emit|slot|notify|publish|subscribe|boost::signals2)\b|\bsignal\s*\("),
         # 33. dependency_injection (Dependency Injection / IoC)
         "dependency_injection": re.compile(r"\b(boost\.di|fruit::|[I]nject|IServiceCollection)\b"),
         # 34. macros (Preprocessor Directives / Macros)
@@ -458,9 +503,12 @@ DEFINITION: dict[str, Any] = {
         # word character), meaning this rule never matched anything.
         # Removed the trailing `\b`; the literal `:` is already
         # unambiguous.
-        "encapsulation": re.compile(r"\b(?:private|protected|internal):"),
+        # #2766: `internal:` removed -- not a C++ access label.
+        "encapsulation": re.compile(r"\b(?:private|protected):"),
         # 48. listeners (Event Listeners / Observers)
-        "listeners": re.compile(r"\b(on|addEventListener|subscribe|connect|handler|callback)\b"),
+        # #2899: `on` and `callback` anchored to their call form -- bare, they matched
+        # prose in strings and ordinary identifiers.
+        "listeners": re.compile(r"\bon\s*\(|\bcallback\s*\(|\b(addEventListener|subscribe|connect|handler)\b"),
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         # BUG FIX (Rule 10): `mock\(`/`fake\(` end in a literal `(` but
         # shared a trailing `\b` with word-ending siblings -- broke on
@@ -468,6 +516,15 @@ DEFINITION: dict[str, Any] = {
         # already found and fixed in C (#773).
         "test_skip": re.compile(r"\b(?:GTEST_SKIP|test\.skip|it\.skip)\b|mock\(|fake\("),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (C++ Specifics) ---
+        # auth_middleware (#3004): c's PAM/POSIX/Win32 vocabulary verbatim plus
+        # the jwt-cpp verification calls.
+        "auth_middleware": re.compile(
+            r"\b(?:pam_authenticate|pam_acct_mgmt"
+            r"|set(?:e|res)?uid|set(?:e|res)?gid"
+            r"|LogonUser[AW]?|CheckTokenMembership)[ \t]*\("
+            r"|\bjwt::(?:verify|decode)\("
+            r"|\b(?:bcrypt|argon2)::(?:verify|validate)\w*\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(nlohmann::json|rapidjson|boost::archive|ParseFromString|SerializeToString)\b"
         ),
@@ -476,5 +533,14 @@ DEFINITION: dict[str, Any] = {
             r"\b(std::chrono::(?:system_clock|steady_clock|duration)|std::time_t|std::localtime)\b"
         ),
         "ipc_rpc_bridges": re.compile(r"\b(boost::interprocess|mmap|shm_open|pipe|fork|grpc::ServerBuilder)\b"),
+        # system_config_mutation (#3084): contract-level absence. no dedicated
+        # config-mutation form -- same file-I/O reasoning as c.
+        "system_config_mutation": None,
+        # #3072: every state_mutation arm requires `=`/`++`/`--` or a
+        # swap/container-mutator method name on the match's own line (the
+        # `[ \t]*\(` narrowing above is what makes the method arms
+        # newline-free); sweep only those lines. See c.py's entry for the
+        # safety contract.
+        "_line_gates": ("state_mutation",),
     },
 }

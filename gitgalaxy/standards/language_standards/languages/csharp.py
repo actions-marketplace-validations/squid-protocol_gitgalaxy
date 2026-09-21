@@ -59,7 +59,7 @@ DEFINITION: dict[str, Any] = {
         # Decisions and logical jumps. EXCLUDES throw (bailout_hits).
         # Includes pattern matching (and, or, not) and null-coalescing.
         "branch": re.compile(
-            r"\b(if|else|switch|case|default|for|foreach|while|do|catch|finally|continue|break|goto|try|yield\s+return|yield\s+break|and|or|not)\b|\?\?|\?\.|(?<=\s)\?(?=\s)"
+            r"\b(if|else|switch|case|default|for|foreach|while|do|continue|break|yield\s+return|yield\s+break|and|or|not)\b|\?\?|\?\.|(?<=\s)\?(?=\s)"
         ),
         # 2. args (Parameters / Coupling)
         # Parameter blocks for methods, primary constructors, and lambdas.
@@ -270,8 +270,9 @@ DEFINITION: dict[str, Any] = {
         "safety_bypasses": re.compile(r"!\.|\bnull!|#pragma\s+warning\s+disable|\.Result\b|\.Wait\(\)|\b(dynamic)\b"),
         # 8. danger (High-Risk Execution / System Calls)
         # Extreme tech debt/vulnerabilities. EXCLUDES TODO (debt) and Console (print).
+        # #2878 contract C3: `goto` is a jump inside the unit and nobody's signal (as in c/go/perl).
         "high_risk_execution": re.compile(
-            r"\b(Thread\.Abort|Process\.Start|Environment\.FailFast|Environment\.Exit|goto)\b"
+            r"\b(?:Thread\.Abort|Process\.Start|Environment\.FailFast|Environment\.Exit)\b"
         ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
@@ -279,8 +280,28 @@ DEFINITION: dict[str, Any] = {
         ),
         # 10. api (Public Surface Area)
         # Public exposure surface. Explicit visibility + Controller mapping.
+        # BUG FIX #2730 (api contract): a bare `\bpublic|internal\b` counted the
+        # access modifier ANYWHERE in the code stream -- inside a string
+        # literal, a `switch` case, a dotted name -- not only where it
+        # declares something. The alternatives below anchor it to the
+        # declaration it modifies, per docs/api_rule_contract.md ("a
+        # declaration that makes a named function or type visible outside
+        # this file"). Every quantifier is bounded (Rule 5) and the modifier
+        # stepper is `{0,5}`, not `*`, so the `[ \t\n]+`-separated
+        # alternation cannot nest unboundedly (the ReDoS shape swift's `open`
+        # alternative was already written against).
+        # The type slot also accepts a tuple type (`(bool ok, int n)?`) and
+        # the name slot a generic argument list, both of which real Roslyn
+        # source puts between the modifier and the `(`. Measured: 387
+        # crucible matches before, 387 after.
         "api": re.compile(
-            r"\b(public|internal)\b|\[(?:HttpGet|HttpPost|HttpPut|HttpDelete|Route|ApiController|HubMethodName)\]|\bapp\.Map(?:Get|Post|Put|Delete|Group)\b"
+            r"\b(?:public|internal)[ \t\n]+"
+            r"(?:(?:static|virtual|override|abstract|sealed|async|unsafe|partial|new|extern|readonly|const|volatile|required|ref|event|delegate|implicit|explicit|file)[ \t\n]+){0,5}"
+            r"(?:class|interface|struct|record|enum|delegate|event|void\b"
+            r"|(?:\((?:[^()\n]|\([^()\n]*\))*\)\??|[@A-Za-z_][\w.]*(?:[ \t\n]*<(?:[^<>]|<[^<>]*>){0,200}>)?\??(?:\[[ \t\n,]*\])*)"
+            r"[ \t\n]+[@A-Za-z_]\w*(?:[ \t\n]*<(?:[^<>]|<[^<>]*>){0,200}>)?[ \t\n]*[({=;,]"
+            r"|[@A-Za-z_]\w*[ \t\n]*\()"
+            r"|\[(?:HttpGet|HttpPost|HttpPut|HttpDelete|Route|ApiController|HubMethodName)\]|\bapp\.Map(?:Get|Post|Put|Delete|Group)\b"
         ),
         # 11. flux (State Mutation)
         # Mutation of state. EXCLUDES const/readonly (freeze_hits).
@@ -292,7 +313,22 @@ DEFINITION: dict[str, Any] = {
         # fire if the assignment happened to be the first line of the
         # entire scanned content.
         "state_mutation": re.compile(
-            r"\b(set|field)\s*[{;]|volatile|ref\s|out\s|^[ \t]*(?:this\.)?\w+[ \t]*=|(?:\w+\.)?(?:Add|Remove|Clear|Insert|Push|Pop|Update)\s*\(",
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # A property accessor (`set;`) and `volatile` describe state (corollary 2).
+            # `ref x` / `out x` count at a CALL site, where the callee writes the caller's
+            # variable: one identifier then `,`/`)`. A parameter declaration (`ref int x`)
+            # carries a type and is not matched; `out var x` declares.
+            r"(?:^|[;{}])[ \t]*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%&|^]|<<|>>|\?\?)?=(?![=>])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_(*]"
+            r"|(?<=[(,])[ \t]*(?:ref|out)[ \t]+[A-Za-z_][\w.]*[ \t]*(?=[,)])"
+            r"|\.(?:Add|AddRange|Remove|RemoveAt|Clear|Insert|Push|Pop|Enqueue|Dequeue|TryAdd|Set|Update)\s*\(",
             re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
@@ -304,7 +340,14 @@ DEFINITION: dict[str, Any] = {
             r"(?://|/\*)[ \t]*(?:public|private|protected|internal|class|void|if|for|foreach|while|return|using)\b"
         ),
         # 13. doc (Structured Documentation)
-        "doc": re.compile(r"///|///\s*<summary>|///\s*<param|///\s*<returns>|///\s*<remarks>"),
+        # BUG FIX #2672: apply the family-wide line-marker fix (#2658
+        # shape) so `///` swallows the rest of its line as one hit. The
+        # more specific `///\s*<summary>` etc. alternatives already require
+        # the `///` prefix (they are not independent bare tags), so this
+        # was never a double-count vector here -- no corpus or behavior
+        # change; a run of consecutive `///` lines still counts once per
+        # line (unchanged, explicit non-goal).
+        "doc": re.compile(r"///[^\n]*|///\s*<summary>|///\s*<param|///\s*<returns>|///\s*<remarks>"),
         # 14. test (Testing & Assertions)
         # BUG FIX: `Should\(\)` (FluentAssertions) ends on `)`
         # (non-word), so the shared trailing \b could never fire --
@@ -334,8 +377,14 @@ DEFINITION: dict[str, Any] = {
         # spaced form (`MAX_VALUE = 100;`) that's the dominant real C#
         # style.
         "globals": re.compile(
-            r"\b(?:ConfigurationManager|AsyncLocal)\b|\bEnvironment\.|"
-            r"\bpublic\s+static\s+(?:readonly[ \t]+)?[\w<>]+\s+[A-Z_0-9]+[ \t]*=|\[ThreadStatic\]"
+            # #2858 contract corollary 5: `Environment.Exit` / `.FailFast` end the
+            # process -- high_risk_execution's hit, not an access to the environment.
+            # #2859 (contract C1: scope, not visibility): any class-static FIELD is a
+            # program-scope binding, not just the `public … SCREAMING_CASE =` one the
+            # #2858 rule saw. The `[=;]` terminator excludes `static` methods (a `(`
+            # follows) and `static { get; }` auto-properties (a `{` follows).
+            r"\b(?:ConfigurationManager|AsyncLocal)\b|\bEnvironment\.(?!(?:Exit|FailFast)\b)|"
+            r"\b(?:private|protected|internal|public)?[ \t]*static[ \t]+(?:readonly[ \t]+)?[\w<>\[\].]+[ \t]+\w+[ \t]*[=;]|\[ThreadStatic\]"
         ),
         # 19. decorators (Decorators / Annotations)
         "decorators": re.compile(r"^[ \t]*\[[A-Za-z_][^\]]*\]", re.M),
@@ -354,7 +403,13 @@ DEFINITION: dict[str, Any] = {
             r"\b(System\.Reflection|DllImport|LibraryImport|MethodInfo|Activator|Marshal\.|Emit|ILGenerator)\b"
         ),
         # 24. import (Dependency Inclusions)
-        "import": re.compile(r"^[ \t]*(?:global[ \t]+)?using\s+(?:static[ \t]+)?[\w.]+;", re.M),
+        # #2875 contract C1: the alias directive `using Alias = Target.Namespace;` binds a
+        # unit (the capture below already reads it); a `using` statement/declaration
+        # (`using (var x = …)`, `using var f = …;`) is a scope, not a binding.
+        "import": re.compile(
+            r"^[ \t]*(?:global[ \t]+)?using[ \t]+(?:static[ \t]+)?(?:\w+[ \t]*=[ \t]*)?[\w.]+(?:<[^;\n]*>)?[ \t]*;",
+            re.M,
+        ),
         # ALIAS DIRECTIVE FIX (epic #813/#820): `using Alias = Target.Namespace;` (a using-alias
         # directive, common for shortening long generic types or disambiguating identical type
         # names from different namespaces) didn't match AT ALL -- there was no allowance for the
@@ -371,7 +426,11 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"(?:<author>|Author:|Created by)\s*(.*)", re.I),
+        # #2882 contract: C1 colon-less `Created by` matched prose (`being created by compiling`); <author>, @author, keyed lines
+        "ownership": re.compile(
+            r"<author>[ \t]*([^<\n]+)|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -453,7 +512,9 @@ DEFINITION: dict[str, Any] = {
         # idiomatic C# always PascalCases public members
         # (`.Dispose()`, `.Close()`), so the realistic form never
         # matched at all; only a non-idiomatic lowercase call would.
-        "cleanup": re.compile(r"\b(dispose|close|free|delete|GC\.Collect|GC\.SuppressFinalize)\b\s*\(", re.I),
+        "cleanup": re.compile(
+            r"\b(?<!void )(dispose|close|free|delete|GC\.Collect|GC\.SuppressFinalize)\b\s*\(", re.I
+        ),  # #2888 C1: `public void Dispose()` declares the routine
         # 47. encapsulation (Access Modifiers / Encapsulation)
         "encapsulation": re.compile(r"\b(private|protected|internal|file)\b"),
         # 48. listeners (Event Listeners / Observers)
@@ -471,6 +532,15 @@ DEFINITION: dict[str, Any] = {
             r"\[(?:Ignore|Skipped)\]|\[(?:Fact|Theory)\([^)]*Skip\s*=|test\.skip\(|mock\(|stub\(|Substitute\.For"
         ),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (C# Specifics) ---
+        # auth_middleware (#3004): ASP.NET's [Authorize] attribute, the
+        # authentication/authorization pipeline registration, Identity's sign-in
+        # and credential checks, and the principal role query.
+        "auth_middleware": re.compile(
+            r"\[Authorize[\](]"
+            r"|\.(?:UseAuthentication|UseAuthorization|SignInAsync|SignOutAsync"
+            r"|CheckPasswordAsync|VerifyHashedPassword)\("
+            r"|\.IsInRole\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(JsonSerializer\.Deserialize|JsonConvert\.DeserializeObject|XmlSerializer|BinaryFormatter)\b"
         ),
@@ -479,5 +549,9 @@ DEFINITION: dict[str, Any] = {
             r"\b(DateTime\.Now|DateTime\.UtcNow|DateTimeOffset|TimeSpan|Stopwatch\.StartNew)\b"
         ),
         "ipc_rpc_bridges": re.compile(r"\b(Process\.Start|NamedPipeServerStream|ChannelFactory|GrpcChannel)\b"),
+        # system_config_mutation (#3084): contract-level absence. deferred, see
+        # 3084: the Microsoft.Win32.Registry/ServiceController surface is real,
+        # but crucible incidence is 0 files today.
+        "system_config_mutation": None,
     },
 }

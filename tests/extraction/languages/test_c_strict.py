@@ -20,7 +20,7 @@ _LANGUAGES_DIR = str(Path(__file__).resolve().parent)
 if _LANGUAGES_DIR not in sys.path:
     sys.path.insert(0, _LANGUAGES_DIR)
 
-from _strict_harness import _best_of_timing, assert_redos_immune  # noqa: E402 # type: ignore
+from _strict_harness import assert_redos_immune  # noqa: E402 # type: ignore
 
 
 # ==============================================================================
@@ -82,14 +82,12 @@ C_RULES = LANGUAGE_DEFINITIONS["c"]["rules"]
 
 _C_SIMPLE_CASES = [
     # (signature, positive snippet, text expected to NOT match / None to skip)
-
     # --- DEEP CASES FOR branch ---
     ("branch", "if(x) {", "ifdef FOO"),
     ("branch", "} else if (", "form_data = 1;"),
     ("branch", "case 1:", "case_name"),
     ("branch", "x && y", "x & y"),
     ("branch", "a ? b : c", "int a = 1;"),
-
     # --- DEEP CASES FOR args ---
     ("args", "void myfunc(int (*cb)(int))", "foo(a, b);"),
     ("args", "foo(const struct foo *f)", "return (int)x;"),
@@ -98,7 +96,6 @@ _C_SIMPLE_CASES = [
     ("args", "int my_func(unsigned long int * x)", "sizeof(int)"),
     ("args", "macro_like(enum x y)", "typeof(int)"),
     ("args", "void func(char buf[10])", "_Alignof(int)"),
-
     # --- DEEP CASES FOR func_start ---
     ("func_start", "int main(int argc, char **argv) {", "if (x) {"),
     ("func_start", "static inline void * my_func(void) {", "int a = 1;"),
@@ -107,21 +104,18 @@ _C_SIMPLE_CASES = [
     ("func_start", "int \n myfunc(void) \n {", "for (int i=0; i<10; i++) {"),
     ("func_start", "int old_style(a, b) int a; int b; {", "MACRO(x)\\nint x;"),
     ("func_start", "void _Generic_func() {", "return (x) {"),
-
     # --- DEEP CASES FOR class_start ---
     ("class_start", "struct Point {", "int x;"),
     ("class_start", "typedef struct {", "structing foo;"),
     ("class_start", "enum foo", "instruction"),
     ("class_start", "union bar", "unionize"),
     ("class_start", "  typedef union bar", "reunion"),
-
     # --- DEEP CASES FOR structural_boundaries ---
     ("structural_boundaries", "return x;", "return_val = 1;"),
     ("structural_boundaries", "struct foo", "structured_data"),
     ("structural_boundaries", "_BitInt(32)", "voidable"),
     ("structural_boundaries", "alignas(16)", "true_story"),
     ("structural_boundaries", "typedef int my_int;", "enum_name"),
-
     # Original simple cases (remaining):
     ("safety", "assert(x > 0);", "x = 1;"),
     ("safety_bypasses", "strcpy(dst, src);", "memcpy(dst, src, n);"),
@@ -259,20 +253,15 @@ def test_c_spec_exposure_redos_regression():
     tcl, matlab, scheme, typescript, and rust earlier in this epic (the 8th
     language with this exact shape). Bounded both quantifiers.
     """
-    old_pattern = re.compile(r"\[(?:\s*SPEC\s*-\s*\d+|spec|audit)[^\]]*\]", re.I)
-    # Prove the quadratic blowup via a scale-relative comparison (not an
-    # absolute wall-clock threshold, which is flaky across CI hardware of
-    # varying speed): unclosed bracket with digits then padding forces the
-    # engine to re-partition the trailing run between `\d+` and `[^\]]*` on
-    # every failed attempt to find `]`, so a payload-size doubling should
-    # cost ~4x on the quadratic OLD pattern, vs ~2x for linear.
-    small_duration = _best_of_timing(old_pattern, "[SPEC-" + "1" * 4000 + " " * 4000)
-    large_duration = _best_of_timing(old_pattern, "[SPEC-" + "1" * 8000 + " " * 8000)
-    ratio = large_duration / small_duration if small_duration > 0 else 0
-    assert ratio > 2.2, (
-        f"sanity check: old pattern was expected to show quadratic (~4x) scaling on a payload "
-        f"doubling, but only scaled {ratio:.2f}x ({small_duration:.4f}s -> {large_duration:.4f}s)"
-    )
+    # #2901: a scale-relative check on the PRE-FIX pattern
+    #     r"\[(?:\s*SPEC\s*-\s*\d+|spec|audit)[^\]]*\]", re.I
+    # used to run here, asserting it scaled ~quadratically (ratio > 2.2)
+    # over a payload doubling. Removed: it timed a regex this repo no
+    # longer ships, and the ratio between two sub-100ms samples is inside
+    # the scheduling noise of a shared CI runner -- this family of asserts
+    # went red on macOS for PRs that touched none of it. The shipped
+    # pattern's immunity is asserted below as an ABSOLUTE bound inside an
+    # isolated process, which is deterministic.
 
     spec_exposure = C_RULES["spec_exposure"]
     assert_redos_immune(spec_exposure, "[SPEC-" + " " * 100000, timeout_sec=3.0)
@@ -348,8 +337,8 @@ def test_c_intentional_double_classification_sweep():
     - `restrict`/`alignas(...)` -> structural_boundaries (own keyword list)
       + immutability_locks (own keyword list) -- both rules intentionally
       claim these qualifiers
-    - `goto end;` -> branch (control-flow jump) + reflection_metaprogramming
-      (unstructured jump signal)
+    - `goto end;` -> reflection_metaprogramming only: an unconditional
+      transfer is not a decision (#2822 corollary 3, the #2545 return shape)
     - `struct foo_ops ops;` -> class_start (any struct declaration) +
       dependency_injection (the `_ops` vtable-style suffix)
     """
@@ -370,7 +359,8 @@ def test_c_intentional_double_classification_sweep():
     assert C_RULES["ipc_rpc_bridges"].search(fork_call)
 
     close_call = "close(fd);"
-    assert C_RULES["io"].search(close_call)
+    # #2841 contract C2: releasing a resource is cleanup's hit alone.
+    assert not C_RULES["io"].search(close_call)
     assert C_RULES["cleanup"].search(close_call)
 
     alloca_call = "alloca(10);"
@@ -387,7 +377,7 @@ def test_c_intentional_double_classification_sweep():
     assert C_RULES["immutability_locks"].search("alignas(16)")
 
     goto_stmt = "goto end;"
-    assert C_RULES["branch"].search(goto_stmt)
+    assert not C_RULES["branch"].search(goto_stmt)
     assert C_RULES["reflection_metaprogramming"].search(goto_stmt)
 
     ops_struct = "struct foo_ops ops;"
@@ -452,3 +442,125 @@ def test_c_redos_immunity_sweep():
     assert C_RULES["func_start"].search("int foo(int a) {")
     assert C_RULES["class_start"].search("struct Point {")
     assert C_RULES["explicit_casts"].search("y = (int)x;")
+
+
+def test_c_doc_block_and_line_marker_count_once_regression():
+    """
+    #2672: `/\\*\\*`/`///` and the Doxygen tags (`@param`, `\\param`, ...)
+    were independent alternatives, so one Doxygen comment counted doc
+    proportional to its tag density -- the #2658 shape. Off-corpus only
+    (the rosetta corpus plants one of {marker, tag} for c, so this does not
+    move the corpus). Block form pairs into a single bounded (0,15000
+    chars) non-greedy span; the line-marker form (`///`) now swallows the
+    rest of its line so a tag on the same line as the marker is one hit.
+    """
+    doc = C_RULES["doc"]
+
+    block = "/**\n * @brief do it\n * @param x in\n * @return out\n */\n"
+    assert len(doc.findall(block)) == 1, "a single Doxygen block must count once, not once per tag"
+
+    one_line = "/// @param x in\n"
+    assert len(doc.findall(one_line)) == 1, "a single `///` line with a tag must count once, not twice"
+
+    two_blocks = "/**\n * @brief one\n */\nvoid f();\n/**\n * @brief two\n */\n"
+    assert len(doc.findall(two_blocks)) == 2, "two separate Doxygen blocks must still count as 2"
+
+
+def test_c_doc_bare_tag_outside_block_still_counts_regression():
+    """#2672: a Doxygen tag outside any doc comment must still count."""
+    doc = C_RULES["doc"]
+    assert doc.search(r"\param leftover outside any doc block")
+    assert doc.search("@brief leftover outside any doc block")
+
+
+def test_c_doc_block_redos_immune_regression():
+    """#2672 ReDoS probes: unterminated `/**` and a very long unterminated `///` line must fail closed quickly."""
+    assert_redos_immune(C_RULES["doc"], "/**" + "x" * 200000, timeout_sec=3.0)
+    assert_redos_immune(C_RULES["doc"], "///" + "x" * 200000, timeout_sec=3.0)
+
+
+def test_c_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    The declaration-shaped alternatives allowed indentation, so body-local
+    declarations and two-word statements counted: 7534 of the crucible corpus's
+    8675 matches were not file-scope declarations at all.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = C_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search("int main(int argc, char **argv)"), "file-scope definition"
+    assert api.search("PyObject *\nfoo(void)"), "K&R two-line return type"
+    assert api.search("void write_rtf_header(NXStream *s);"), "file-scope prototype"
+    assert api.search("extern int errno;"), "extern declaration (kept)"
+
+    # Not declarations -- must not match.
+    assert not api.search("    return NULL;"), "indented return statement"
+    assert not api.search("return NULL;"), "column-0 return statement"
+    assert not api.search("\tgoto error;"), "indented goto"
+    assert not api.search("    PyObject *value;"), "body-local declaration"
+    assert not api.search("static int helper(void)"), "static definition"
+
+    # ReDoS detonation on an unterminated declaration-shaped run.
+    assert_redos_immune(api, "a" * 40000 + " " + "*" * 40000, timeout_sec=3.0)
+
+
+def test_c_api_variable_declarations_are_globals_not_api_2907():
+    """
+    #2907 (api contract, one owner per token): the column-0 declaration shape
+    matched every file-scope VARIABLE -- `int shared_region = 1;` in the
+    rosetta corpus read api 5 for three functions, and 101 of the crucible's
+    1141 c hits were `PyTypeObject PyDict_Type = {`, `FILE *out;`, Doom's
+    `boolean nomonsters;` block and the like. The contract gives those to
+    `globals` (#2858); `api` is a declaration that publishes a *function or
+    type*. The shape is now a function declarator (type words, name, `(`,
+    with the paren allowed on the next line) plus `typedef` / `struct X {`.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = C_RULES["api"]
+
+    # File-scope variables -- globals' hit, never api's.
+    assert not api.search("int shared_region = 1;"), "the rosetta globals plant"
+    assert not api.search("PyTypeObject PyDict_Type = {"), "cpython type object instance"
+    assert not api.search("FILE *out;"), "pointer variable declaration"
+    assert not api.search("char\t\twadfile[1024];"), "array variable"
+    assert not api.search("const binaryfunc _PyEval_BinaryOps[] = {"), "const array definition"
+    assert not api.search("struct lemon *lemp;"), "struct-typed variable"
+    assert not api.search("struct lemon;"), "forward declaration of an incomplete type"
+    assert not api.search("static MP_DEFINE_CONST_FUN_OBJ_0(machine_idle_obj, machine_idle);"), (
+        "static macro invocation -- the old bare-prototype alternative never excluded static"
+    )
+
+    # Function declarators -- still api's, in every layout the crucible uses.
+    assert api.search("int probe_globals(int env) {"), "one-line definition"
+    assert api.search("unsigned int foo(void)"), "multi-word return type"
+    assert api.search("struct lemon *Lemon_new(void)"), "struct-pointer return type"
+    assert api.search("PyObject *\nfoo(void)"), "K&R two-line return type"
+    assert api.search("void\nI_Tactile\n( int on,\n  int off )"), "Doom: name and paren on separate lines"
+    assert api.search("fixed_t\nFixedMul\n( fixed_t a,"), "Doom: typedef'd return type"
+    assert api.search("void write_rtf_header(NXStream *s);"), "prototype"
+
+    # Type declarations -- still api's.
+    assert api.search("typedef struct {"), "anonymous typedef struct"
+    assert api.search("typedef enum"), "typedef enum head"
+    assert api.search("struct config {"), "named struct definition"
+    assert api.search("extern int errno;"), "extern declaration (kept)"
+
+    # Body-local and statement lines stay out (the #2730 guard).
+    assert not api.search("    PyObject *value;"), "body-local declaration"
+    assert not api.search("return foo(x);"), "column-0 return calling a function"
+    assert not api.search("static int helper(void)"), "static definition"
+
+    # ReDoS: bounded {1,4} type-word repetition on an unterminated run.
+    assert_redos_immune(api, "a " * 40000 + "b", timeout_sec=3.0)
+    assert_redos_immune(api, "a" * 40000 + " " + "*" * 40000, timeout_sec=3.0)

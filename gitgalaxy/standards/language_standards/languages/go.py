@@ -38,9 +38,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
         # Includes select/case and range-based loops. EXCLUDES panic (bailout_hits).
-        "branch": re.compile(
-            r"\b(if|else|switch|case|default|for|range|select|goto|break|continue|fallthrough)\b|&&|\|\|"
-        ),
+        "branch": re.compile(r"\b(if|else|switch|case|default|for|select)\b|&&|\|\|"),
         # 2. args (Parameters / Coupling)
         # Parameter blocks for functions and methods. Bounded generics [^\]]* and params [^)]*.
         # #1209: parameter-list span wrapped in its own capture group (was
@@ -56,7 +54,9 @@ DEFINITION: dict[str, Any] = {
         ),
         # 3. linear (Sequential Boundaries)
         # Structural boundaries. EXCLUDES: const/var (freeze_hits) and Capitalization (encapsulation).
-        "structural_boundaries": re.compile(r"\b(package|import|return|type|go|defer|chan|map|interface|struct)\b"),
+        "structural_boundaries": re.compile(
+            r"\b(package|import|return|break|continue|fallthrough|type|go|defer|chan|map|interface|struct|goto|range)\b"
+        ),
         # 4. func_start (Executable Logic Anchors)
         # ONLY executable logic blocks.
         # Bypasses the 'func' keyword, skips optional method receivers (e.g. (s *Server)),
@@ -98,15 +98,26 @@ DEFINITION: dict[str, Any] = {
         # BUG FIX: `recover\(\)` ends on `)` (non-word), so the shared
         # trailing \b could never fire -- the classic
         # `defer func() { recover() }()` idiom never matched.
-        "safety": re.compile(
-            r"err\s*!=\s*nil|\b(?:errors\.(?:Is|As|New|Join)|sync\.(?:Once|WaitGroup)|context\.Context)\b|\brecover\(\)"
-        ),
+        # C2: errors.New constructs. C3: sync.* is concurrency's. C1: context.Context is a type.
+        "safety": re.compile(r"err\s*!=\s*nil|\b(?:errors\.(?:Is|As|Join))\b|\brecover\(\)"),
         # 7. safety_neg (Safety Bypasses / Unchecked Types)
         # Explicitly ignoring errors via blank identifier.
-        "safety_bypasses": re.compile(r'_\s*,\s*err[ \t]*=|_[ \t]*=\s*\w+|\bimport\s+(?:\.[ \t]+)?"'),
+        # BUG FIX (#2542): the import alternation made the dot OPTIONAL
+        # (`import\s+(?:\.[ \t]+)?"`), so EVERY plain quoted import
+        # (`import "fmt"`) counted as a safety bypass, not just the
+        # namespace-polluting dot-import form (`import . "fmt"`). The dot
+        # is now mandatory. Note this alternation only ever matched the
+        # single-line form either way: grouped imports (`import (\n...\n)`)
+        # have a `(` between `import` and the quoted path, which the
+        # pattern never crossed before and still doesn't.
+        "safety_bypasses": re.compile(r'_\s*,\s*err[ \t]*=|_[ \t]*=\s*\w+|\bimport\s+\.[ \t]+"'),
         # 8. danger (High-Risk Execution / System Calls)
         # Process-killing commands and direct syscalls. EXCLUDES TODO (debt) and fmt.Print (print_hits).
-        "high_risk_execution": re.compile(r"\b(os\.Exit|syscall\.Kill|syscall\.RawSyscall|log\.Fatal(?:f|ln)?)\b"),
+        # #2878 contract C1: `panic(` is go's abort (rust's panic!, zig's @panic), exec.Command
+        # runs a program (C1b); both were invisible.
+        "high_risk_execution": re.compile(
+            r"\b(?:os\.Exit|syscall\.(?:Kill|RawSyscall|Exec)|log\.(?:Fatal|Panic)(?:f|ln)?|exec\.Command)\b|\bpanic\s*\("
+        ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
             r"\b(os\.(?:Open|Create|ReadFile)|io\.(?:Reader|Writer|Copy)|net/http|database/sql|bufio\.|grpc\.|sqlx\.|pgx\.)\b"
@@ -137,13 +148,45 @@ DEFINITION: dict[str, Any] = {
         # `DoSomething(`) -- `\b` forces the lookahead to apply at the
         # true word boundary, where backtracking can't produce a
         # second valid stopping point.
+        # BUG FIX #2730 (api contract): the indented alternative only
+        # excluded a following `(`, so any line STARTING with an exported
+        # identifier counted -- a struct-literal field key (`Protocol:
+        # protocol,`), a method call on an exported package var
+        # (`DefaultServeMux.register(...)`). Those are references to an
+        # exported name, not declarations of one; 176 of the crucible
+        # corpus's 614 matches were exactly that. The alternative now
+        # requires what a grouped `var (...)`/`const (...)` member or a
+        # struct field actually looks like -- `Name = value`, `Name Type`, or
+        # a bare embedded type on its own line -- which keeps every real
+        # top-level declaration the #2651 fix was written to preserve
+        # (`\tBurstReplicas = 500`) and drops the references. The optional
+        # `, Name` run needs a literal comma per step, so it cannot backtrack
+        # ambiguously.
         "api": re.compile(
-            r"^func\s+(?:\([^)]*\)[ \t]+)?[A-Z]\w+|^(?:type|var|const)\s+[A-Z]\w+|^[ \t]+\b[A-Z]\w+\b(?!\()",
+            r"^func\s+(?:\([^)]*\)[ \t]+)?[A-Z]\w+|^(?:type|var|const)\s+[A-Z]\w+|"
+            r"^[ \t]+[A-Z]\w*(?:[ \t]*,[ \t]*[A-Z]\w*)*(?:[ \t]*=[^=]|[ \t]+[\w\[\*\.]|[ \t]*$)",
             re.M,
         ),
         # 11. flux (State Mutation)
         # Mutation of state. Reassignment and channel sends.
-        "state_mutation": re.compile(r":=|(?<![=!<>])=(?![=])|<-|\bappend\(|\batomic\.(?:Add|Store|Swap)"),
+        "state_mutation": re.compile(
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `x := v` is a declaration; `_ = v` discards (the blank identifier is not
+            # state); `s = append(s, x)` is one write, counted at its `=`; a channel SEND
+            # writes the channel (`ch <- v`), a receive (`<-ch`) reads it.
+            r"(?:^(?![ \t]*_[ \t]*=)|[;{}(),])[ \t]*\**[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%&|^]|<<|>>|&\^)?=(?![=])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)"
+            r"|[\w)\]][ \t]*<-[ \t]*\S"
+            r"|\batomic\.(?:Add|Store|Swap|CompareAndSwap)\w*\(|\bdelete\(",
+            re.M,
+        ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(r"//[ \t]*(?:func|type|var|const|import|if|for|switch|select|return)\b"),
         # 13. doc (Structured Documentation)
@@ -184,10 +227,32 @@ DEFINITION: dict[str, Any] = {
         # (`func(x int) int {`) never matched either shape.
         "closures": re.compile(r"func[ \t\n]{0,80}\([^)]{0,300}\)[^{]{0,80}\{"),
         # 18. globals (Global / Shared State)
+        # BUG FIX (#2660): Anchored to true column-0 (no indentation) to prevent
+        # function-local var declarations from being incorrectly counted as globals.
         "globals": re.compile(
-            r"^[ \t]*var\s+[a-zA-Z_]\w*\s*(?:[a-zA-Z_]\w*\s*)?=|os\.Getenv|os\.Environ",
+            # #2858 contract corollary 1: a package-level `var`/`const` (column 0,
+            # the #2651 anchor) is a program-lifetime binding with or without an
+            # initializer (`var mu sync.Mutex`).
+            # #2859: a `var (` / `const (` group's members are indented, so the
+            # column-0 anchor cannot see them. The middle arm over-matches every
+            # indented declaration-shaped identifier line; the `go_declaration_group`
+            # scope filter (detector.py) keeps only those directly inside a column-0
+            # var/const group, dropping struct-literal fields and function-body
+            # statements. A scope filter can only REMOVE matches, so the column-0 and
+            # os.* arms are never touched. `\b(?![\w.(])` pins the identifier to its
+            # full extent and rejects a call/selector (`os.Getenv(`, `t.Run(`) so the
+            # over-match cannot shadow the mid-line os.* handle on the same line.
+            r"^(?![ \t])(?:var|const)[ \t]+[a-zA-Z_]\w*\b|^[ \t]+[A-Za-z_]\w*\b(?![\w.(])|\bos\.(?:Getenv|Environ|LookupEnv|Setenv|Unsetenv|Args|Getwd)\b",
             re.M,
         ),
+        # #2859: see the globals comment above -- a paren/brace walk classifies
+        # which indented identifier lines are direct members of a top-level
+        # `var (` / `const (` declaration group.
+        "_scope_filters": {"globals": "go_declaration_group"},
+        # #3072: every state_mutation arm requires one of `=`/`++`/`--`/`<-`/
+        # `atomic.`/`delete(` on the match's own line; sweep only those lines.
+        # See c.py's entry for the safety contract.
+        "_line_gates": ("state_mutation",),
         # 19. decorators (Decorators / Annotations)
         # Go lacks @decorators; uses Struct Tags and Build Tags.
         "decorators": re.compile(r'`[^`]*?(?:json|xml|yaml|gorm|db|bson):"[^"]*"[^`]*?`|//go:build|//\s*\+build'),
@@ -210,7 +275,9 @@ DEFINITION: dict[str, Any] = {
         # Reflection, CGO, and Unsafe triggers.
         "reflection_metaprogramming": re.compile(r'import\s+"C"|\b(reflect\.|unsafe\.|cgo|go:linkname)\b'),
         # 24. import (Dependency Inclusions)
-        "import": re.compile(r'^[ \t]*import\s*(?:\(|"[^"]+")', re.M),
+        # #2875 contract C1: the aliased single-line form (`import _ "embed"`,
+        # `import f "fmt"`) binds a unit like the bare one; the group counts 1 (C2).
+        "import": re.compile(r'^[ \t]*import[ \t]*(?:\(|(?:[A-Za-z_.]\w*[ \t]+)?"[^"\n]+")', re.M),
         # ---> THE FIX: Strictly bounded to valid Go import path characters <---
         # Prevents raw HTTP string literals in test files from being hallucinated as packages.
         "_dependency_capture": re.compile(
@@ -218,9 +285,10 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership (Authorship Metadata)
+        # #2882 contract: C1 colon-optional `Owner` matched `owner as the given ReplicaSet`; a composite-literal `Owner: x,` is a field, not a tag
         "ownership": re.compile(
-            r"(?://|#|/\*)\s*(?:Author|Maintainer|Created by|Owner):?\s+([a-zA-Z0-9_ -]+)",
-            re.I,
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
@@ -278,7 +346,9 @@ DEFINITION: dict[str, Any] = {
         # 45. immutability_locks (Immutability Constraints)
         "immutability_locks": re.compile(r"\bconst\b"),
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"\b(defer|Close|Unlock|RUnlock|Stop|Cleanup)\b\s*\("),
+        "cleanup": re.compile(
+            r"\b(defer|Close|Stop|Cleanup)\b\s*\("
+        ),  # #2888 C5: Unlock/RUnlock are sync_locks\' tokens (the release half of coordination)
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # Unexported identifiers (lowercase) in Go are private/internal.
         # BUG FIX (two layered issues):
@@ -316,11 +386,12 @@ DEFINITION: dict[str, Any] = {
         #    the same reason as in `api` above: without it, greedy
         #    `\w+` can backtrack one character short of the real
         #    identifier end purely to dodge the `(?!\()` check.
+        # #2766: lowercase names ARE go's per-name non-public marker, but only at
+        # package scope -- the old indented arm matched every function-local
+        # identifier (4521 crucible hits of `gp :=`-shaped locals). Top-level
+        # declaration forms only.
         "encapsulation": re.compile(
-            r"^func\s+(?:\([^)]*\)[ \t]+)?[a-z]\w+|^(?:type|var|const)\s+[a-z]\w+"
-            r"|^[ \t]+(?!(?:if|else|for|switch|case|default|break|continue|goto|fallthrough"
-            r"|return|go|defer|select|range|func|type|var|const|package|import|struct"
-            r"|interface|map|chan|make|new|nil|true|false|iota)\b)\b[a-z]\w+\b(?!\()",
+            r"^func\s+(?:\([^)]*\)[ \t]+)?[a-z]\w+|^(?:type|var|const)\s+[a-z]\w+",
             re.M,
         ),
         # 48. listeners (Event Listeners / Observers)
@@ -328,6 +399,13 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"\bt\.Skip(?:f|Now)?\(|mock\.|gomock\."),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Go Specifics) ---
+        # auth_middleware (#3004): bcrypt's credential verification, JWT parsing
+        # (which validates the signature), and the BasicAuth middleware
+        # constructors (net/http, gin, chi share the method name).
+        "auth_middleware": re.compile(
+            r"\b(?:bcrypt\.CompareHashAndPassword|jwt\.Parse(?:WithClaims)?)\("
+            r"|\.BasicAuth\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(json\.Unmarshal|json\.Marshal|xml\.Unmarshal|xml\.Marshal|gob\.NewEncoder)\b"
         ),
@@ -339,5 +417,9 @@ DEFINITION: dict[str, Any] = {
         # common time-related call never matched in any real usage.
         "time_date_logic": re.compile(r"\b(?:time\.Parse|time\.Duration|time\.Sleep|time\.Since)\b|time\.Now\(\)"),
         "ipc_rpc_bridges": re.compile(r"\b(net/rpc|grpc\.Dial|grpc\.NewServer|exec\.Command|syscall)\b"),
+        # system_config_mutation (#3084): contract-level absence. no dedicated
+        # config-mutation primitive -- config writes are ordinary file I/O or
+        # exec of external tools (io's / high_risk_execution's).
+        "system_config_mutation": None,
     },
 }

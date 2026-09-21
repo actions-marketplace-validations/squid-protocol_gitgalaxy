@@ -112,8 +112,9 @@ DEFINITION: dict[str, Any] = {
         ),
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
         # 6. safety (Defensive Programming / Validation)
+        # C1: type names/constructors invisible; fallback family + handled None arm are the forms. C3: bare match is branch's; Mutex/Arc concurrency-adjacent. (if let keeps its pre-existing branch dual — doc-noted.)
         "safety": re.compile(
-            r"\b(Option|Result|Mutex|RwLock|Arc|Rc|Box|RefCell|match|if\s+let|while\s+let|let\s+else|Ok|Err|Some|None)\b"
+            r"\b(if\s+let|while\s+let|let\s+else)\b|\b(?:unwrap_or|unwrap_or_else|unwrap_or_default|ok_or|ok_or_else|map_or|map_or_else)\b|None\s*=>"
         ),
         # 7. safety_neg (Safety Bypasses / Unchecked Types)
         # Actively bypasses type safety (unwraps and forced expectations).
@@ -126,7 +127,10 @@ DEFINITION: dict[str, Any] = {
         # whitespace, both non-word, so `\b` could never fire. None of
         # these three -- among the most common constructs in any real Rust
         # file -- ever matched. Pulled out of the shared boundary group.
-        "high_risk_execution": re.compile(r"panic!|todo!|unimplemented!|\b(?:process::exit|abort)\b"),
+        # #2878 contract C1: unreachable! aborts like panic!; Command::new spawns (C1b).
+        "high_risk_execution": re.compile(
+            r"panic!|todo!|unimplemented!|unreachable!|\b(?:process::(?:exit|abort)|abort|Command::new)\b"
+        ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
             r"\b(std::fs|File::|std::net|tokio::net|tokio::fs|reqwest|std::io|hyper::|sqlx::|diesel::|sea_orm::)\b"
@@ -136,7 +140,23 @@ DEFINITION: dict[str, Any] = {
         "api": re.compile(r"\bpub(?:\([^)]*\))?\b"),
         # 11. flux (State Mutation)
         # Mutation of state. EXCLUDES const (freeze_hits).
-        "state_mutation": re.compile(r"\bmut\b|\.borrow_mut\(\)|\.write\(\)|Cell::|RefCell::|Atomic[A-Za-z0-9]+"),
+        "state_mutation": re.compile(
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `mut` marks a binding or borrow as writable and `Cell::`/`RefCell::`/`Atomic*`
+            # name mutable state (corollaries 1 and 2); the write is `x = v`, `*p = v`,
+            # `x += 1`, a container mutator, or a mutable borrow being taken.
+            r"(?:^|[;{}])[ \t]*\**[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%&|^]|<<|>>)?=(?![=>])(?![^\n(]{0,300},[ \t]*$)"
+            r"|\.(?:push|push_str|push_back|push_front|pop|pop_back|pop_front|insert|remove|clear|extend|truncate|retain|drain|append|swap|sort|sort_by|sort_unstable|reverse|resize|fill)\s*\("
+            r"|\.borrow_mut\(\)|\bstd::mem::(?:swap|replace|take)\s*\(|\.(?:store|swap|fetch_add|fetch_sub|compare_exchange)\s*\(",
+            re.M,
+        ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         # BUG FIX (Engine Rule 12, Comment-Style Completeness): rust is
         # `recursive_block` (both `//` and nested `/* */` are real
@@ -174,7 +194,16 @@ DEFINITION: dict[str, Any] = {
         # BUG FIX: `lazy_static!` shared a trailing `\b` with word-ending
         # siblings, but ends in `!` -- always followed by whitespace/`{`
         # in real usage (`lazy_static! { ... }`), never a word char.
-        "globals": re.compile(r"\bstatic\s+mut\b|lazy_static!|\b(?:OnceCell|OnceLock|LazyLock|std::env::var)\b"),
+        "globals": re.compile(
+            # #2858 contract corollary 1: a `static`/`const` item is a binding with
+            # program lifetime whatever its mutability (constness is
+            # immutability_locks' axis, #2772); `'static` is a lifetime, not an item
+            # (both old crucible hits were `&'static mut A`).
+            r"(?<!')\bstatic\s+mut\b"
+            r"|^[ \t]*(?:pub(?:\([^)\n]{0,50}\))?[ \t]+)?(?:static|const)[ \t]+(?:mut[ \t]+)?(?!_\b)[A-Za-z_]\w*[ \t]*:"
+            r"|lazy_static!|\b(?:OnceCell|OnceLock|LazyLock)\b|\b(?:std::)?env::(?:var|vars|var_os|set_var|remove_var|args|args_os|current_dir)\b",
+            re.M,
+        ),
         # 19. decorators (Decorators / Annotations)
         "decorators": re.compile(r"^[ \t]*#!?\[[^\]]*\]", re.M),
         # 20. generics (Generics / Type Parameters)
@@ -223,7 +252,11 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"//\s*(?:Author|Maintainer|Copyright):\s+(.*)", re.I),
+        # #2882 contract: C2 `Copyright:` out; `//!` inner doc lines
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -293,17 +326,32 @@ DEFINITION: dict[str, Any] = {
         # 44. sync_locks (Resource Management & Stability)
         "sync_locks": re.compile(r"\b(Mutex|RwLock|lock|barrier|atomic|Semaphore)\b", re.I),
         # 45. immutability_locks (Immutability Constraints)
-        "immutability_locks": re.compile(r"\b(const|static|immutable|readonly)\b"),
+        "immutability_locks": re.compile(
+            r"(?<!\*)\bconst\b(?![ \t]*fn\b)|(?<!')\bstatic\b(?![ \t]*(?:\]|\)|,|>))"
+        ),  # #2772: `&'static str` is a lifetime, not a lock; `const fn` is a purity marker and *const the ordinary raw-pointer spelling. const/static items stay (rust's restricted constant forms; `let` immutability is the default and ambient)
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"\b(drop|free|delete|close|shutdown)\b\s*\("),
+        "cleanup": re.compile(
+            r"\b(?<!fn )(drop|free|delete|close|shutdown)\b\s*\("
+        ),  # #2888 C1: `fn drop(&mut self)` declares the Drop impl; drop(x) invokes it
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # Visibility variant tracking.
-        "encapsulation": re.compile(r"\bpub(?:\(crate\)|\(super\)|\(self\))?\b"),
+        # #2766: bare `pub` marks the PUBLIC surface (api's side) -- counting it here
+        # was backward. Rust's genuine non-public markers are the restricted-pub forms.
+        "encapsulation": re.compile(r"\bpub\((?:crate|super|self)\)"),
         # 48. listeners (Event Listeners / Observers)
         "listeners": re.compile(r"\.subscribe\(|\.on\(|addEventListener"),
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"#\[ignore\]|test\.skip\(|mock\(|fake\("),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Rust Specifics) ---
+        # auth_middleware (#3004): the credential-verification crates (bcrypt,
+        # argon2), JWT decoding (signature validation), actix's extractor
+        # registration, and the nix identity switches. Path-anchored.
+        "auth_middleware": re.compile(
+            r"\b(?:bcrypt|argon2)::verify\w*\("
+            r"|\bjsonwebtoken::decode(?:::<[^>\n]{1,80}>)?\("
+            r"|\bHttpAuthentication::\w+\("
+            r"|\bnix::unistd::sete?[ug]id\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(serde_json::from_str|serde_json::to_string|serde_json::from_slice|bincode::deserialize|toml::from_str)\b"
         ),
@@ -314,5 +362,9 @@ DEFINITION: dict[str, Any] = {
         "ipc_rpc_bridges": re.compile(
             r"\b(std::process::Command|tokio::process|tonic::transport::Server|mpsc::channel)\b"
         ),
+        # system_config_mutation (#3084): contract-level absence. no dedicated
+        # config-mutation primitive -- config writes are ordinary file I/O
+        # (io's).
+        "system_config_mutation": None,
     },
 }

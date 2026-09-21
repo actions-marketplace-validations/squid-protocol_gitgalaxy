@@ -14,7 +14,8 @@ Unlike most other languages in this epic, yaml's four rules don't map onto
 "function/args/class/dependency" in the traditional sense -- this dict's
 `_meta.target_version` scopes it specifically to CI/CD YAML (GitHub Actions /
 GitLab CI), so the four gauntlets instead detect: a step's run/script block
-(func_start), a step's `with:` input block (args), a job-block boundary
+(func_start), a declared or supplied parameter key (args -- #2753 widened
+this from a step's `with:` block alone), a job-block boundary
 (class_start, including the reusable-workflow-call/container-job shape),
 and an action/image reference (_dependency_capture). None of class_start's
 alternatives capture a name (whole-match only, `pattern.groups == 0`), so
@@ -55,15 +56,24 @@ YAML_RULES = LANGUAGE_DEFINITIONS["yaml"]["rules"]
 # FUNC_START (func_start) -- a step's run:/script: execution block
 # ==============================================================================
 FUNCTION_CASES: dict[str, Any] = {
+    # #2767: the captured group is now the keyword WITHOUT its colon, and a
+    # named step captures the step's name instead. Both are deliberate. The
+    # colon sits outside the capture because `_closed_literal_capture` only
+    # recognises a bare literal alternation (`_ALTERNATION_ONLY` has no `:`), so
+    # `(run:|script:)` would yield the empty set and drop yaml out of #2728's
+    # keyword-bucket exclusion -- which is the whole reason an unnamed step's
+    # fallback name needs to be a recognisable keyword in the first place.
     "valid": [
         # Modern idiom (carried forward)
-        ("- run: echo hello", "run:"),
-        ("script:", "script:"),
+        ("- run: echo hello", "run"),
+        ("script:", "script"),
         # Syntax-era / dialect coverage
-        ("- run: |\n    npm ci\n    npm test", "run:"),  # GH Actions block-scalar multi-line run
-        ("before_script:\n  - npm ci", "before_script:"),  # GitLab CI
-        ("after_script:\n  - cleanup.sh", "after_script:"),  # GitLab CI
-        ("- name: Build\n  run: make", "run:"),  # run: as the second key under a named step
+        ("- run: |\n    npm ci\n    npm test", "run"),  # GH Actions block-scalar multi-line run
+        ("before_script:\n  - npm ci", "before_script"),  # GitLab CI
+        ("after_script:\n  - cleanup.sh", "after_script"),  # GitLab CI
+        # #2767: a named step now takes the step's OWN name, not the keyword --
+        # this is the case the whole fix exists for.
+        ("- name: Build\n  run: make", "Build"),
     ],
     "invalid": [
         "TargetFunc:",  # carried-forward: unrelated key lookalike
@@ -73,9 +83,9 @@ FUNCTION_CASES: dict[str, Any] = {
         "my-run: foo",  # `run:` substring lookalike inside a longer key name
     ],
     "pathological": [
-        ("- \t run: \n", "run:"),  # carried-forward
-        ("-   run:   |\n  npm test", "run:"),  # extreme horizontal spacing before block scalar
-        ("  -\trun:\t>\n    echo hi", "run:"),  # tab spacing, folded-scalar indicator
+        ("- \t run: \n", "run"),  # carried-forward
+        ("-   run:   |\n  npm test", "run"),  # extreme horizontal spacing before block scalar
+        ("  -\trun:\t>\n    echo hi", "run"),  # tab spacing, folded-scalar indicator
     ],
 }
 
@@ -102,28 +112,32 @@ def test_yaml_func_start_redos_immunity():
 
 
 # ==============================================================================
-# ARGS (args) -- a step's `with:` input block
+# ARGS (args) -- one declared or supplied parameter key
 # ==============================================================================
+# #2753: `args` used to match a `with:` block header through its first key, as
+# ONE hit. It now matches an indented mapping key -- the parameter unit itself --
+# and coding_analysis' registry-declared `yaml_parameter_block` scope filter
+# keeps only the keys nested directly under a `with:` / `inputs:` / `args:`
+# header. These gauntlet cases therefore prove what the bare regex is
+# responsible for (an indented mapping key, and nothing else); the scope
+# decision -- which of those keys is a parameter -- is proven through the real
+# pipeline in test_yaml_strict.py's "ARGS: PARAMETER-BLOCK SCOPE" section.
 ARGS_CASES: dict[str, Any] = {
     "valid": [
-        (
-            "- uses: actions/setup-node@v4\n  with:\n    node-version: '18'\n    cache: 'npm'",
-            "with:",
-        ),
-        (
-            "with: # inputs for this action\n  node-version: '18'",
-            "with:",
-        ),  # trailing same-line comment on the `with:` header -- was a real bug, now fixed
+        ("        node-version: '18'", "node-version"),  # a supplied input key
+        ("      env_name:\n        required: true", "env_name"),  # a declared input name
+        ("  with:\n    node-version: '18'", "with"),  # the header is itself an indented key
+        ("        with: # inputs for this action\n          a: 1", "with"),  # trailing comment (epic #813/#843)
     ],
     "invalid": [
-        "with: []",  # empty inline mapping, no indented key:value lines follow
-        "steps:\n  - run: npm test",  # unrelated section
+        "jobs:",  # a top-level key is never a parameter
+        "      - --verbose",  # a sequence item, not a mapping key
+        "          pytest",  # block-scalar body text, no key at all
+        "with: []",  # unindented, and an inline value rather than a block header
     ],
     "pathological": [
-        (
-            "- uses: actions/setup-node@v4\n  with: #\n    node-version: '18'\n    cache: 'npm'\n    always-auth: 'false'",
-            "with:",
-        ),  # bare trailing `#` with no comment text, plus a deep multi-key block
+        ("  " + "a" * 64 + ": v", "a" * 64),  # a key at the bounded length cap
+        ("  - - deeply-nested: v", "deeply-nested"),  # stacked sequence indicators
     ],
 }
 
@@ -143,33 +157,23 @@ def test_yaml_args_pathological(payload, expected_name):
     assert_pathological_match(YAML_RULES["args"], payload, expected_name, "yaml.args")
 
 
-def test_yaml_args_trailing_comment_regression():
+def test_yaml_args_key_length_cap_is_a_bound_not_a_truncation():
     """
-    Regression test for a real bug (epic #813/#843): `with:` required an
-    immediately-following newline, so a trailing same-line comment (`with: #
-    inputs for this action`, a real authoring style) broke the match
-    entirely.
-    """
-    args = YAML_RULES["args"]
-    assert args.search("with: # inputs\n  node-version: '18'"), "trailing comment on with: header regressed"
-
-
-def test_yaml_args_comment_only_line_before_first_key_supported():
-    """
-    Documents that a full-line comment BETWEEN the `with:` header and the
-    first real input key (`with:\\n  # first input\\n  node-version: '18'`)
-    NOW matches, thanks to the fix that allows up to 10 lines of comments
-    or blank lines before the first key-value pair.
+    The key class is bounded ({1,64}) to keep the pattern linear. A longer key
+    must not silently match a 64-character PREFIX of itself -- the `:` has to
+    follow the whole key -- or a pathological identifier would manufacture an
+    argument out of an unrelated line.
     """
     args = YAML_RULES["args"]
-    comment_before_first_key = "with:\n  # first input\n  node-version: '18'"
-    assert args.search(comment_before_first_key), "regex should now support this previously known limitation"
+    assert args.search("  " + "a" * 64 + ": v"), "a key at the cap still matches"
+    assert not args.search("  " + "a" * 65 + ": v"), "a key past the cap matched a prefix"
 
 
 def test_yaml_args_redos_immunity():
     args = YAML_RULES["args"]
     assert_redos_immune(args, "with:\n" + "  key: val\n" * 100000, timeout_sec=3.0)
-    assert args.search("with:\n  node-version: '18'")
+    assert_redos_immune(args, ("  - " * 50000) + "key:", timeout_sec=3.0)
+    assert args.search("  node-version: '18'")
 
 
 # ==============================================================================

@@ -20,7 +20,7 @@ _LANGUAGES_DIR = str(Path(__file__).resolve().parent)
 if _LANGUAGES_DIR not in sys.path:
     sys.path.insert(0, _LANGUAGES_DIR)
 
-from _strict_harness import _best_of_timing, assert_redos_immune  # noqa: E402 # type: ignore
+from _strict_harness import assert_redos_immune  # noqa: E402 # type: ignore
 
 
 # ==============================================================================
@@ -214,7 +214,8 @@ def test_cpp_encapsulation_total_breakage_regression():
     encapsulation = CPP_RULES["encapsulation"]
     assert encapsulation.search("private:\n    int x;")
     assert encapsulation.search("protected:\n    int y;")
-    assert encapsulation.search("internal:\n    int z;")
+    # #2766: `internal:` is not a C++ access label -- removed from the rule.
+    assert not encapsulation.search("internal:\n    int z;")
 
 
 def test_cpp_ui_framework_qt_boundary_regression():
@@ -450,11 +451,11 @@ def test_cpp_intentional_double_classification_sweep():
       in their own compound-assignment alternatives)
     - `std::mutex m;` -> sync_locks + concurrency (both explicitly list
       `std::mutex` in their own keyword lists)
-    - `delete p; fclose(f);` -> cleanup + io (both explicitly list `fclose`
-      in their own keyword lists)
-    - `int *p = &x;` -> pointers + state_mutation (state_mutation's bare
-      `&(?!\\s*const)` alternative treats any address-of/reference operator
-      as a mutation signal, independent of pointers' own dedicated capture)
+    - `delete p; fclose(f);` -> cleanup only: since #2841 releasing a
+      resource is cleanup's hit alone (io counts acquisition and transfer)
+    - `int *p = &x;` -> pointers only: since #2765 a declaration with an
+      initializer is not a write and `&` is a borrow, not a mutation
+      (state_mutation's old bare `&(?!\\s*const)` alternative is gone)
     """
     func_sig = "int foo(int a, int b) {"
     assert CPP_RULES["args"].search(func_sig)
@@ -500,11 +501,12 @@ def test_cpp_intentional_double_classification_sweep():
 
     cleanup_call = "delete p;\nfclose(f);"
     assert CPP_RULES["cleanup"].search(cleanup_call)
-    assert CPP_RULES["io"].search(cleanup_call)
+    assert not CPP_RULES["io"].search(cleanup_call)
 
     ptr_decl = "int *p = &x;"
     assert CPP_RULES["pointers"].search(ptr_decl)
-    assert CPP_RULES["state_mutation"].search(ptr_decl)
+    assert not CPP_RULES["state_mutation"].search(ptr_decl)
+    assert CPP_RULES["state_mutation"].search("*p = &x;")
 
 
 def test_cpp_spec_exposure_redos_regression():
@@ -515,18 +517,15 @@ def test_cpp_spec_exposure_redos_regression():
     tcl, matlab, scheme, typescript, rust, and c earlier in this epic (the
     9th hit).
     """
-    old_pattern = re.compile(r"\[(?:\s*SPEC\s*-\s*\d+|spec|audit)[^\]]*\]", re.I)
-    # Scale-relative sanity check (not an absolute wall-clock threshold,
-    # which is flaky across CI hardware of varying speed): a payload-size
-    # doubling should cost ~4x on the quadratic OLD pattern, vs ~2x for
-    # linear.
-    small_duration = _best_of_timing(old_pattern, "[SPEC-" + "1" * 4000 + " " * 4000)
-    large_duration = _best_of_timing(old_pattern, "[SPEC-" + "1" * 8000 + " " * 8000)
-    ratio = large_duration / small_duration if small_duration > 0 else 0
-    assert ratio > 2.2, (
-        f"sanity check: old pattern was expected to show quadratic (~4x) scaling on a payload "
-        f"doubling, but only scaled {ratio:.2f}x ({small_duration:.4f}s -> {large_duration:.4f}s)"
-    )
+    # #2901: a scale-relative check on the PRE-FIX pattern
+    #     r"\[(?:\s*SPEC\s*-\s*\d+|spec|audit)[^\]]*\]", re.I
+    # used to run here, asserting it scaled ~quadratically (ratio > 2.2)
+    # over a payload doubling. Removed: it timed a regex this repo no
+    # longer ships, and the ratio between two sub-100ms samples is inside
+    # the scheduling noise of a shared CI runner -- this family of asserts
+    # went red on macOS for PRs that touched none of it. The shipped
+    # pattern's immunity is asserted below as an ABSOLUTE bound inside an
+    # isolated process, which is deterministic.
 
     spec_exposure = CPP_RULES["spec_exposure"]
     assert_redos_immune(spec_exposure, "[SPEC-" + " " * 100000, timeout_sec=3.0)
@@ -577,6 +576,7 @@ def test_cpp_redos_immunity_sweep():
     assert CPP_RULES["class_start"].search("class Foo {")
     assert CPP_RULES["explicit_casts"].search("static_cast<int>(x);")
 
+
 def test_cpp_branch_deep_cases():
     """Adversarial/Deep cases for branch."""
     p = CPP_RULES["branch"]
@@ -585,7 +585,6 @@ def test_cpp_branch_deep_cases():
     assert p.search("co_await my_task();")
     assert p.search("if constexpr (sizeof(T) > 4)")
     assert p.search("for (auto&& x : v)")
-    assert p.search("catch (...) {")
     assert p.search("x && y")
     assert p.search("a ? b : c")
     assert p.search("while(true)")
@@ -597,7 +596,10 @@ def test_cpp_branch_deep_cases():
     assert not p.search("a & b")
     assert not p.search("a | b")
     assert not p.search("catch_error()")
+    assert not p.search("catch (...) {")  # 2822 corollary 1: handlers are safety's
+    assert not p.search("goto retry;")  # 2822 corollary 3: unconditional transfer
     assert not p.search("default_value = 1")
+
 
 def test_cpp_args_deep_cases():
     """Adversarial/Deep cases for args."""
@@ -616,6 +618,7 @@ def test_cpp_args_deep_cases():
     assert not p.search("(int)x")
     assert not p.search("std::vector<int> v(10);")
     assert not p.search("for (int i = 0; i < 10; ++i)")
+
 
 def test_cpp_func_start_deep_cases():
     """Adversarial/Deep cases for func_start."""
@@ -637,6 +640,7 @@ def test_cpp_func_start_deep_cases():
     assert not p.search("try {")
     assert not p.search("catch (const std::exception& e) {")
 
+
 def test_cpp_class_start_deep_cases():
     """Adversarial/Deep cases for class_start."""
     p = CPP_RULES["class_start"]
@@ -653,6 +657,7 @@ def test_cpp_class_start_deep_cases():
     assert not p.search("enum Color {")
     assert not p.search("class_name = 5;")
     assert not p.search("int x_class = 1;")
+
 
 def test_cpp_structural_boundaries_deep_cases():
     """Adversarial/Deep cases for structural_boundaries."""
@@ -672,3 +677,37 @@ def test_cpp_structural_boundaries_deep_cases():
     assert not p.search("my_return = 0;")
     assert not p.search("int export_val = 5;")
 
+
+def test_cpp_doc_block_and_line_marker_count_once_regression():
+    """
+    #2672: `/\\*\\*`/`///` and the Doxygen tags (`@param`, `\\param`, ...)
+    were independent alternatives, so one Doxygen comment counted doc
+    proportional to its tag density -- the #2658 shape. Off-corpus only
+    (the rosetta corpus plants one of {marker, tag} for cpp, so this does
+    not move the corpus). Block form pairs into a single bounded (0,15000
+    chars) non-greedy span; the line-marker form (`///`) now swallows the
+    rest of its line so a tag on the same line as the marker is one hit.
+    """
+    doc = CPP_RULES["doc"]
+
+    block = "/**\n * @brief do it\n * @param x in\n */\n"
+    assert len(doc.findall(block)) == 1, "a single Doxygen block must count once, not once per tag"
+
+    one_line = "/// @tparam T in\n"
+    assert len(doc.findall(one_line)) == 1, "a single `///` line with a tag must count once, not twice"
+
+    two_blocks = "/**\n * @brief one\n */\nvoid f();\n/**\n * @brief two\n */\n"
+    assert len(doc.findall(two_blocks)) == 2, "two separate Doxygen blocks must still count as 2"
+
+
+def test_cpp_doc_bare_tag_outside_block_still_counts_regression():
+    """#2672: a Doxygen tag outside any doc comment must still count."""
+    doc = CPP_RULES["doc"]
+    assert doc.search(r"\tparam T leftover outside any doc block")
+    assert doc.search("@details leftover outside any doc block")
+
+
+def test_cpp_doc_block_redos_immune_regression():
+    """#2672 ReDoS probes: unterminated `/**` and a very long unterminated `///` line must fail closed quickly."""
+    assert_redos_immune(CPP_RULES["doc"], "/**" + "x" * 200000, timeout_sec=3.0)
+    assert_redos_immune(CPP_RULES["doc"], "///" + "x" * 200000, timeout_sec=3.0)

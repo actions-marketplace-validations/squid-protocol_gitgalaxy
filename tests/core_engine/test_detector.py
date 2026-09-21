@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from gitgalaxy.core.detector import StructuralExtractor
+from gitgalaxy.core.spatial_correlation import weighted_count
 from gitgalaxy.core.spatial_mapper import SpatialMapper
 
 # ==============================================================================
@@ -93,10 +94,13 @@ def test_detector_spatial_appsec_correlation():
 
     result = opt_detector.splice(code, "")
 
-    # A single memory_scraping hit normally = 1.
-    # The AppSec multiplier adds 100 if correlated. Total should be >= 100.
-    assert result["equations"]["memory_scraping"] >= 100, "Spatial correlation failed to multiply the threat penalty!"
-    assert result["mitigation_telemetry"]["amplified_leaks"] == 1, "Failed to log the active leak mitigation stat!"
+    # A single memory_scraping hit is recorded as 1 (#2813: a count is a count).
+    # The AppSec x100 multiplier lives in the weighted view: >= 100 there.
+    assert result["equations"]["memory_scraping"] == 1, "Recorded memory_scraping must be the raw hit count (#2813)"
+    assert result["mitigation_telemetry"]["amplified_exfiltration"] == 1, "Failed to log the exfiltration tally!"
+    assert weighted_count(result["equations"], result["mitigation_telemetry"], "memory_scraping") >= 100, (
+        "Spatial correlation failed to multiply the threat penalty in the weighted view!"
+    )
 
 
 def test_detector_exfiltration_check_does_not_cross_function_boundaries():
@@ -125,7 +129,7 @@ def test_detector_exfiltration_check_does_not_cross_function_boundaries():
         "A socket send in a DIFFERENT function must not amplify this memory read -- "
         "cross-function exfiltration correlation regressed!"
     )
-    assert result["mitigation_telemetry"].get("amplified_leaks", 0) == 0
+    assert result["mitigation_telemetry"].get("amplified_exfiltration", 0) == 0
 
 
 def test_detector_silencer_region():
@@ -143,9 +147,13 @@ def test_detector_silencer_region():
 
     result = opt_detector.splice(code, "")
     # The raw string "strcpy" is inside "strncpy", so both trigger in a naive regex.
-    # The spatial math should subtract the danger hit.
-    assert result["equations"]["high_risk_execution"] == 0, "Silencer region failed to dampen the danger signal!"
-    assert result["mitigation_telemetry"]["mitigated_danger"] >= 1
+    # The spatial math tallies the mitigation; the recorded count stays the raw hit
+    # (#2813) and the score layer nets it out through weighted_count().
+    assert result["equations"]["high_risk_execution"] == 1, "Recorded count must stay the raw hit (#2813)"
+    assert result["mitigation_telemetry"]["mitigated_danger"] >= 1, "Silencer region failed to tally the mitigation!"
+    assert weighted_count(result["equations"], result["mitigation_telemetry"], "high_risk_execution") == 0, (
+        "Silencer region failed to dampen the danger signal in the weighted view!"
+    )
 
 
 # ==============================================================================
@@ -357,7 +365,7 @@ def test_detector_orphan_and_duplicate_logic():
     """
     Proves the engine accurately identifies uncalled (orphan) functions
     and duplicated function definitions within a single file, and that both
-    counts are aggregated into equations (orphaned_logic / duplicate_logic).
+    counts are aggregated into equations (unreferenced_by_name / duplicate_logic).
     """
     opt_detector = StructuralExtractor("python", MOCK_LANG_DEFS)
     code = (
@@ -389,8 +397,8 @@ def test_detector_orphan_and_duplicate_logic():
     assert duplicates.count("repeated_name") == 2, "Failed to flag both definitions of the duplicated function name!"
 
     # forgotten_orphan and main_process (never called, name > 3 chars) both flag as orphans.
-    assert result["equations"].get("orphaned_logic", 0) == len(orphans), (
-        "orphan_count was not aggregated into equations['orphaned_logic']!"
+    assert result["equations"].get("unreferenced_by_name", 0) == len(orphans), (
+        "orphan_count was not aggregated into equations['unreferenced_by_name']!"
     )
     assert result["equations"].get("duplicate_logic", 0) == 2, (
         "duplicate_count was not aggregated into equations['duplicate_logic']!"
@@ -439,7 +447,7 @@ def test_detector_orphan_census_excludes_synthetic_slicer_names():
     "<KEYWORD>_Statement"/"Declarative_Block" per-statement buckets for SQL. These
     must never be eligible for orphan/duplicate classification: a synthetic name can
     never legitimately appear a second time in the file, so without this exclusion
-    they were ALWAYS flagged "orphaned", inflating orphaned_logic with non-function
+    they were ALWAYS flagged "orphaned", inflating unreferenced_by_name with non-function
     shapes instead of real dead code.
     """
     # Mode D: shell. `. ./b.sh` is real top-level code (not a comment) preceding the
@@ -465,27 +473,21 @@ def test_detector_orphan_census_excludes_synthetic_slicer_names():
     assert "__global_context__" in shell_names, "Test setup didn't reproduce the synthetic bucket -- fixture drifted"
 
     synthetic_flagged = [
-        f["name"]
-        for f in shell_result["functions"]
-        if f["name"] == "__global_context__" and f.get("usage_status") != 0
+        f["name"] for f in shell_result["functions"] if f["name"] == "__global_context__" and f.get("usage_status") != 0
     ]
     assert synthetic_flagged == [], "__global_context__ (non-function slicer bucket) was flagged as orphan/duplicate!"
 
     real_orphans = [f["name"] for f in shell_result["functions"] if f.get("usage_status") == 1]
     assert set(real_orphans) == {"forgotten_orphan", "main_process"}, f"Real orphan detection regressed: {real_orphans}"
-    assert shell_result["equations"].get("orphaned_logic", 0) == 2, (
-        "orphaned_logic should count only the 2 real uncalled functions, not the synthetic bucket!"
+    assert shell_result["equations"].get("unreferenced_by_name", 0) == 2, (
+        "unreferenced_by_name should count only the 2 real uncalled functions, not the synthetic bucket!"
     )
 
     # Mode E: sql. Every top-level statement becomes its own satellite, named
     # generically from its leading keyword ("SELECT_Statement", "CREATE_Statement",
     # ...) -- never a real captured identifier, so none should be orphan-eligible.
     sql_detector = StructuralExtractor("sql", MOCK_LANG_DEFS)
-    sql_code = (
-        "SELECT * FROM users;\n"
-        "INSERT INTO users (id) VALUES (1);\n"
-        "CREATE INDEX idx_users_id ON users (id);\n"
-    )
+    sql_code = "SELECT * FROM users;\nINSERT INTO users (id) VALUES (1);\nCREATE INDEX idx_users_id ON users (id);\n"
     sql_result = sql_detector.splice(sql_code, "")
     sql_names = [f["name"] for f in sql_result["functions"]]
     assert any(name.endswith("_Statement") for name in sql_names), (
@@ -495,32 +497,95 @@ def test_detector_orphan_census_excludes_synthetic_slicer_names():
     assert all(f.get("usage_status") == 0 for f in sql_result["functions"]), (
         f"A synthetic Mode E statement bucket was flagged as orphan/duplicate: {sql_result['functions']}"
     )
-    assert sql_result["equations"].get("orphaned_logic", 0) == 0, (
-        "orphaned_logic should be 0 -- SQL statements have no real callable names to be orphaned!"
+    assert sql_result["equations"].get("unreferenced_by_name", 0) == 0, (
+        "unreferenced_by_name should be 0 -- SQL statements have no real callable names to be orphaned!"
     )
 
 
 def test_detector_c_macro_dead_branch_shield():
     """
-    Proves the Mode B Preprocessor Shield successfully blanks out dead
-    #ifdef branches and multi-line macro continuations.
+    Pins that a statically-dead C preprocessor branch is not counted (#2814).
+
+    `detector._blank_dead_preproc_branches` blanks the body of `#if 0` (and the
+    dead side of `#if 1`) before the rule loop in `coding_analysis`, so a
+    `strcpy` inside a dead branch reaches neither the file-level counts nor the
+    per-function `hit_vector`. This mirrors the `#1720` macro shield that
+    already prunes dead branches for function-boundary detection -- before
+    #2814 the two paths disagreed and the dead `strcpy` was counted.
+
+    An UNKNOWN condition (`#if defined(DEBUG_MODE)`) keeps both branches, since
+    the engine cannot decide it without a macro table -- so the same `strcpy`
+    is still counted there, exactly like live code.
+
+    (Before #2813 this test asserted 0 for the wrong reason: the live `#else`
+    `strncpy` tallied a `mitigated_danger` and the Silencer Region subtracted it
+    in place. `strncpy` is not a `strcpy` substring in MOCK_LANG_DEFS, so with
+    the dead branch blanked the raw `high_risk_execution` is a clean 0 -- no
+    hit to mitigate -- rather than a mitigated 1.)
     """
     opt_detector = StructuralExtractor("c", MOCK_LANG_DEFS)
-    code = (
+    code_dead = (
         "void system_init() {\n"
-        "#if defined(DEBUG_MODE)\n"
+        "#if 0\n"
         "    int fake_danger = strcpy(dest, src);\n"
         "#else\n"
         "    int safe_ops = strncpy(dest, src, 10);\n"
         "#endif\n"
         "}\n"
     )
+    code_unknown = code_dead.replace("#if 0", "#if defined(DEBUG_MODE)")
 
+    # #if 0: the strcpy is in a statically-dead branch -- blanked, not counted.
+    dead = opt_detector.splice(code_dead, "")
+    assert dead["equations"]["high_risk_execution"] == 0, (
+        "#if 0: the dead branch is blanked before counting -- no raw hit (#2814)"
+    )
+    assert "high_risk_execution" not in dead["threat_locations"], "#if 0: no high_risk_execution location survives"
+    assert dead["functions"][0]["hit_vector"].get("high_risk_execution", 0) == 0, (
+        "#if 0: the per-function hit_vector inherits the blanked stream too"
+    )
+    assert dead["mitigation_telemetry"].get("mitigated_danger", 0) == 0, "#if 0: nothing left to mitigate"
+    assert weighted_count(dead["equations"], dead["mitigation_telemetry"], "high_risk_execution") == 0
+
+    # #if defined(X): unknown condition -> both branches stay live and counted.
+    unknown = opt_detector.splice(code_unknown, "")
+    assert unknown["equations"]["high_risk_execution"] == 1, (
+        "#if defined: an undecidable condition keeps both branches -- the strcpy is counted"
+    )
+    assert unknown["threat_locations"]["high_risk_execution"] == [3], "#if defined: the hit is the strcpy on line 3"
+    assert unknown["functions"][0]["hit_vector"].get("high_risk_execution", 0) == 1
+    assert unknown["mitigation_telemetry"]["mitigated_danger"] == 1, "#if defined: same-function strncpy silences it"
+    assert weighted_count(unknown["equations"], unknown["mitigation_telemetry"], "high_risk_execution") == 0
+
+
+def test_detector_c_macro_dead_branch_nesting_and_else():
+    """
+    Locks down `_blank_dead_preproc_branches` on the tricky shapes (#2814):
+    a dead `#if 0` nested inside a live `#if 1`, the dead side of `#if 1`/`#else`,
+    an `#ifndef` header guard (unknown -> both sides live), and a live directive
+    left untouched. Only the genuinely dead calls must vanish from the count.
+    """
+    opt_detector = StructuralExtractor("c", MOCK_LANG_DEFS)
+    code = (
+        "void f() {\n"
+        "#if 1\n"
+        "    strcpy(a, b);\n"  # LIVE (line 3) -> counted
+        "#if 0\n"
+        "    gets(buf);\n"  # DEAD, nested inside live (line 5) -> dropped
+        "#endif\n"
+        "#else\n"
+        "    system(x);\n"  # DEAD, #if 1 else (line 8) -> dropped
+        "#endif\n"
+        "}\n"
+        "#ifndef GUARD\n"
+        "void g() { strcpy(c, d); }\n"  # header guard = unknown -> LIVE (line 12)
+        "#endif\n"
+    )
     result = opt_detector.splice(code, "")
-
-    # Because 'high_risk_execution' is in the dead branch, it should be scrubbed by the preprocessor shield
-    # before the regex engine even sees it.
-    assert result["equations"]["high_risk_execution"] == 0, "Failed to scrub dead preprocessor branches!"
+    assert result["equations"]["high_risk_execution"] == 2, (
+        "only the two live strcpy hits survive; nested #if 0 gets() and #if 1-else system() are dropped"
+    )
+    assert result["threat_locations"]["high_risk_execution"] == [3, 12], "hits are the live strcpy on lines 3 and 12"
 
 
 def test_detector_c_macro_else_branch_is_scanned_issue_1720():
@@ -814,22 +879,22 @@ def test_detector_mode_d_livecode_script_handlers():
     """
     opt_detector = StructuralExtractor("livecode", MOCK_LANG_DEFS)
     code = (
-        'on mouseUp\n'
-        '   if the shiftKey is down then beep\n'  # one-liner, no `end if`
-        '   if tCount > 0 then\n'
-        '      repeat with i = 1 to tCount\n'
-        '         put i after tResult\n'
-        '      end repeat\n'
-        '   end if\n'
-        'end mouseUp\n'
-        '\n'
-        'private function computeTotal pRows\n'
-        '   return the number of lines of pRows\n'
-        'end computeTotal\n'
-        '\n'
-        'command logIt pMessage\n'
+        "on mouseUp\n"
+        "   if the shiftKey is down then beep\n"  # one-liner, no `end if`
+        "   if tCount > 0 then\n"
+        "      repeat with i = 1 to tCount\n"
+        "         put i after tResult\n"
+        "      end repeat\n"
+        "   end if\n"
+        "end mouseUp\n"
+        "\n"
+        "private function computeTotal pRows\n"
+        "   return the number of lines of pRows\n"
+        "end computeTotal\n"
+        "\n"
+        "command logIt pMessage\n"
         '   write pMessage & return to file "log.txt"\n'
-        'end logIt\n'
+        "end logIt\n"
     )
 
     result = opt_detector.splice(code, "")
@@ -861,7 +926,7 @@ def test_detector_mode_d_livecode_builder_handlers():
         "\n"
         "public handler DoWork(in pInput as String, out pResult as String)\n"
         "   if pInput is empty then\n"
-        "      put \"none\" into pResult\n"
+        '      put "none" into pResult\n'
         "      return\n"
         "   end if\n"
         "   put pInput into pResult\n"
@@ -1109,7 +1174,7 @@ def test_detector_cpp_objc_name_extraction():
 def test_detector_advanced_appsec_sensors():
     """
     Proves the Phase 4 spatial correlation matrix correctly calculates metrics
-    for unmitigated Memory Leaks, Tainted RCE Injection, and Race Conditions.
+    for unmitigated Memory Leaks and Race Conditions.
     """
     opt_detector = StructuralExtractor("c", MOCK_LANG_DEFS)
     code = (
@@ -1122,15 +1187,17 @@ def test_detector_advanced_appsec_sensors():
     eqs = result["equations"]
     mits = result["mitigation_telemetry"]
 
-    # 1. RCE Weaponization: high_risk_execution spatially overlapping with io (#344)
-    assert eqs.get("sec_tainted_injection", 0) >= 1, "Failed to spatially correlate Tainted RCE Injection!"
+    # Since #2813 the recorded counts are raw; the corroborations and amplifiers
+    # are tallies applied in the weighted view.
 
-    # 2. Race Conditions: concurrency overlapping with unlocked flux (multiplies by 5)
-    assert eqs.get("concurrency", 0) >= 5, "Failed to detect and amplify the Race Condition penalty!"
+    # 2. Race Conditions: concurrency overlapping with unlocked flux (+5 per pairing)
+    assert eqs.get("concurrency", 0) == 1, "Recorded concurrency must be the raw hit count (#2813)"
     assert mits.get("amplified_race_conditions", 0) >= 1, "Failed to log the Race Condition telemetry!"
+    assert weighted_count(eqs, mits, "concurrency") >= 6, "Failed to amplify the Race Condition penalty!"
 
     # 3. Memory Leaks: unmitigated alloc
     assert eqs.get("memory_alloc", 0) >= 1, "Failed to flag the unmitigated Memory Leak!"
+    assert mits.get("mitigated_memory_allocs", 0) == 0
 
 
 # ==============================================================================
@@ -1153,7 +1220,7 @@ def test_detector_dampeners_do_not_cross_function_boundaries():
     eqs = result["equations"]
     mits = result["mitigation_telemetry"]
 
-    assert eqs.get("high_risk_execution", 0) == 1, (
+    assert weighted_count(eqs, mits, "high_risk_execution") == 1, (
         "A safety call in a DIFFERENT function must not mitigate this danger signal -- "
         "cross-function dampening regressed!"
     )
@@ -1171,8 +1238,11 @@ def test_detector_dampeners_still_apply_within_same_function():
     eqs = result["equations"]
     mits = result["mitigation_telemetry"]
 
-    assert eqs.get("high_risk_execution", 0) == 0, "Same-function safety call should still mitigate this danger signal"
+    assert eqs.get("high_risk_execution", 0) == 1, "Recorded count stays the raw hit (#2813)"
     assert mits.get("mitigated_danger", 0) == 1
+    assert weighted_count(eqs, mits, "high_risk_execution") == 0, (
+        "Same-function safety call should still mitigate this danger signal in the weighted view"
+    )
 
 
 # ==============================================================================
@@ -2123,13 +2193,16 @@ def test_detector_spatial_oom_bomb_correlation():
     )
     res_oom = opt_oom.splice(code_oom, "")
 
-    # A single state_mutation hit normally = 1.
-    # The AppSec multiplier adds (cascading_flux * 2). Total should be >= 3.
-    assert res_oom["equations"].get("state_mutation", 0) >= 3, (
-        "Spatial correlation failed to amplify the OOM Bomb (Cascading Flux)!"
+    # A single state_mutation hit is recorded as 1 (#2813: a count is a count).
+    # The AppSec multiplier (cascading_flux * 2) lives in the weighted view: >= 3.
+    assert res_oom["equations"].get("state_mutation", 0) == 1, (
+        "Recorded state_mutation must be the raw hit count, not the amplified figure (#2813)"
     )
     assert res_oom["mitigation_telemetry"].get("amplified_cascading_flux", 0) >= 1, (
         "Failed to log the OOM Bomb telemetry!"
+    )
+    assert weighted_count(res_oom["equations"], res_oom["mitigation_telemetry"], "state_mutation") >= 3, (
+        "Spatial correlation failed to amplify the OOM Bomb (Cascading Flux) in the weighted view!"
     )
 
     # 2. Unhappy Path: Mutation far away from the loop (Should NOT Amplify)
@@ -3784,3 +3857,1535 @@ AC_DEFUN([ANOTHER],
     assert sats[0]["loc"] == 1
     assert sats[1]["loc"] == 6
     assert sats[2]["loc"] == 4
+
+
+def test_detector_early_returns_do_not_clobber_worker_raw_imports():
+    """#2638 regression: splice()'s early-return paths (markdown prose
+    deflection, prose/structured-data empty return, empty code_stream,
+    catastrophic-failure fallback) used to include a placeholder
+    "raw_imports": [] in their LogicData. The worker merges splice output
+    into its payload AFTER independently extracting dependencies via
+    `_dependency_capture` (galaxyscope.py Phase 6), so the placeholder
+    silently erased every dependency those paths' files had -- markdown's
+    relative links being the first real casualty. splice() must not emit
+    the key at all: dependency extraction is the worker's, not the
+    detector's."""
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    # Markdown prose deflection path (real defs: lit rules live in comment_stream)
+    md_detector = StructuralExtractor("markdown", LANGUAGE_DEFINITIONS)
+    md_result = md_detector.splice("", "# Title\n[a](a.md)\n")
+    assert "raw_imports" not in md_result, (
+        "markdown prose-deflection splice() emitted a raw_imports placeholder; "
+        "it would clobber Phase 6's link extraction in the worker payload merge"
+    )
+
+    # Empty code_stream early return (any code language)
+    py_detector = StructuralExtractor("python", MOCK_LANG_DEFS)
+    empty_result = py_detector.splice("", "")
+    assert "raw_imports" not in empty_result, "empty-code_stream splice() emitted a raw_imports placeholder"
+
+
+# ==============================================================================
+# TEST: MODE C 2-LINE FLOOR EXEMPTION FOR YAML (#2649)
+# ==============================================================================
+def test_detector_yaml_single_line_step_survives_two_line_floor():
+    """
+    Regression for #2649: _slice_by_indentation drops any sliced block under
+    2 lines unless the language is in a hardcoded exemption tuple. yaml was
+    missing from that tuple, so every single-line GitHub Actions step
+    (`- run: 'pytest'`) -- the dominant real-world form -- was silently
+    dropped from the function census. A multi-line block-scalar step must
+    keep working too.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    yaml_detector = StructuralExtractor("yaml", LANGUAGE_DEFINITIONS)
+    code = "jobs:\n  build:\n    steps:\n      - run: pytest\n      - run: |\n          echo one\n          echo two\n"
+
+    result = yaml_detector.splice(code_stream=code, comment_stream="", confidence=1.0)
+    names = [f["name"] for f in result["functions"]]
+
+    assert len(names) == 2, f"expected both the single-line and multi-line run: steps, got {names}"
+
+
+# ==============================================================================
+# TEST: WHICH ORPHANS THE api RULE ALREADY COUNTED (#2731)
+# ==============================================================================
+def test_detector_counts_orphans_the_api_rule_already_declared():
+    """
+    Regression for #2731: galaxyscope.py's Contextual Baseline Fix converts an
+    imported file's orphans into API exposure, but had no way to ask whether the
+    language's own `api` rule had already counted those same declarations -- so
+    a function that is both declared public and uncalled was counted twice
+    (keyword-rosetta's `data/go/a.go`: 3 exported, uncalled functions, api 6).
+
+    `api_declared_orphans` is that missing number. Uses the REAL definitions:
+    the whole point is the interaction with a language's actual api rule.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    go_detector = StructuralExtractor("go", LANGUAGE_DEFINITIONS)
+    code = (
+        "package main\n"
+        "\n"
+        "func ProbeGlobals(env int) int {\n"
+        "    os.Getenv(env)\n"
+        "    return env\n"
+        "}\n"
+        "\n"
+        "func ProbeSafety(value int) int {\n"
+        "    context.Context(value)\n"
+        "    return value\n"
+        "}\n"
+    )
+
+    result = go_detector.splice(code, "")
+
+    assert result["equations"].get("unreferenced_by_name", 0) == 2, "both exported functions must census as orphans"
+    assert result["equations"].get("api", 0) >= 2, "go's api rule must count both exported declarations"
+    assert result["api_declared_orphans"] == 2, (
+        "both orphans are declared public -- converting them again would double-count the same identifiers"
+    )
+
+
+def test_detector_api_declared_orphans_ignores_hits_outside_the_declaration():
+    """
+    #2731's overlap test is by NAME, not by span: an api hit that is not on the
+    orphan's own declaration line is somebody else's public surface and must not
+    suppress that orphan's conversion.
+
+    C is the sharp case. Its api rule matches any non-`static` declaration-shaped
+    line, including the local variable declarations inside a function body, so a
+    span-containment test would call every orphan already-public. A `static`
+    (file-local) function is not public surface at all: its conversion is the
+    Contextual Baseline Fix's own business, and #2731 must leave it alone.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    c_detector = StructuralExtractor("c", LANGUAGE_DEFINITIONS)
+    code = (
+        "static void hidden_helper(void)\n"
+        "{\n"
+        "    int counter = 0;\n"
+        "    counter++;\n"
+        "}\n"
+        "\n"
+        "void exported_entry(void)\n"
+        "{\n"
+        "    int scratch = 0;\n"
+        "    scratch++;\n"
+        "}\n"
+    )
+
+    result = c_detector.splice(code, "")
+
+    orphans = {f["name"] for f in result["functions"] if f.get("usage_status") == 1}
+    assert orphans == {"hidden_helper", "exported_entry"}, (
+        f"expected both functions to census as orphans, got {orphans}"
+    )
+    assert result["api_declared_orphans"] == 1, (
+        "only the non-static declaration is public surface the api rule already counted -- "
+        "the static one's body-local `int counter = 0;` api hit must not suppress it"
+    )
+
+
+def test_detector_api_declared_orphans_sees_hyphenated_cobol_names_2827():
+    r"""
+    #2827: the overlap test tokenized each api line with `\b\w+\b`, which
+    cannot produce a token containing `-`, so a cobol paragraph named
+    `PROBE-GLOBALS` -- declared public by its own `ENTRY 'PROBE-GLOBALS'` line
+    -- was invisible to it, read as not-yet-counted, and the Contextual
+    Baseline Fix credited it a second time (keyword-rosetta `data/cobol/a.cpy`:
+    api_orphan_credit 3 where it should read 0). Fixture is that file's shape.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    cobol_detector = StructuralExtractor("cobol", LANGUAGE_DEFINITIONS)
+    code = (
+        "       COPY b.\n"
+        "\n"
+        "       77 REGION-ITEM PIC 9 GLOBAL.\n"
+        "\n"
+        "       PROBE-GLOBALS.\n"
+        "           ENTRY 'PROBE-GLOBALS' USING ARGV-BLOCK.\n"
+        "           DISPLAY REGION-ITEM.\n"
+        "       PROBE-TEST.\n"
+        "           ENTRY 'PROBE-TEST' USING ARGV-BLOCK.\n"
+        "           DISPLAY REGION-ITEM.\n"
+        "       PROBE-SAFETY.\n"
+        "           ENTRY 'PROBE-SAFETY' USING ARGV-BLOCK.\n"
+        "           DISPLAY REGION-ITEM.\n"
+    )
+
+    result = cobol_detector.splice(code, "")
+
+    orphans = {f["name"] for f in result["functions"] if f.get("usage_status") == 1}
+    assert orphans == {"PROBE-GLOBALS", "PROBE-TEST", "PROBE-SAFETY"}, (
+        f"all three paragraphs are uncalled and must census as orphans, got {orphans}"
+    )
+    assert result["equations"].get("api", 0) == 3, "cobol's api rule counts the three ENTRY declarations"
+    assert result["api_declared_orphans"] == 3, (
+        "every orphan is named on an api-matched line (its own ENTRY) -- a `\\b\\w+\\b` tokenizer "
+        "splits PROBE-GLOBALS into PROBE and GLOBALS and reads 0 here"
+    )
+
+
+def test_detector_api_declared_orphans_sees_hyphenated_scheme_export_2827():
+    """
+    #2827, the lisp shape: `(export probe-globals)` is the api hit and
+    `probe-globals` is the orphan's real name. Same fix, same expectation.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    scheme_detector = StructuralExtractor("scheme", LANGUAGE_DEFINITIONS)
+    code = (
+        "(import b)\n"
+        "(export probe-globals)\n"
+        "(export probe-test)\n"
+        "\n"
+        "(define (probe-globals env)\n"
+        "  env)\n"
+        "\n"
+        "(define (probe-test kit)\n"
+        "  (test-assert kit))\n"
+    )
+
+    result = scheme_detector.splice(code, "")
+
+    orphans = {f["name"] for f in result["functions"] if f.get("usage_status") == 1}
+    assert orphans == {"probe-globals", "probe-test"}, f"got {orphans}"
+    assert result["api_declared_orphans"] == 2, (
+        "both orphans are named on their own `(export ...)` line; the old tokenizer saw only `export`, `probe`, `globals`"
+    )
+
+
+# ==============================================================================
+# TEST: YACC NAMED-CLASS EXTRACTION USES %union, NOT THE GENERIC FALLBACK (#2644)
+# ==============================================================================
+def test_detector_yacc_class_extraction_ignores_embedded_c_structs():
+    """
+    Regression for #2644. yacc's `class_start` was `None`, so a grammar's one
+    real compound type -- bison's `%union`, the C union spanning every rule's
+    semantic value -- was invisible. Wiring that rule is only half the change:
+    the named-class extractor consults a language's own `class_start` ONLY if
+    the language is in `_CLASS_START_NAMED_EXTRACTION_LANGS`, otherwise it falls
+    through to the legacy generic regex (`class|struct|interface|trait|enum`),
+    which reads every `struct foo` declaration in a grammar's embedded C action
+    code as a class -- 17 and 9 on the two real corpus grammars where the honest
+    answer is 1 each.
+
+    So this test pins the pair together: one `%union`, several ordinary C
+    `struct` declarations around it, exactly one extracted class.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    yacc_detector = StructuralExtractor("yacc", LANGUAGE_DEFINITIONS)
+    code = (
+        "%union {\n"
+        "\tchar\t*str;\n"
+        "\tstruct\tfile_list *file;\n"
+        "}\n"
+        "%%\n"
+        "file_spec:\n"
+        "\tNAME {\n"
+        "\t\tstruct file_list *fl;\n"
+        "\t\tstruct device dev;\n"
+        "\t\tnewfile($1);\n"
+        "\t}\n"
+        "\t;\n"
+    )
+
+    result = yacc_detector.splice(code, "")
+
+    names = [c.get("name") for c in result.get("classes", [])]
+    assert names == ["Anonymous_Class"], (
+        f"expected exactly the %union block as the file's one class, got {names} -- "
+        "yacc dropped off _CLASS_START_NAMED_EXTRACTION_LANGS and the generic "
+        "fallback is reading embedded C structs as classes again"
+    )
+    assert result["equations"].get("class_start") == 1, "the %union directive must count once as a class_start signal"
+
+
+def test_detector_yacc_grammar_without_a_union_declares_no_class():
+    """
+    #2644's other half: a grammar that uses `%define api.value.type` instead of
+    `%union` (gnucobol's 18k-line parser.y does) genuinely has no compound type
+    to declare. Its embedded C is still full of `struct` declarations -- 56 of
+    them would surface as classes on the generic fallback -- so an honest zero
+    here is what proves the language's own rule is the one being consulted.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    yacc_detector = StructuralExtractor("yacc", LANGUAGE_DEFINITIONS)
+    code = (
+        "%define api.value.type union\n"
+        "%%\n"
+        "statement:\n"
+        "\tWORD {\n"
+        "\t\tstruct cb_field *f;\n"
+        "\t\tstruct cb_tree_common *x;\n"
+        "\t\temit($1);\n"
+        "\t}\n"
+        "\t;\n"
+    )
+
+    result = yacc_detector.splice(code, "")
+
+    assert result.get("classes") == [], f"a grammar with no %union must declare no class, got {result.get('classes')}"
+    assert not result["equations"].get("class_start"), "no %union directive means no class_start signal"
+
+
+# ==============================================================================
+# #2727 / #2728: THE ORPHAN & DUPLICATE CENSUS
+# ==============================================================================
+def test_orphan_test_is_scoped_to_the_function_own_span():
+    """#2727: an orphan is a function nothing outside its own definition names.
+
+    The old test counted the name over the WHOLE code stream, so whether a
+    function read as orphaned depended on how many times the language's syntax
+    writes it. Ada closes with `end Probe_Globals;` and LiveCode ends a handler
+    by name -- count 2 before anything calls it, so neither language could ever
+    report an orphan (measured: livecode reported 3 across the crucible where
+    the scoped test finds 127).
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    ada = StructuralExtractor("ada", LANGUAGE_DEFINITIONS)
+    uncalled = "procedure Probe_Globals (Env : Integer) is\nbegin\n   null;\nend Probe_Globals;\n"
+    assert ada.splice(uncalled, "")["equations"].get("unreferenced_by_name", 0) == 1, (
+        "a procedure whose only other mention is its own `end Name;` is an orphan"
+    )
+
+    called = uncalled + "procedure Caller is\nbegin\n   Probe_Globals (1);\nend Caller;\n"
+    eq = ada.splice(called, "")["equations"]
+    assert eq.get("unreferenced_by_name", 0) == 1, (
+        "a real call from another procedure must clear the flag -- only Caller stays orphaned"
+    )
+
+
+def test_orphan_test_discounts_a_declaration_that_falls_outside_the_span():
+    """#2727, the correction the issue's own fix shape missed.
+
+    The span does not reliably contain the function's declaration: shell's
+    Mode-B spans start at the `{`, so a K&R `make_module()` on the PREVIOUS line
+    sits outside its own body. Counting outside the span naively makes the
+    declaration itself read as a reference and clears the flag -- measured on
+    the crucible, ruby fell 51 -> 44 orphans that way, html 5 -> 2, shell 8 -> 3,
+    all real ones lost. When the span holds no occurrence of the name, the
+    definition site is outside it by construction, so exactly one outside
+    occurrence is that declaration and is discounted.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    shell = StructuralExtractor("shell", LANGUAGE_DEFINITIONS)
+    kr_style = 'make_module()\n{\n        MODULES="${MODULES} ${1}"\n}\n'
+    assert shell.splice(kr_style, "")["equations"].get("unreferenced_by_name", 0) == 1, (
+        "K&R shell function, never called: its own declaration line must not count as a reference"
+    )
+
+    called = kr_style + "make_module foo\n"
+    assert shell.splice(called, "")["equations"].get("unreferenced_by_name", 0) == 0, (
+        "a real invocation outside the body must still clear the flag"
+    )
+
+
+def test_orphan_test_finds_names_containing_non_word_characters():
+    """#2727 fixes a third defect neither issue named.
+
+    The old whole-file counter tokenized with `\\b\\w+\\b`, which cannot produce a
+    token containing `-`, `:` or `.`. A name holding any of them therefore had a
+    count of ZERO and satisfied `<= 1` unconditionally -- every C++ `Class::method`,
+    PowerShell `Verb-Noun`, Tcl `::ns::proc`, Scheme/Lisp hyphenated define and
+    COBOL paragraph in the corpus was classified as an orphan no matter how many
+    times it was called. Measured on the language-crucible: cpp 1054 -> 720
+    orphans, tcl 210 -> 148, powershell 56 -> 3, scheme 60 -> 10, abap 41 -> 8.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    scheme = StructuralExtractor("scheme", LANGUAGE_DEFINITIONS)
+    # #2806: this used to name the function a second time with `(export
+    # probe-globals)`, which does clear the flag today but for the wrong reason
+    # -- an export is a visibility declaration, not a reference (#2774 built
+    # `_visibility_export` for exactly that, and scheme is one of the two
+    # languages that never got one: #2823). A real call keeps this test on the
+    # defect it was written for -- that a hyphenated name can be matched at all.
+    code = "(define (probe-globals env) env)\n(display (probe-globals 1))\n"
+    assert scheme.splice(code, "")["equations"].get("unreferenced_by_name", 0) == 0, (
+        "a hyphenated name named again elsewhere in the file is not an orphan"
+    )
+
+    uncalled = "(define (probe-globals env) env)\n"
+    assert scheme.splice(uncalled, "")["equations"].get("unreferenced_by_name", 0) == 1, (
+        "the same hyphenated name with nothing else naming it still is one"
+    )
+
+
+def test_closed_literal_capture_is_generated_not_hand_listed():
+    """#2728: the igniter-keyword bucket set is derived from each language's own
+    `func_start`, so it cannot drift away from what the slicer emits.
+
+    A rule whose capture can produce an author-written identifier must yield the
+    empty set -- that is what keeps the mechanism from swallowing real functions.
+    """
+    from gitgalaxy.core.detector import _closed_literal_capture
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    closed = {
+        lang: _closed_literal_capture(rules["rules"]["func_start"].pattern)
+        for lang, rules in LANGUAGE_DEFINITIONS.items()
+        if rules.get("rules", {}).get("func_start") is not None
+    }
+    assert {lang for lang, names in closed.items() if names} == {"css", "dockerfile", "html", "yaml"}, (
+        "exactly four languages have a func_start capture that is a closed keyword set"
+    )
+    assert {"RUN", "CMD", "ENTRYPOINT", "HEALTHCHECK"} <= closed["dockerfile"]
+    # #2866: `keyframes` deliberately LEFT this set -- its capture is now the
+    # @keyframes custom-ident (an author-written name the census walks), so only
+    # the four bucket at-rules remain closed literals for css.
+    assert {"media", "supports", "container", "layer"} <= closed["css"]
+    assert "keyframes" not in closed["css"]
+    assert {"script", "style"} <= closed["html"]
+    # #2767: yaml joined this set deliberately. Its `func_start` keyword arm is
+    # capture group 1 and excludes its own colon, precisely so an UNNAMED step
+    # -- which still names itself after the matched keyword -- is censused the
+    # way dockerfile's `RUN` is: by derivation from the rule. Before #2767 the
+    # rule had no capture group at all, so yaml yielded the empty set here and
+    # its thirteen identically-named `run` slices reached both censuses, to be
+    # dropped only by the `len(func_name) > 3` guard #2768 removed.
+    assert {"run", "script", "before_script", "after_script"} <= closed["yaml"]
+    for lang in ("python", "go", "cobol", "assembly", "jcl"):
+        assert not closed.get(lang, frozenset()), f"{lang} captures real identifiers -- must opt out"
+
+
+def test_keyword_buckets_are_neither_duplicates_nor_orphans():
+    """#2728: four same-bodied `RUN` instructions are one Dockerfile, not
+    copy-pasted logic. `state_slop_duplicates` = 1 for dockerfile was the only
+    nonzero duplicate cell across 46 corpus languages, and it was a phantom.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    docker = StructuralExtractor("dockerfile", LANGUAGE_DEFINITIONS)
+    code = "FROM debian\nRUN apt-get update\nRUN apt-get update\nRUN apt-get update\nRUN apt-get update\n"
+    eq = docker.splice(code, "")["equations"]
+    assert not eq.get("duplicate_logic"), "identical RUN instructions are not duplicated functions"
+    assert not eq.get("unreferenced_by_name"), "a RUN bucket is a keyword, and a keyword cannot be orphaned"
+
+
+def test_mode_d_anchors_a_function_at_its_declaration_not_its_opening_brace():
+    """#2758: Mode D's openers include the bare `{`, so a K&R-style shell
+    function -- declaration on one line, brace on the next, which is how curl's
+    own `initscript.sh` is written throughout -- reported `start_line` on the
+    BRACE. The lookback at `_slice_by_keywords` already had to walk back a line
+    to find the name; it recovered the name and left the position behind.
+
+    `start_line` is not diagnostic-only: `sarif_recorder.py` uses it as the
+    `locations` line of every SARIF result, and `spatial_correlation.py` builds
+    each function's dampener window as `(start_line, end_line + 1)`, so a window
+    starting one line late can miss a signal sitting on the declaration itself.
+
+    Only the ANCHOR moves. The satellite's text still begins at the opener, so
+    `loc` is unchanged -- asserted below, because that is what keeps the span
+    extending backwards over the declaration rather than sliding a line earlier.
+    Mode D can do that safely only because it computes `sat_end_line`
+    independently, unlike the brace/label modes' `start_line + loc - 1`.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    shell = StructuralExtractor("shell", LANGUAGE_DEFINITIONS)
+    code = 'f_create_role()\n{\n    : "$1"\n}\n\nf_inline() {\n    : "$1"\n}\n'
+    by_name = {f["name"]: f for f in shell.splice(code, "").get("functions", [])}
+
+    kr = by_name["f_create_role"]
+    assert kr["start_line"] == 1, "the K&R declaration is on line 1, not the brace on line 2"
+    assert kr["end_line"] == 4, "the end must not move with the start -- the span extends, not slides"
+    assert kr["loc"] == 3, "the satellite's own text is untouched; only the anchor moved"
+
+    same_line = by_name["f_inline"]
+    assert same_line["start_line"] == 6, "the same-line brace form was already correct and must not move"
+    assert same_line["end_line"] == 8
+    assert same_line["loc"] == 3
+
+
+def test_mode_d_anchor_does_not_move_when_the_name_is_on_the_opener():
+    """#2758's guard: the anchor only follows a name the lookback had to recover
+    from an earlier line. When `_extract_semantic_name` finds the name on the
+    opener line itself -- the common case in every Mode D language -- nothing
+    about the position changes.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    shell = StructuralExtractor("shell", LANGUAGE_DEFINITIONS)
+    code = 'function f_named {\n    : "$1"\n}\n'
+    funcs = [f for f in shell.splice(code, "").get("functions", []) if f["name"] == "f_named"]
+    assert funcs and funcs[0]["start_line"] == 1
+
+
+# ==============================================================================
+# #2777 / #2768 / #2774 / #2767: THE ORPHAN CENSUS, SECOND PASS
+# ==============================================================================
+def test_orphan_name_match_is_not_anchored_by_word_boundaries():
+    """#2777: `\\b` asserts a `\\w`<->`\\W` TRANSITION, not "no adjacent word char".
+
+    For a name that itself ends in a non-word character -- ruby `empty?`,
+    `save!`, `name=`, C++ `operator==` -- the trailing `\\b` demanded that the
+    NEXT character be a word character, which it never is. The pattern matched
+    NOTHING, not even the declaration, so `_is_orphan` saw `inside == 0` and
+    `outside == 0`, applied the declaration discount and returned True
+    unconditionally: 32 of 32 such ruby functions and 12 of 12 such C++ ones in
+    the crucible were reported dead code regardless of use.
+    """
+    from gitgalaxy.core.detector import _name_boundary_pattern
+
+    # The exact shape that failed: a name ending in a non-word character,
+    # followed by a call paren.
+    used = re.compile(_name_boundary_pattern("empty?"))
+    assert len(used.findall("x.empty?()\ndef empty?\n")) == 2, (
+        "a name ending in `?` must match both its call and its declaration"
+    )
+    assert re.compile(_name_boundary_pattern("operator==")).search("if (a operator==(b))"), (
+        "a C++ operator overload name must be matchable"
+    )
+
+    # Equivalence for an ordinary all-word name -- no currently-correct language moves.
+    for name, hay in (("probe", "probe()"), ("B", "B()"), ("probe_globals", "probe_globals()")):
+        assert re.compile(_name_boundary_pattern(name)).findall(hay) == re.compile(
+            r"\b" + re.escape(name) + r"\b"
+        ).findall(hay), f"{name}: lookarounds must be equivalent to \\b for an all-word name"
+
+    # And the boundary must still BE a boundary -- a prefix is not a match.
+    assert not re.compile(_name_boundary_pattern("probe")).search("probe_globals()"), (
+        "the lookarounds must not widen the test into a prefix match"
+    )
+
+
+def test_ruby_predicate_method_is_orphaned_only_when_actually_uncalled():
+    """#2777, end to end: the population is a whole language idiom, not a fringe."""
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    ruby = StructuralExtractor("ruby", LANGUAGE_DEFINITIONS)
+
+    called = "def image?\n  true\nend\n\ndef render\n  image?\nend\n"
+    orphans = [f["name"] for f in ruby.splice(called, "").get("functions", []) if f.get("usage_status") == 1]
+    assert "image?" not in orphans, "a predicate method with a real caller is not an orphan"
+
+    uncalled = "def image?\n  true\nend\n\ndef render\n  true\nend\n"
+    orphans = [f["name"] for f in ruby.splice(uncalled, "").get("functions", []) if f.get("usage_status") == 1]
+    assert "image?" in orphans, "a predicate method nothing calls still is one"
+
+
+def test_short_function_names_are_eligible_for_the_orphan_census():
+    """#2768: `len(func_name) > 3` meant a function named in three characters or
+    fewer could never be reported unused, in any language, under any
+    circumstances -- 3.6% of extracted functions corpus-wide, 29.4% of lua's.
+
+    It was a proxy from the pre-#2727 whole-file token-frequency test, where a
+    short name was likely to collide with unrelated text. #2754's test is
+    span-scoped and boundary-anchored, so it answers a three-character name as
+    reliably as a thirty-character one.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    py = StructuralExtractor("python", LANGUAGE_DEFINITIONS)
+
+    code = "def add(a, b):\n    return a + b\n\n\ndef run():\n    return add(1, 2)\n"
+    funcs = py.splice(code, "").get("functions", [])
+    orphans = [f["name"] for f in funcs if f.get("usage_status") == 1]
+    assert "add" in [f["name"] for f in funcs], "sanity: the short function was extracted"
+    assert "add" not in orphans, "a short name with a real caller is not an orphan"
+    assert "run" in orphans, "a short name nothing calls is an orphan -- it was exempt before #2768"
+
+
+def test_export_statement_is_a_visibility_declaration_not_a_use():
+    """#2774: naming a function in an export statement cleared its orphan flag.
+
+    That is the ONE mention a library is guaranteed to make of a function it
+    never calls itself, so the census was blind to exactly the population it is
+    asked about: a library whose every function is exported and none called
+    internally reported zero dead code. Measured on keyword-rosetta/data/shell,
+    3 orphans per file without the `export -f` lines and 0 with them.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    shell = StructuralExtractor("shell", LANGUAGE_DEFINITIONS)
+
+    exported = 'probe_globals() {\n    : "$1"\n}\n\nexport -f probe_globals\n'
+    orphans = [f["name"] for f in shell.splice(exported, "").get("functions", []) if f.get("usage_status") == 1]
+    assert "probe_globals" in orphans, "an exported, never-called function is dead code, not a use"
+
+    # The negative that rules out the whole-line approach: a GENUINE call must
+    # still count even when it shares a line with an export statement.
+    called = 'probe_globals() {\n    : "$1"\n}\n\nexport RESULT="$(probe_globals)"\n'
+    orphans = [f["name"] for f in shell.splice(called, "").get("functions", []) if f.get("usage_status") == 1]
+    assert "probe_globals" not in orphans, (
+        "only the exported NAME's own span is discounted -- a real call on an export line still counts"
+    )
+
+
+def test_visibility_export_rules_capture_a_name():
+    """#2774: the opt-in contract. A language joins the exemption by declaring a
+    `_visibility_export` rule whose group 1 is the exported NAME -- deliberately
+    not the `api` rule, whose broad visibility MODIFIERS (javascript's bare
+    `export`, java's bare `public`) would swallow genuine calls.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    expected = {
+        "shell": ("export -f probe_globals", "probe_globals"),
+        "tcl": ("namespace export probe_globals", "probe_globals"),
+        "ruby": ("module_function :probe_globals", "probe_globals"),
+        "powershell": ("Export-ModuleMember -Function probe_globals", "probe_globals"),
+        "assembly": ("global probe_globals", "probe_globals"),
+        # #2872: `m4_provide`/`AC_PROVIDE` publish a macro as a provided feature,
+        # naming exactly one macro per clause -- the singular form.
+        "m4": ("m4_provide([probe_globals])", "probe_globals"),
+    }
+    declared = {
+        lang for lang, cfg in LANGUAGE_DEFINITIONS.items() if cfg.get("rules", {}).get("_visibility_export") is not None
+    }
+    assert declared == set(expected), f"exactly the six export-by-name languages opt in, got {declared}"
+
+    for lang, (line, name) in expected.items():
+        rule = LANGUAGE_DEFINITIONS[lang]["rules"]["_visibility_export"]
+        m = rule.search(line)
+        assert m is not None, f"{lang}: `{line}` must match its own export idiom"
+        assert m.group(1) == name, f"{lang}: group 1 must be the exported NAME, got {m.group(1)!r}"
+
+
+def test_visibility_export_list_rules_capture_a_region_of_names():
+    """#2823: the plural half of the same opt-in contract. A language whose
+    export construct names MANY functions at once declares
+    `_visibility_export_list` instead, and its capture groups are REGIONS whose
+    name tokens `detector.py` discounts one offset at a time.
+
+    Two keys rather than one generalised key, because the singular form records
+    a group's own start offset verbatim: assembly exports `.foo` and ruby
+    exports `save!`, and a region tokenizer would put those offsets one
+    character off (`.foo` -> `foo`) and silently stop discounting them.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    expected = {
+        "haskell": ("module A (probeGlobals, probeTest) where", ["probeGlobals", "probeTest"]),
+        "scheme": ("(export probe-globals probe-test)", ["probe-globals", "probe-test"]),
+        # #2872: a `.PHONY:` prerequisite list names an arbitrary number of
+        # targets in one clause -- the list form.
+        "makefile": (".PHONY: probe_globals probe_test", ["probe_globals", "probe_test"]),
+        # #2502: a PL/I PACKAGE names every exported procedure in one EXPORTS list.
+        "pli": ("PROBES: PACKAGE EXPORTS(PROBE_GLOBALS, PROBE_TEST);", ["PROBE_GLOBALS", "PROBE_TEST"]),
+        # #2503: an ENTRY statement publishes any number of additional entry
+        # points defined elsewhere in the same member -- the list form.
+        "hlasm": ("         ENTRY PROBEGLB,PROBETST", ["PROBEGLB", "PROBETST"]),
+    }
+    declared = {
+        lang
+        for lang, cfg in LANGUAGE_DEFINITIONS.items()
+        if cfg.get("rules", {}).get("_visibility_export_list") is not None
+    }
+    assert declared == set(expected), f"exactly the five export-a-list languages opt in, got {declared}"
+
+    for lang, (line, names) in expected.items():
+        rule = LANGUAGE_DEFINITIONS[lang]["rules"]["_visibility_export_list"]
+        m = rule.search(line)
+        assert m is not None, f"{lang}: `{line}` must match its own export idiom"
+        region = next((g for g in m.groups() if g), None)
+        assert region is not None, f"{lang}: some capture group must hold the exported names"
+        for name in names:
+            assert name in region, f"{lang}: the captured region must hold {name!r}, got {region!r}"
+
+
+def test_the_two_export_keys_never_disagree_about_a_language():
+    """A language declares the singular form or the plural one, not both: the
+    two build the same set of discounted offsets, and a language holding both
+    would be saying its export statement is simultaneously one name and a list
+    of them. Nothing in the engine forbids it -- this is the review gate.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    both = {
+        lang
+        for lang, cfg in LANGUAGE_DEFINITIONS.items()
+        if cfg.get("rules", {}).get("_visibility_export") is not None
+        and cfg.get("rules", {}).get("_visibility_export_list") is not None
+    }
+    assert not both, f"a language declares one export form or the other, not both: {both}"
+
+
+def test_yaml_steps_take_their_name_from_the_adjacent_name_key():
+    """#2767: every extracted yaml step was named `run`, so the orphan census,
+    the duplicate census and per-step identity were all dead -- in a scanned
+    repo, every CI step in `function_data` was a row called `run`.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    yml = StructuralExtractor("yaml", LANGUAGE_DEFINITIONS)
+
+    workflow = (
+        "jobs:\n"
+        "  build:\n"
+        "    name: My Job\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - name: Install dependencies\n"
+        "        run: pip install -e .\n"
+        "      - name: Run the test suite\n"
+        "        id: tests\n"
+        "        env:\n"
+        '          CI: "1"\n'
+        "        run: pytest tests/\n"
+        "      - run: echo unnamed\n"
+    )
+    names = [f["name"] for f in yml.splice(workflow, "").get("functions", [])]
+
+    # The whole name, not its last word: `words[-1]` truncation would collide
+    # "Build the wheel" with "Publish the wheel" and manufacture false duplicates.
+    assert "Install dependencies" in names, "a named step takes its whole name"
+    assert "Run the test suite" in names, "a bounded step-over reaches past `id:`/`env:` keys"
+    assert "run" in names, "an unnamed step still falls back to the keyword"
+
+    # The job-level `name:` belongs to the job, not to any step.
+    assert "My Job" not in names, "a job-level name: must not be captured as a step name"
+
+
+# ==============================================================================
+# TEST: #1295'S CSS/HTML CLASS-EXTRACTION SCOPE DECISION IS ENFORCED (#2798)
+# ==============================================================================
+def test_css_selectors_never_reach_named_class_extraction():
+    """
+    Regression for #2798 / the #1824 reversal.
+
+    Epic #1295 decided permanently that css and html are out of scope for NAMED
+    class extraction: `class_data`'s schema is `class_name`/`inheritance_parents`/
+    `method_count`/`state_entanglement`, and a CSS selector has none of those, so
+    every row it produced would carry `method_count=0`/`inheritance_parents=[]`
+    forever (tests/extraction/how_to_extend_class_start_named_extraction.md,
+    "Decided: not extending css or html").
+
+    The decision was written but never enforced in the extractor, and #1824 -- a
+    css `class_start` REGEX improvement, five days later -- added "css" to
+    `_CLASS_START_NAMED_EXTRACTION_LANGS` without mentioning it, taking css's
+    crucible `found_classes` 0 -> 90 in the same commit. Nothing caught that: both
+    tools that reconcile class extraction force css/html's class panels to N/A for
+    this very decision, so the reversal landed in the one blind spot the decision
+    itself created.
+    """
+    from gitgalaxy.core.detector import (
+        _CLASS_EXTRACTION_OUT_OF_SCOPE_LANGS,
+        _CLASS_START_NAMED_EXTRACTION_LANGS,
+    )
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    assert _CLASS_EXTRACTION_OUT_OF_SCOPE_LANGS == {"css", "html"}
+    overlap = _CLASS_EXTRACTION_OUT_OF_SCOPE_LANGS & _CLASS_START_NAMED_EXTRACTION_LANGS
+    assert not overlap, (
+        f"{sorted(overlap)} is both allowlisted for named class extraction and decided "
+        "permanently out of scope for it (#1295) -- exactly how #1824 regressed. Remove it "
+        "from one set or re-derive the decision from the how-to doc's own section first"
+    )
+
+    css = StructuralExtractor("css", LANGUAGE_DEFINITIONS)
+    result = css.splice(".rosetta-risk { x: expression(1); }\n#probe-id { color: red; }\n", "")
+
+    assert result.get("classes") == [], (
+        f"css selectors reached class_data: {result.get('classes')} -- #1295 ruled named "
+        "class extraction permanently out of scope for css"
+    )
+    # The numeric signal is deliberately untouched: the decision says so in as many
+    # words ("unaffected by this decision and stays exactly as-is for both
+    # languages"). It still feeds the risk equations; what it must not do is claim a
+    # selector is a named class.
+    assert result["equations"].get("class_start") == 2, (
+        "the class_start SIGNAL must still count both selectors -- #1295 scoped its decision to named extraction only"
+    )
+
+
+def test_html_tags_never_reach_named_class_extraction():
+    """#2798's other half. html's `class_start` matches a curated, risk-relevant TAG
+    list (`form`, `table`, `svg`, custom elements) chosen for attack surface, not for
+    class-likeness -- so an extracted `<table>` would be as wrong as an extracted
+    `.foo`. html was never in the allowlist, so today the legacy generic fallback is
+    what happens to return nothing; this pins the intent rather than the accident."""
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    html = StructuralExtractor("html", LANGUAGE_DEFINITIONS)
+    result = html.splice("<form action='/x'>\n<table>\n<tr><td>1</td></tr>\n</table>\n</form>\n", "")
+
+    assert result.get("classes") == [], (
+        f"html tags reached class_data: {result.get('classes')} -- #1295 ruled named "
+        "class extraction permanently out of scope for html"
+    )
+    assert result["equations"].get("class_start") == 2, "the class_start SIGNAL must still count the risk-relevant tags"
+
+
+def test_mode_e_statement_buckets_leave_the_function_population():
+    """#2792: `functions_found` sqlite 31 against a 13-function planted program.
+
+    Mode E (`_slice_by_terminator`) never captures a name from source: it cleaves
+    on the terminator and labels each bucket after the igniter keyword. The count
+    therefore scales with statement volume, not with the program -- and it is the
+    denominator of six per-function descriptors. #2547 already agreed these names
+    are never real callable identifiers; only the population had not been told.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    def population(lang, code):
+        functions = StructuralExtractor(lang, LANGUAGE_DEFINITIONS).splice(code, "")["functions"]
+        return [f["name"] for f in functions if not f.get("is_synthetic_slice")]
+
+    assert population("sqlite", "CREATE TABLE t (a INT);\nSELECT * FROM t;\n") == []
+    # ...and a language whose func_start captures real identifiers is untouched.
+    assert population("python", "def probe_a():\n    return 1\n") == ["probe_a"]
+
+
+def test_closed_literal_keyword_buckets_stay_in_the_population():
+    """#2792 declined #2728's other family, and this is the measurement that
+    settled it -- not a decision inherited from #2728's own deferral note.
+
+    Excluding a name from the population drops its row from `function_data`,
+    which is what `tests/tools/tree_sitter_accuracy_audit.py` compares against
+    the grammar. tree-sitter-css has dedicated nodes for these constructs and
+    `docs/language_status/css.md` publishes 25/25 function precision on exactly
+    them; excluding them measured `found_functions: 25 -> 0` on the pinned
+    crucible. A `@media` block is a real construct GitGalaxy correctly located.
+    Whether it should be called a *function* is a cross-language comparison
+    question, and keyword-rosetta answers it by reporting the cell incomparable.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    def population(lang, code):
+        functions = StructuralExtractor(lang, LANGUAGE_DEFINITIONS).splice(code, "")["functions"]
+        return [f["name"] for f in functions if not f.get("is_synthetic_slice")]
+
+    assert population("css", "@media screen { .a { color: red; } }\n") == ["media"]
+    assert population("dockerfile", 'FROM debian\nRUN apt-get update\nCMD ["x"]\n') == ["RUN", "CMD"]
+    # They are still neither orphans nor duplicates -- #2728 is untouched.
+    docker = StructuralExtractor("dockerfile", LANGUAGE_DEFINITIONS)
+    eq = docker.splice("FROM debian\nRUN apt-get update\nRUN apt-get update\n", "")["equations"]
+    assert not eq.get("duplicate_logic")
+    assert not eq.get("unreferenced_by_name")
+
+
+def test_mode_e_bucket_names_are_only_uncountable_for_a_mode_e_language():
+    """#2792's narrowing guard, the same shape as #2691's "Main" guard.
+
+    `_is_synthetic_satellite_name` matches `<KEYWORD>_Statement` for EVERY
+    language, which is right for the orphan check -- a false positive there
+    costs nothing. In the population a false positive erases a real declaration,
+    and `SELECT_Statement` is a legal identifier in a language that does not
+    slice on a terminator, so the exclusion is gated on the slicing mode the
+    engine actually dispatches on.
+    """
+    from gitgalaxy.core.detector import ScopeParsingRegistry, _is_synthetic_satellite_name
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    assert _is_synthetic_satellite_name("SELECT_Statement"), (
+        "if this becomes False the orphan check and the population test have "
+        "converged and this guard no longer guards anything"
+    )
+    assert ScopeParsingRegistry.get_mode("sqlite") == "mode_e"
+    assert ScopeParsingRegistry.get_mode("python") is None
+
+    sqlite = StructuralExtractor("sqlite", LANGUAGE_DEFINITIONS)
+    python = StructuralExtractor("python", LANGUAGE_DEFINITIONS)
+    assert sqlite._is_uncountable_slice("SELECT_Statement")
+    assert not python._is_uncountable_slice("SELECT_Statement")
+
+
+def test_a_truncated_mode_e_label_is_still_a_mode_e_label():
+    """#2792: the truncation suffixes are stripped for the Mode E family and
+    deliberately NOT for `_UNCOUNTABLE_SLICE_NAMES`.
+
+    #2691 kept them because `Main_[Truncated]` is a real function that ran off
+    the end of the file. `Declarative_Block_[Unterminated]` is the same bucket
+    label as `Declarative_Block`; whether the statement was terminated says
+    nothing about whether anyone wrote a name. Left unstripped it kept exactly
+    one phantom function in the corpus's `sqlite/main.sql`, so the count could
+    never reach the honest 0 that lets the cell be reported as incomparable.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    sqlite = StructuralExtractor("sqlite", LANGUAGE_DEFINITIONS)
+    assert sqlite._is_uncountable_slice("Declarative_Block_[Unterminated]")
+    assert sqlite._is_uncountable_slice("Declarative_Block")
+
+    # The #2691 carve-out survives: a real name that hit EOF is still counted.
+    go = StructuralExtractor("go", LANGUAGE_DEFINITIONS)
+    assert not go._is_uncountable_slice("Main_[Truncated]")
+    assert not go._is_uncountable_slice("Main")
+
+
+def test_synthesizes_all_function_names_is_the_reportable_form_of_the_same_rule():
+    """#2792/#2795: keyword-rosetta reads this to mark `functions_found` n/a.
+
+    An honest 0 must be reported as INCOMPARABLE, not scored as a -100% outlier
+    against languages that have functions -- otherwise this fix trades a wrong
+    number for a bigger red dot. The predicate is exported from the engine so
+    the corpus cannot hand-list a set that drifts from what the slicer emits,
+    and it must cover exactly the languages whose population this fix empties.
+    """
+    from gitgalaxy.core.detector import synthesizes_all_function_names
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    for lang in ("markdown", "sqlite"):
+        assert synthesizes_all_function_names(lang, LANGUAGE_DEFINITIONS[lang]["rules"])
+    # The closed-literal languages keep a population, so they must NOT qualify --
+    # a cell marked n/a while the scan reads 17 is a mismatch, not an absence.
+    for lang in ("dockerfile", "css", "html", "yaml", "python", "go", "makefile", "m4"):
+        assert not synthesizes_all_function_names(lang, LANGUAGE_DEFINITIONS[lang]["rules"])
+
+    # markdown qualifies on rule absence; sqlite must qualify on slicing mode.
+    assert StructuralExtractor("sqlite", LANGUAGE_DEFINITIONS)._slices_by_terminator
+
+
+def test_cobol_paragraph_entry_using_is_inside_the_args_window_2863():
+    """
+    #2863: a COBOL paragraph declares its parameters in an `ENTRY 'NAME'
+    USING <item>` statement on the line AFTER the label -- a paragraph name is
+    terminated by its own period, so the declaration is necessarily a separate
+    statement. `_mode_a_args_window_end` extends only across a language's
+    line-continuation marker and cobol correctly has none (its fixed-format
+    continuation is a column-7 indicator on the CONTINUING line), so the
+    window used to be exactly the label line and the declaration always fell
+    one line outside it. The symptom was a single function record disagreeing
+    with itself: `hit_vector["args"] == 1` (the block's own rule tally, which
+    sees the clause) while `args == 0` (the bounded per-function count, which
+    `avg_func_args` averages).
+
+    `_cobol_args_window_end` now extends the window across leading `ENTRY`
+    statements only. This test pins both halves of that -- what must now be
+    reached, and what must still be out of reach:
+
+    - `PROBE-GLOBALS` declares one operand and must measure 1.
+    - `PROBE-MULTI` declares three (`USING A, B, C`) and must measure 3, which
+      is also what proves #2830's `_count_cobol_using_operands` reaches the
+      per-function path and not just the file-level count.
+    - `PROBE-COMMENTED` has a banner comment between its label and its `ENTRY`.
+      `prism` blanks comment lines in place to preserve line numbering, so that
+      reaches the window scan as an empty line; blank lines must be transparent
+      or the measurement would depend on whether the author commented the
+      paragraph.
+    - `PROBE-CALLER` must stay at 0. `CALL ... USING` is an INVOCATION -- it
+      passes arguments to a subprogram rather than declaring the paragraph's
+      own -- and is by far the dominant shape in real COBOL: over the
+      language-crucible corpus (570 files, 10155 paragraphs) 123 of the 158
+      unattributed `USING`/`RETURNING` clauses are `CALL`, and none of the 158
+      is a parameter declaration. Widening this window to the block would
+      manufacture wrong per-paragraph counts, which is exactly what the bound
+      added by #1973/#2483 exists to prevent.
+    - `PROBE-LATE` must stay at 0: only LEADING `ENTRY` statements extend the
+      window, so an `ENTRY` that appears after an ordinary statement is not
+      swept in.
+    """
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+    from gitgalaxy.core.prism import Prism
+
+    source = (
+        "       PROBE-GLOBALS.\n"
+        "           ENTRY 'PROBE-GLOBALS' USING ARGV-BLOCK.\n"
+        "           DISPLAY REGION-ITEM.\n"
+        "       PROBE-MULTI.\n"
+        "           ENTRY 'PROBE-MULTI' USING WS-A, WS-B, WS-C.\n"
+        "           DISPLAY REGION-ITEM.\n"
+        "       PROBE-COMMENTED.\n"
+        "      * banner comment between the label and its ENTRY\n"
+        "           ENTRY 'PROBE-COMMENTED' USING ARGV-BLOCK.\n"
+        "           DISPLAY REGION-ITEM.\n"
+        "       PROBE-CALLER.\n"
+        "           CALL 'CSUTLDTC' USING WS-A, WS-B, WS-C.\n"
+        "           DISPLAY REGION-ITEM.\n"
+        "       PROBE-LATE.\n"
+        "           DISPLAY REGION-ITEM.\n"
+        "           ENTRY 'PROBE-LATE' USING ARGV-BLOCK.\n"
+    )
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    code = prism.split_streams(source, "cobol")["code_stream"]
+    result = StructuralExtractor("cobol", LANGUAGE_DEFINITIONS).splice(code, "")
+
+    found = {fn["name"]: fn for fn in result.get("functions", [])}
+    for name in ("PROBE-GLOBALS", "PROBE-MULTI", "PROBE-COMMENTED", "PROBE-CALLER", "PROBE-LATE"):
+        assert name in found, f"{name} should be extracted as a paragraph, got {sorted(found)}"
+
+    assert found["PROBE-GLOBALS"]["args"] == 1, (
+        f"a paragraph's own ENTRY ... USING must be inside its args window, got {found['PROBE-GLOBALS']['args']}"
+    )
+    assert found["PROBE-MULTI"]["args"] == 3, (
+        f"#2830's operand counting must reach the per-function path, got {found['PROBE-MULTI']['args']}"
+    )
+    assert found["PROBE-COMMENTED"]["args"] == 1, (
+        "a blanked comment line between the label and its ENTRY must be transparent, "
+        f"got {found['PROBE-COMMENTED']['args']}"
+    )
+    assert found["PROBE-CALLER"]["args"] == 0, (
+        "CALL ... USING is an invocation, not a declaration, and must never be "
+        f"counted as the paragraph's own parameters, got {found['PROBE-CALLER']['args']}"
+    )
+    assert found["PROBE-LATE"]["args"] == 0, (
+        f"only LEADING ENTRY statements extend the window, got {found['PROBE-LATE']['args']}"
+    )
+
+    # The defect's signature: the block's rule tally saw the clause all along.
+    # PROBE-CALLER keeps that disagreement, and it is correct for it to.
+    assert found["PROBE-CALLER"]["hit_vector"].get("args", 0) == 1
+
+
+# ==============================================================================
+# #2908 PHASE 2: is_public / is_documented CONTRACT TESTS
+# ==============================================================================
+# One test per declaration family, run through the real Prism + StructuralExtractor
+# (LANGUAGE_DEFINITIONS/LEXICAL_FAMILY_HEURISTICS) rather than MOCK_LANG_DEFS --
+# is_public/is_documented read each language's real `api`/`doc`/export rules, so a
+# hand-rolled mock rule set would test the harness, not the contract.
+
+
+def test_detector_is_public_is_documented_preceding_block_c():
+    """Family 1: preceding-block (C-like). A `/** ... */` doc comment ending
+    2 lines above a header sets is_documented; a unit with nothing nearby, or
+    only a comment 6 lines above (outside k=5), does not. A non-static
+    column-0 declarator is_public via the api rule (A); `static` is not."""
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    code = (
+        "/** Adds two numbers. */\n"
+        "\n"
+        "int add(int a, int b) {\n"
+        "    return a + b;\n"
+        "}\n"
+        "\n"
+        "static int helper(int x) {\n"
+        "    return x;\n"
+        "}\n"
+        "\n"
+        "int no_comment_nearby(void) {\n"
+        "    return 0;\n"
+        "}\n"
+        "\n"
+        "/** Far doc comment. */\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "int far_from_doc(void) {\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    refraction = prism.split_streams(code, "c")
+    positional = prism.split_positional_comment_stream(code, "c")
+    result = StructuralExtractor("c", LANGUAGE_DEFINITIONS).splice(
+        code_stream=refraction["code_stream"],
+        comment_stream=refraction["comment_stream"],
+        raw_content=code,
+        positional_comment_stream=positional,
+    )
+    found = {fn["name"]: fn for fn in result["functions"]}
+
+    # doc comment ending 2 lines above the header -> documented
+    assert found["add"]["is_documented"] is True
+    # no doc comment anywhere nearby -> not documented
+    assert found["no_comment_nearby"]["is_documented"] is False
+    # doc comment ending 6 lines above (outside k=5) -> not documented
+    assert found["far_from_doc"]["is_documented"] is False
+
+    # non-static column-0 declarator, api-rule-matched -> public
+    assert found["add"]["is_public"] is True
+    # static -> not api-matched, not export-listed -> not public
+    assert found["helper"]["is_public"] is False
+
+
+def test_detector_is_public_is_documented_docstring_position_python():
+    """Family 2: docstring-position (python). A real `\"\"\"...\"\"\"` docstring
+    sets is_documented via the D3 fallback (the positional pass can't see a
+    docstring -- it's a code_stream string literal, not a comment). A `#`
+    comment matching the `doc` rule's `:param` tag, sitting above a decorator
+    stack, sets is_documented via the real positional pass -- decorators
+    between the comment and `def` stay inside the k=5 window."""
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    code = (
+        "def entry():\n"
+        '    """Runs the thing."""\n'
+        "    return 1\n"
+        "\n"
+        "\n"
+        "# :param x: something\n"
+        "@decorator\n"
+        "@another\n"
+        "def decorated(x):\n"
+        "    return x\n"
+    )
+    refraction = prism.split_streams(code, "python")
+    positional = prism.split_positional_comment_stream(code, "python")
+    result = StructuralExtractor("python", LANGUAGE_DEFINITIONS).splice(
+        code_stream=refraction["code_stream"],
+        comment_stream=refraction["comment_stream"],
+        raw_content=code,
+        positional_comment_stream=positional,
+    )
+    found = {fn["name"]: fn for fn in result["functions"]}
+
+    # real below-header docstring -> documented via the D3 fallback
+    assert found["entry"]["is_documented"] is True
+    # `:param` comment above a decorator stack, within k=5 -> documented via
+    # the real positional pass
+    assert found["decorated"]["is_documented"] is True
+
+
+def test_detector_is_public_is_documented_export_list_makefile():
+    """Family 3: export-list. makefile's `.PHONY: foo` is a
+    `_visibility_export_list` rule (#2902's re-plant). A target named in it
+    is public via B; a target absent from it (and outside the api rule's own
+    hardcoded target-name whitelist) is not."""
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    code = ".PHONY: foo\n\nfoo:\n\techo foo\n\nbar:\n\techo bar\n"
+    refraction = prism.split_streams(code, "makefile")
+    positional = prism.split_positional_comment_stream(code, "makefile")
+    result = StructuralExtractor("makefile", LANGUAGE_DEFINITIONS).splice(
+        code_stream=refraction["code_stream"],
+        comment_stream=refraction["comment_stream"],
+        raw_content=code,
+        positional_comment_stream=positional,
+    )
+    found = {fn["name"]: fn for fn in result["functions"]}
+
+    assert found["foo"]["is_public"] is True, "a name in .PHONY's export list must be public"
+    assert found["bar"]["is_public"] is False, "a name absent from the export list must not be public"
+
+
+def test_detector_is_public_is_documented_positional_invocation_cobol():
+    """Family 4: positional-invocation (cobol). A `*> @param` structured
+    comment immediately before a paragraph label sets is_documented via the
+    positional_anchored pass. A paragraph's own `ENTRY "name"` statement --
+    real COBOL syntax for a callable entry point -- sets is_public via A,
+    matched by name through `_name_boundary_pattern` against the hyphenated
+    paragraph name inside its own header window."""
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    code = (
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. TESTPROG.\n"
+        "       PROCEDURE DIVISION.\n"
+        "      *> @param none\n"
+        "       PROBE-GLOBALS.\n"
+        '           ENTRY "PROBE-GLOBALS".\n'
+        "           DISPLAY 'HI'.\n"
+        "           STOP RUN.\n"
+        "\n"
+        "       OTHER-PARA.\n"
+        "           DISPLAY 'BYE'.\n"
+    )
+    refraction = prism.split_streams(code, "cobol")
+    positional = prism.split_positional_comment_stream(code, "cobol")
+    result = StructuralExtractor("cobol", LANGUAGE_DEFINITIONS).splice(
+        code_stream=refraction["code_stream"],
+        comment_stream=refraction["comment_stream"],
+        raw_content=code,
+        positional_comment_stream=positional,
+    )
+    found = {fn["name"]: fn for fn in result["functions"]}
+
+    # `*> @param` comment line immediately before the paragraph label -> documented
+    assert found["PROBE-GLOBALS"]["is_documented"] is True
+    # hyphenated paragraph name matched via _name_boundary_pattern where the
+    # api rule (ENTRY) fires inside the paragraph's own header window
+    assert found["PROBE-GLOBALS"]["is_public"] is True
+    # a paragraph with neither an ENTRY statement nor an export-list mention
+    assert found["OTHER-PARA"]["is_public"] is False
+
+
+# ==============================================================================
+# #2908 PHASE 2 FOLLOW-UP: is_documented FOR THE NESTED-COMMENT / PERL / POD
+# COMMENT FAMILIES
+# ==============================================================================
+# The corpus sweep found split_positional_comment_stream's blank-stream
+# fallback was load-bearing for recursive_block (rust/scala/swift),
+# recursive_block_haskell (haskell), recursive_block_lisp (scheme), and perl's
+# own POD convention -- is_documented could structurally never fire for any of
+# them. These tests lock in the real positional passes that replaced that
+# fallback (_positional_nested_comments, _positional_perl_comments).
+# powershell/embedded_syntax needed no new code -- embedded_syntax was never
+# excluded from the generic REGEX_MATRIX dispatch branch -- so its test below
+# only guards that continuing to work, not a fix.
+
+
+def test_detector_is_documented_recursive_block_rust():
+    """rust (recursive_block): a `///` block directly above `fn` sets
+    is_documented; the same block sitting 6+ lines above (outside k=5) does
+    not."""
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    code = (
+        "/// Adds two numbers.\n"
+        "pub fn add_two(a: i32, b: i32) -> i32 {\n"
+        "    a + b\n"
+        "}\n"
+        "\n"
+        "/// Far comment.\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "pub fn far_func(a: i32) -> i32 {\n"
+        "    a\n"
+        "}\n"
+    )
+    refraction = prism.split_streams(code, "rust")
+    positional = prism.split_positional_comment_stream(code, "rust")
+    result = StructuralExtractor("rust", LANGUAGE_DEFINITIONS).splice(
+        code_stream=refraction["code_stream"],
+        comment_stream=refraction["comment_stream"],
+        raw_content=code,
+        positional_comment_stream=positional,
+    )
+    found = {fn["name"]: fn for fn in result["functions"]}
+
+    assert found["add_two"]["is_documented"] is True
+    assert found["far_func"]["is_documented"] is False
+
+
+def test_detector_is_documented_recursive_block_haskell():
+    """haskell (recursive_block_haskell): a `-- |` line directly above a
+    type signature sets is_documented; the same comment 6+ lines above does
+    not."""
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    code = (
+        "-- | Adds two numbers.\n"
+        "addTwo :: Int -> Int -> Int\n"
+        "addTwo a b = a + b\n"
+        "\n"
+        "-- | Far comment.\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "farFunc :: Int -> Int\n"
+        "farFunc x = x\n"
+    )
+    refraction = prism.split_streams(code, "haskell")
+    positional = prism.split_positional_comment_stream(code, "haskell")
+    result = StructuralExtractor("haskell", LANGUAGE_DEFINITIONS).splice(
+        code_stream=refraction["code_stream"],
+        comment_stream=refraction["comment_stream"],
+        raw_content=code,
+        positional_comment_stream=positional,
+    )
+    found = {fn["name"]: fn for fn in result["functions"]}
+
+    assert found["addTwo"]["is_documented"] is True
+    assert found["farFunc"]["is_documented"] is False
+
+
+def test_detector_is_documented_recursive_block_lisp_scheme():
+    """scheme (recursive_block_lisp): a `;;;` comment (the doc rule's own
+    marker -- a bare `;;` does not match it) immediately above a `define`
+    sets is_documented; the same marker pushed several lines above the
+    define (so its own positional match no longer lands inside the header
+    window) does not.
+
+    Uses two separate single-`define` snippets. The "far" case puts the blank
+    gap BETWEEN the doc comment and the `define` (not before the comment): the
+    #2933 slicer fix now anchors each `define` at its own line, so the comment
+    is "far" only when it is genuinely >k=5 lines above the real form. (Before
+    #2933 this test leaned on the anchor bug -- the define reported start_line
+    1 regardless of position, which is exactly the defect #2933 fixed.)
+    """
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+
+    def documented(code: str) -> bool:
+        refraction = prism.split_streams(code, "scheme")
+        positional = prism.split_positional_comment_stream(code, "scheme")
+        result = StructuralExtractor("scheme", LANGUAGE_DEFINITIONS).splice(
+            code_stream=refraction["code_stream"],
+            comment_stream=refraction["comment_stream"],
+            raw_content=code,
+            positional_comment_stream=positional,
+        )
+        return result["functions"][0]["is_documented"]
+
+    assert documented(";;; probe globals\n(define (probe-globals) 1)\n") is True
+    assert documented(";;; far comment\n\n\n\n\n\n\n(define (probe-globals) 1)\n") is False
+
+
+def test_detector_scheme_start_line_multi_declaration_2933():
+    """scheme (recursive_block_lisp): every `define` reports the start_line/
+    end_line/loc of its OWN form, not an anchor dragged up into the preceding
+    blank/comment lines.
+
+    Regression guard for #2933: scheme's func_start leads with `^[ \\t\\n]*`
+    under re.M, whose newline-inclusive class used to make _slice_by_braces
+    anchor at match.start() -- the top of the whitespace run before `(define`.
+    That reported the first form at line 1 and every later form shifted early
+    by the size of its leading gap (measured before the fix on this exact
+    source: add=1, mul=6, square=11). The Mode-B anchor now advances to the
+    outer paren, so each form lands on its real line. Function COUNT is
+    unchanged -- only the line numbers move.
+    """
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    code = (
+        ";; file header\n"  # 1
+        "\n"  # 2
+        ";;; adder\n"  # 3
+        "(define (add a b)\n"  # 4  <- add starts here
+        "  (+ a b))\n"  # 5  <- add ends here
+        "\n"  # 6
+        "\n"  # 7
+        ";;; multiplier\n"  # 8
+        "(define (mul a b)\n"  # 9  <- mul starts here
+        "  (* a b))\n"  # 10 <- mul ends here
+        "\n"  # 11
+        "(define (square x)\n"  # 12 <- square starts here
+        "  (mul x x))\n"  # 13 <- square ends here
+    )
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    refraction = prism.split_streams(code, "scheme")
+    positional = prism.split_positional_comment_stream(code, "scheme")
+    result = StructuralExtractor("scheme", LANGUAGE_DEFINITIONS).splice(
+        code_stream=refraction["code_stream"],
+        comment_stream=refraction["comment_stream"],
+        raw_content=code,
+        positional_comment_stream=positional,
+    )
+    found = {fn["name"]: fn for fn in result["functions"]}
+
+    # All three forms are still extracted (count unchanged by the fix).
+    assert set(found) == {"add", "mul", "square"}
+
+    expected = {
+        "add": (4, 5),
+        "mul": (9, 10),
+        "square": (12, 13),
+    }
+    for name, (start, end) in expected.items():
+        assert found[name]["start_line"] == start, (name, found[name]["start_line"])
+        assert found[name]["end_line"] == end, (name, found[name]["end_line"])
+        assert found[name]["loc"] == end - start + 1
+
+
+def test_detector_scheme_start_line_char_literal_balance_2933():
+    """scheme (recursive_block_lisp): a `#\\(` / `#\\)` char literal and a `)`
+    inside a string in the body do not derail the #2933 anchor or the form's
+    balanced end -- the outer-paren anchor lands on the real `(define`, and
+    _find_balanced_end still bounds the whole form. Covers the one residual
+    Mode-B edge the anchor fix relies on (leading region is whitespace, so the
+    first `(` found is always the form's own opener, never a body char-literal
+    paren)."""
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    code = (
+        ";; header comment\n"  # 1
+        "\n"  # 2
+        "(define (paren-char)\n"  # 3  <- starts here
+        "  (let ((open #\\()\n"  # 4  #\( char literal
+        "        (close #\\)))\n"  # 5  #\) char literal
+        '    (string-append "a)b" (string open close))))\n'  # 6  ) inside a string; ends here
+    )
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    refraction = prism.split_streams(code, "scheme")
+    positional = prism.split_positional_comment_stream(code, "scheme")
+    result = StructuralExtractor("scheme", LANGUAGE_DEFINITIONS).splice(
+        code_stream=refraction["code_stream"],
+        comment_stream=refraction["comment_stream"],
+        raw_content=code,
+        positional_comment_stream=positional,
+    )
+    found = {fn["name"]: fn for fn in result["functions"]}
+
+    assert "paren-char" in found
+    fn = found["paren-char"]
+    assert fn["start_line"] == 3, fn["start_line"]
+    assert fn["end_line"] == 6, fn["end_line"]
+    assert fn["loc"] == 4
+
+
+def test_detector_is_documented_perl_pod():
+    """perl: a POD block (`=head1 ... =cut`) ending <=5 lines above a `sub`
+    sets is_documented -- POD was never stripped into comment_stream at all
+    (perl.py's own "Known remaining gap, not fixed here" note), so this is
+    exercised entirely through the new positional pass. The same block
+    pushed further above the `sub` does not."""
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    code = (
+        "=head1 NAME\n"
+        "\n"
+        "add - adds two numbers\n"
+        "\n"
+        "=cut\n"
+        "\n"
+        "sub add {\n"
+        "    return 1;\n"
+        "}\n"
+        "\n"
+        "=head1 NAME\n"
+        "\n"
+        "far sub\n"
+        "\n"
+        "=cut\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "sub far_sub {\n"
+        "    return 1;\n"
+        "}\n"
+    )
+    refraction = prism.split_streams(code, "perl")
+    positional = prism.split_positional_comment_stream(code, "perl")
+    result = StructuralExtractor("perl", LANGUAGE_DEFINITIONS).splice(
+        code_stream=refraction["code_stream"],
+        comment_stream=refraction["comment_stream"],
+        raw_content=code,
+        positional_comment_stream=positional,
+    )
+    found = {fn["name"]: fn for fn in result["functions"]}
+
+    assert found["add"]["is_documented"] is True
+    assert found["far_sub"]["is_documented"] is False
+
+
+def test_detector_is_documented_powershell_embedded_syntax():
+    """powershell (embedded_syntax): a `<# .SYNOPSIS ... #>` help block
+    directly above a function sets is_documented; the same block 6+ lines
+    above does not. No new dispatch branch was needed for this family --
+    `embedded_syntax` was never excluded from the generic REGEX_MATRIX
+    positional path -- this only guards that continuing to work."""
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    code = (
+        "<#\n"
+        ".SYNOPSIS\n"
+        "Adds two numbers.\n"
+        "#>\n"
+        "function Add-Two {\n"
+        "    param($a, $b)\n"
+        "    return $a + $b\n"
+        "}\n"
+        "\n"
+        "<#\n"
+        ".SYNOPSIS\n"
+        "Far function.\n"
+        "#>\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "function Far-Func {\n"
+        "    return 1\n"
+        "}\n"
+    )
+    refraction = prism.split_streams(code, "powershell")
+    positional = prism.split_positional_comment_stream(code, "powershell")
+    result = StructuralExtractor("powershell", LANGUAGE_DEFINITIONS).splice(
+        code_stream=refraction["code_stream"],
+        comment_stream=refraction["comment_stream"],
+        raw_content=code,
+        positional_comment_stream=positional,
+    )
+    found = {fn["name"]: fn for fn in result["functions"]}
+
+    assert found["Add-Two"]["is_documented"] is True
+    assert found["Far-Func"]["is_documented"] is False
+
+
+def test_detector_is_documented_powershell_undelimited_doc_marker_in_code():
+    """powershell: the real keyword-rosetta corpus shape
+    (data/powershell/main.ps1) is NOT a `<# ... #>` block at all -- its
+    `.SYNOPSIS` plant line carries no `#`/`<#`/`#>` delimiter whatsoever, so
+    it sits in `code_stream`, never `comment_stream`. Confirmed against the
+    real corpus file this test mirrors: `equations["doc"]` was already 1
+    for that file before #2908 (`coding_analysis`'s generic per-rule loop
+    runs the `doc` pattern against every segment of `code_stream` too, with
+    no comment-vs-code distinction -- `comment_analysis` is not its only
+    source), so a positional pass that only ever scanned the comment surface
+    structurally could not agree with the file-level count it is the
+    per-unit form of. `splice()` now also scans `code_stream` (itself
+    already line-aligned with the original file, the same way
+    `positional_comment_stream` is) for `doc`-rule matches. A first version
+    of this test used a `<# .SYNOPSIS ... #>` block, which passed while the
+    real corpus file failed -- see test_detector_is_documented_powershell_
+    embedded_syntax above for that (still valid, still real) block-comment
+    shape; this test is the one that actually tracks the corpus."""
+    from gitgalaxy.core.prism import Prism
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+
+    def documented(code: str) -> bool:
+        refraction = prism.split_streams(code, "powershell")
+        positional = prism.split_positional_comment_stream(code, "powershell")
+        result = StructuralExtractor("powershell", LANGUAGE_DEFINITIONS).splice(
+            code_stream=refraction["code_stream"],
+            comment_stream=refraction["comment_stream"],
+            raw_content=code,
+            positional_comment_stream=positional,
+        )
+        return {fn["name"]: fn for fn in result["functions"]}["probe_dispatch"]["is_documented"]
+
+    # The real corpus shape, verbatim: a bare, undelimited `.SYNOPSIS` line
+    # sandwiched between two real `#` comments, 4 lines above the function.
+    near = (
+        "# keyword rosetta control shell: powershell / main\n"
+        "# Author: keyword-rosetta generator\n"
+        ".SYNOPSIS\n"
+        "# decoy: this suite never invokes iex words outside prose\n"
+        ". ./a.ps1\n"
+        "\n"
+        "function probe_dispatch {\n"
+        "    param($argv)\n"
+        "    probe_branch\n"
+        "}\n"
+    )
+    assert documented(near) is True
+
+    # Same undelimited marker, pushed 6+ lines above (outside k=5).
+    far = (
+        ".SYNOPSIS\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "function probe_dispatch {\n"
+        "    param($argv)\n"
+        "}\n"
+    )
+    assert documented(far) is False

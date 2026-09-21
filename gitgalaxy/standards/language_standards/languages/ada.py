@@ -52,7 +52,7 @@ DEFINITION: dict[str, Any] = {
         # branch: Ada's short-circuit forms are the two-word "and then"/
         # "or else" (no && / || symbols exist in Ada).
         "branch": re.compile(
-            r"\b(?:if|elsif|else|case|when|for|while|loop|exit)\b|\band[ \t]+then\b|\bor[ \t]+else\b",
+            r"\b(?:(?<!end[ \t])(?:if|case|loop)|elsif|else|when|for|while|exit)\b|\band[ \t]+then\b|\bor[ \t]+else\b",
             re.I,
         ),
         # args: parameter profile following a procedure/function name.
@@ -152,13 +152,29 @@ DEFINITION: dict[str, Any] = {
         # "package X is new ..." (generic package instantiation, not a
         # spec declaration -- both use negative lookaheads, not an
         # optional group, per Rule 15).
+        # BUG FIX #2730 (api contract): a package spec is a separate `.ads`
+        # compilation unit, so a corpus of `.adb` bodies measured 0 even when
+        # every subprogram in it is a library-level unit. Added the
+        # library-level subprogram declaration: a `procedure`/`function` at
+        # COLUMN 0 is a compilation unit of its own, visible to any unit that
+        # `with`s it, while every nested (package-body-local, therefore
+        # private) subprogram is indented under its enclosing declarative
+        # part. Column-0 anchoring is the same shape go's rule already uses;
+        # `^[ \t]*` here would count the private ones too. Needs re.M
+        # (Rule 13).
         "api": re.compile(
-            r"\bpackage[ \t]+(?!body\b)(?:private[ \t]+)?([A-Za-z_][A-Za-z0-9_.]*)[ \t\n]+is\b(?![ \t\n]*new\b)",
-            re.I,
+            r"\bpackage[ \t]+(?!body\b)(?:private[ \t]+)?([A-Za-z_][A-Za-z0-9_.]*)[ \t\n]+is\b(?![ \t\n]*new\b)|"
+            r"^(?:procedure|function)[ \t]+[A-Za-z_]",
+            re.M | re.I,
         ),
         # state_mutation: Ada's assignment operator `:=` is lexically
         # distinct from `=` (equality) -- no ambiguity to guard against.
-        "state_mutation": re.compile(r":="),
+        "state_mutation": re.compile(
+            # #2765 contract: `X := v` at statement start writes; `X : T := v` declares
+            # (the `:` before the type breaks the match), as does `X : constant T := v`.
+            r"^[ \t]*[A-Za-z_][\w.]*(?:[ \t]*\([^()\n]{0,80}\))?[ \t]*:=",
+            re.M,
+        ),
         # dead_code: commented-out structural code (line_exclusive_dash
         # has exactly one comment style, so no completeness gap per
         # Rule 12).
@@ -256,7 +272,11 @@ DEFINITION: dict[str, Any] = {
         ),
         # ownership: header comment convention, same shape as the JCL/
         # COBOL entries.
-        "ownership": re.compile(r"^[ \t]*--[ \t]*(?:Author|Created by|Maintainer)[ \t]*:[ \t]*(.*)$", re.I | re.M),
+        # #2882 contract: C1 keyed line on `--`; @author joins
+        "ownership": re.compile(
+            r"^[ \t]*(?:--+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         "planned_debt": GLOBAL_PLANNED_DEBT,
         "fragile_debt": GLOBAL_FRAGILE_DEBT,
@@ -346,6 +366,10 @@ DEFINITION: dict[str, Any] = {
         # falls back to a comment-marker convention.
         "test_skip": re.compile(r"--[ \t]*(?:SKIP|SKIPPED|DISABLED)\b", re.I),
         # --- HYBRID DOMAIN SENSORS ---
+        # auth_middleware (#3004): contract-level absence. Safety-critical /
+        # embedded domain; no standard auth framework or privilege vocabulary --
+        # any auth logic is bespoke identifiers this contract excludes.
+        "auth_middleware": None,
         # serialization_parsing: GNATCOLL.JSON and XML/Ada (DOM/SAX).
         "serialization_parsing": re.compile(r"\bGNATCOLL\.JSON\b|\bDOM\.Core\b|\bInput_Sources\b", re.I),
         # regex_execution: GNAT.Regpat / GNAT.Regexp, GNAT's native
@@ -361,5 +385,10 @@ DEFINITION: dict[str, Any] = {
             r"|\bpragma[ \t]+Shared_Passive\b|\bPolyORB\b",
             re.I,
         ),
+        # system_config_mutation (#3084): contract-level absence. safety-
+        # critical/embedded domain; programs do not reconfigure host
+        # infrastructure -- any tunable write is bespoke I/O this contract
+        # excludes.
+        "system_config_mutation": None,
     },
 }

@@ -60,8 +60,9 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from gitgalaxy.metrics.signal_processor import SignalProcessor
+from gitgalaxy.standards import analysis_lens
 
-TIER_PARAM_NAMES = {"fc", "irc", "ot"}
+TIER_PARAM_NAMES = {"fid", "irc", "ot"}
 # Small LOC values (10, 20) are deliberately included: #1055's systems_buffer bug was a
 # flat constant that dominated a small-file density denominator. Any equation with a
 # flat-additive tier constant (irc) divided by LOC is most exposed to that exact
@@ -90,6 +91,19 @@ class EquationCase:
     notes: str = ""
 
 
+def _strictness_profile(tier: str) -> dict[str, Any]:
+    """#2718: the three tiers are gone. The sweep keeps its three points as strictness
+    profiles of 0 / 2 / 4 gaps at full fidelity -- the shape
+    analysis_lens.strictness_constants() produces -- so the direction check still reads
+    'more gaps never scores lower for identical evidence'."""
+    gaps = {"tier1": 0, "tier2": 2, "tier3": 4}[tier]
+    return {
+        "irc": gaps * analysis_lens.STRICTNESS_IRC_PER_GAP,
+        "ot": 1.0 + gaps * analysis_lens.STRICTNESS_OT_PER_GAP,
+        "fid": {"safety": 1.0, "test": 1.0, "doc": 1.0, "ownership": 1.0},
+    }
+
+
 def _mp1() -> float:
     """mp (locational multiplier) is path-derived, not tier-derived (_get_locational_multipliers
     keys off rel_path only) -- held constant at 1.0 across tiers so it can't contaminate the
@@ -111,7 +125,8 @@ EQUATION_CASES: list[EquationCase] = [
         name="cog_load",
         method_name="_calc_cog_load",
         notes="irc adds to density (risk axis); fc gates doc-coverage cooling (defense axis). "
-        "LOC<15 takes a flat-5.0 small-file floor that ignores fc/irc entirely by design.",
+        "Below EVIDENCE_MASS_FLOOR (#2655) the LOC sweep points collapse onto one count-based "
+        "score per tier -- see tests/tools/audit_length_invariance.py for the length axis.",
         scenarios=[
             Scenario(
                 "risk",
@@ -124,8 +139,7 @@ EQUATION_CASES: list[EquationCase] = [
                         "reflection_metaprogramming": 0,
                         "doc": 0,
                     },
-                    irc=tv["irc"],
-                    fc=tv["fc"],
+                    fid=tv["fid"],
                     mp=_mp1(),
                     func_gini=0.0,
                 ),
@@ -143,8 +157,7 @@ EQUATION_CASES: list[EquationCase] = [
                         "reflection_metaprogramming": 0,
                         "doc": hits,
                     },
-                    irc=tv["irc"],
-                    fc=tv["fc"],
+                    fid=tv["fid"],
                     mp=_mp1(),
                     func_gini=0.0,
                 ),
@@ -160,46 +173,9 @@ EQUATION_CASES: list[EquationCase] = [
                 "risk",
                 lambda loc, hits, tv: dict(
                     loc=loc,
-                    raw_signals={"fragile_debt": hits, "planned_debt": 0, "orphaned_logic": 0, "duplicate_logic": 0},
+                    raw_signals={"fragile_debt": hits, "planned_debt": 0, "unreferenced_by_name": 0, "duplicate_logic": 0},
                     irc=tv["irc"],
                     mp=_mp1(),
-                ),
-            ),
-        ],
-    ),
-    EquationCase(
-        name="documentation",
-        method_name="_calc_documentation",
-        notes="irc adds directly to risk_hits (risk axis); fc multiplies defense_hits (defense axis).",
-        scenarios=[
-            Scenario(
-                "risk",
-                lambda loc, hits, tv: dict(
-                    loc=loc,
-                    doc_loc=0,
-                    raw_signals={"api": hits, "doc": 0, "ownership": 0},
-                    fc=tv["fc"],
-                    irc=tv["irc"],
-                    mp=_mp1(),
-                    functions=None,
-                    doc_umbrella=0.0,
-                    popularity=0,
-                    silo_exposure=0.0,
-                ),
-            ),
-            Scenario(
-                "defense",
-                lambda loc, hits, tv: dict(
-                    loc=loc,
-                    doc_loc=0,
-                    raw_signals={"api": 0, "doc": hits, "ownership": 0},
-                    fc=tv["fc"],
-                    irc=tv["irc"],
-                    mp=_mp1(),
-                    functions=None,
-                    doc_umbrella=0.0,
-                    popularity=0,
-                    silo_exposure=0.0,
                 ),
             ),
         ],
@@ -217,7 +193,7 @@ EQUATION_CASES: list[EquationCase] = [
                     is_protected=False,
                     raw_signals={"high_risk_execution": 0},
                     ot=tv["ot"],
-                    fc=tv["fc"],
+                    fid=tv["fid"],
                     mp=_mp1(),
                     functions=[{"name": "f", "impact": float(hits) * 10.0, "hit_vector": {}, "docstring": None}],
                     test_coverage_map={},
@@ -235,7 +211,7 @@ EQUATION_CASES: list[EquationCase] = [
                     is_protected=False,
                     raw_signals={"high_risk_execution": 0},
                     ot=tv["ot"],
-                    fc=tv["fc"],
+                    fid=tv["fid"],
                     mp=_mp1(),
                     functions=[
                         {"name": "f", "impact": 50.0, "hit_vector": {"safety": hits}, "docstring": "documented"}
@@ -247,49 +223,15 @@ EQUATION_CASES: list[EquationCase] = [
             ),
         ],
     ),
-    EquationCase(
-        name="concurrency",
-        method_name="_calc_concurrency",
-        notes="irc adds to density (risk axis only) -- sync_locks mitigation is flat-subtracted, "
-        "not fc-weighted, so no defense-credit direction to check.",
-        scenarios=[
-            Scenario(
-                "risk",
-                lambda loc, hits, tv: dict(
-                    loc=loc,
-                    raw_signals={"concurrency": hits, "sync_locks": 0},
-                    irc=tv["irc"],
-                    mp=_mp1(),
-                ),
-            ),
-        ],
-    ),
-    EquationCase(
-        name="state_flux",
-        method_name="_calc_state_flux",
-        notes="irc adds to density (risk axis only) -- immutability_locks mitigation is "
-        "flat-subtracted, not fc-weighted, so no defense-credit direction to check.",
-        scenarios=[
-            Scenario(
-                "risk",
-                lambda loc, hits, tv: dict(
-                    loc=loc,
-                    raw_signals={"state_mutation": hits, "immutability_locks": 0},
-                    irc=tv["irc"],
-                    mp=_mp1(),
-                ),
-            ),
-        ],
-    ),
-    # --- Remaining in-scope equations take no fc/irc/ot at all (verified by reading
-    # signal_processor.py directly, not assumed from the epic's approximate scope
-    # table) -- auto-classified as N/A below rather than hand-listed here.
 ]
 
 # Equations listed in epic #1056 whose *only* tier-shaped parameter is `mp`, which the
 # audit above already establishes is NOT tier-derived (path-only). Included so the N/A
 # classification is reported explicitly per-equation instead of just "everything else".
 NOT_TIER_PARAMETERIZED = [
+    "_calc_state_flux",  # #2719: language term removed
+    "_calc_concurrency",  # #2719: language term removed
+    "_calc_documentation",  # #2908 Phase 3: per-unit coverage ratio; fid/irc/mp all left the equation
     "_calc_graveyard",
     "_calc_api_exposure",
     "_calc_spec_alignment",
@@ -305,7 +247,7 @@ def audit_scenario(
         for hits in HIT_SWEEP:
             scores = {}
             for tier in ("tier1", "tier2", "tier3"):
-                tier_vars = processor.TIER_VARS[tier]
+                tier_vars = _strictness_profile(tier)
                 kwargs = scenario.build_kwargs(loc, hits, tier_vars)
                 result = getattr(processor, case.method_name)(**kwargs)
                 score = result[0] if isinstance(result, tuple) else result

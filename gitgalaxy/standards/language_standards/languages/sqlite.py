@@ -42,13 +42,22 @@ DEFINITION: dict[str, Any] = {
     # zero comment stripping (standard_block never used the `--` token).
     # "multi_style_dash" is the real family for this shape.
     # Rationale: Uses '--' for line-level and '/*' '*/' for block-level Commented / Non-Executable Text.
+    # #2866 contract (corollary 4): the units `func_start` extracts are
+    # STATEMENTS (Mode E's `CREATE_Statement`/`Declarative_Block` buckets,
+    # #2792), and SQL has no syntax that reaches a statement by naming it -- a
+    # script's statements execute top to bottom on every run. The names a SQL
+    # file does declare and reference (tables, views) belong to container
+    # constructs, not to this census's function population; an index's name is
+    # never written in the queries that use it at all. TOP-LEVEL property, not
+    # a rule (the #2806 language_lens pre-compiler trap).
+    "invocation_model": "positional",
     "lexical_family": "multi_style_dash",
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
         # Decisions and logical filters. Includes case logic and modern IIF().
         "branch": re.compile(
-            r"\b(CASE|WHEN|THEN|ELSE|END|IFNULL|NULLIF|COALESCE|IIF|FILTER|WHERE|HAVING)\b",
+            r"\b(CASE|WHEN|ELSE|IFNULL|NULLIF|COALESCE|IIF|FILTER|WHERE|HAVING)\b",
             re.I,
         ),
         # 2. args (Parameters / Coupling)
@@ -84,7 +93,7 @@ DEFINITION: dict[str, Any] = {
         # 3. linear (Sequential Boundaries)
         # Structural boundaries defining query execution flow.
         "structural_boundaries": re.compile(
-            r"\b(SELECT|FROM|JOIN|(?:INNER|LEFT|RIGHT|FULL|CROSS|NATURAL)(?:\s+OUTER)?\s+JOIN|GROUP\s+BY|ORDER\s+BY|LIMIT|OFFSET|UNION|INTERSECT|EXCEPT|RETURNING|AS|INTO|WINDOW|STRICT|WITHOUT\s+ROWID|PARTITION\s+BY|PRECEDING|FOLLOWING|UNBOUNDED|CURRENT\s+ROW)\b",
+            r"\b(SELECT|FROM|JOIN|(?:INNER|LEFT|RIGHT|FULL|CROSS|NATURAL)(?:\s+OUTER)?\s+JOIN|GROUP\s+BY|ORDER\s+BY|LIMIT|OFFSET|UNION|INTERSECT|EXCEPT|RETURNING|AS|INTO|WINDOW|STRICT|WITHOUT\s+ROWID|PARTITION\s+BY|PRECEDING|FOLLOWING|UNBOUNDED|CURRENT\s+ROW|THEN|END)\b",
             re.I,
         ),
         # 4. func_start (Executable Logic Anchors)
@@ -167,13 +176,19 @@ DEFINITION: dict[str, Any] = {
         ),
         # 8. danger (High-Risk Execution / System Calls)
         # Destructive schema actions and system bypasses.
+        # #2878 contract C5: a compatibility pragma is not a site; C1c load_extension( loads code;
+        # DROP TABLE / DELETE FROM are cleanup's (C4).
         "high_risk_execution": re.compile(
-            r"\b(PRAGMA\s+legacy_alter_table|DROP\s+DATABASE)\b|^[ \t]*\.(?:shell|system|exit|quit)\b",
+            r"\bDROP\s+DATABASE\b|^[ \t]*\.(?:shell|system|exit|quit)\b|\bload_extension\s*\(",
             re.I | re.M,
         ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
-            r"\b(SELECT|INSERT|UPDATE|DELETE|REPLACE|ATTACH\s+DATABASE|DETACH\s+DATABASE|readfile|writefile)\b|^[ \t]*\.(?:import|output|dump|read)\b",
+            # #2841 contract C3: a .sql script executes inside the engine, so DML
+            # is computation, not a boundary crossing; io is what leaves the engine
+            # (host files, spooled output). C2: .read/.import/ATTACH are import's
+            # hits, DETACH is cleanup's.
+            r"\b(?:readfile|writefile)\s*\(|^[ \t]*\.(?:output|once|dump|backup)\b",
             re.I | re.M,
         ),
         # 10. api (Public Surface Area)
@@ -185,8 +200,13 @@ DEFINITION: dict[str, Any] = {
         # 11. flux (State Mutation)
         # Mutation of state. Includes UPSERT.
         "state_mutation": re.compile(
-            r"\b(UPDATE|SET|ALTER\s+TABLE|ADD\s+COLUMN|DROP\s+COLUMN|RENAME\s+TO|UPSERT|ON\s+CONFLICT\s+DO\s+UPDATE|ON\s+CONFLICT\s+DO\s+NOTHING|REPLACE\s+INTO|EXCLUDED\.[a-zA-Z_]\w*|jsonb?_(?:insert|replace|set|remove|patch))\b",
-            re.I,
+            # #2765 contract: one statement is one hit (count contract corollary 4), so a
+            # write is anchored to the statement that performs it: `UPDATE t SET ...` and
+            # `ALTER TABLE t RENAME TO ...` count once each, not once per clause. A
+            # constraint's `ON UPDATE CASCADE` is a declaration, not a write.
+            r"^[ \t]*(?:UPDATE(?:[ \t]+OR[ \t]+\w+)?[ \t]+[\w\"\[`]|ALTER[ \t]+TABLE\b|REPLACE[ \t]+INTO\b|INSERT[ \t]+OR[ \t]+REPLACE\b)"
+            r"|\bON[ \t]+CONFLICT[ \t]+DO[ \t]+UPDATE\b|\bjsonb?_(?:insert|replace|set|remove|patch)\s*\(",
+            re.I | re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(
@@ -283,7 +303,11 @@ DEFINITION: dict[str, Any] = {
             re.I | re.M,
         ),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"--\s*(?:Author|Created by|Maintainer|Copyright):\s+(.*)", re.I),
+        # #2882 contract: C2 `Copyright:` out; `/** @author */` blocks join
+        "ownership": re.compile(
+            r"^[ \t]*(?:--+|/\*+|\*+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -354,6 +378,11 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"^[ \t]*\.testcase\s+skip\b|\bPRAGMA\s+ignore_check_constraints\b", re.I | re.M),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (SQLite / SQL Specifics) ---
+        # auth_middleware (#3004): contract-level absence. SQLite has no users, no
+        # privileges and no GRANT/REVOKE grammar -- access control is the host
+        # process's file permissions, outside the language. (db2_sql owns the DCL
+        # form for SQL dialects that have one.)
+        "auth_middleware": None,
         "serialization_parsing": re.compile(
             r"(?i)\b(json_extract|json_tree|json_each|json_object|json_array|json_type)\b"
         ),
@@ -362,5 +391,10 @@ DEFINITION: dict[str, Any] = {
             r"(?i)\b(strftime|datetime|julianday|unixepoch|current_timestamp|current_date|current_time)\b"
         ),
         "ipc_rpc_bridges": re.compile(r"(?i)\b(ATTACH\s+DATABASE|DETACH\s+DATABASE|PRAGMA)\b"),
+        # system_config_mutation (#3084): contract-level absence. PRAGMA durably
+        # tunes the database file (2 crucible files) -- whether one database
+        # file is 'shared infrastructure' is #3084's open boundary question;
+        # None until adjudicated.
+        "system_config_mutation": None,
     },
 }

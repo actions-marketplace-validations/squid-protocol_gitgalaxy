@@ -38,10 +38,17 @@ DEFINITION: dict[str, Any] = {
     # (standard_block never used the `--`/`{-`/`-}` tokens).
     # Rationale: Uses '--' for lines and '{- -}' for blocks, which strictly supports recursive nesting.
     "lexical_family": "recursive_block_haskell",
+    # #2540: Haskell module names are necessarily capitalized (`import A`),
+    # while on-disk file names may not match that casing exactly -- exact-case
+    # lookup makes `import A` miss `a.hs` and the whole DAG for the repo goes
+    # invisible. The dependency DAG's import-token -> file lookup
+    # (network_risk_sensor.py) case-folds for this language; exact-case
+    # matches still win first.
+    "case_insensitive_imports": True,
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # branch: decisions that split flow. Includes guards (|) and modern \cases.
-        "branch": re.compile(r"\b(if|then|else|case|of|MultiWayIf)\b|\\cases?|^[ \t]*\|", re.M),
+        "branch": re.compile(r"\b(if|else|case|MultiWayIf)\b|\\cases?|^[ \t]*\|", re.M),
         # args: Parameters / Coupling. Captures type signatures, lambda bindings, and explicit @type apps.
         # #1209: the type-signature and lambda-parameter spans wrapped in
         # their own capture groups (was only reachable via group(0), the
@@ -137,7 +144,7 @@ DEFINITION: dict[str, Any] = {
         "_args_pattern_list_groups": {3},
         # linear: Sequential I/O & Network Boundaries. Structural boundaries defining scope and data definitions.
         "structural_boundaries": re.compile(
-            r"\b(module|data|type|newtype|class|instance|let|in|where|do|mdo|deriving|family|pattern)\b|%1\s*->|⊸"
+            r"\b(module|data|type|newtype|class|instance|let|in|where|do|mdo|deriving|family|pattern|then|of)\b|%1\s*->|⊸"
         ),
         # 4. func_start: Executable Logic Anchors. Anchors executable logic (Type Signatures).
         # EXCLUDES data/type/class declarations to fix False Positives.
@@ -221,17 +228,16 @@ DEFINITION: dict[str, Any] = {
         ),
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
         # safety: Defensive Programming. Functional safety (Maybe/Either) and exception brackets.
-        "safety": re.compile(
-            r"\b(Maybe|Either|Just|Nothing|Right|Left|try|catch|bracket|finally|onException|SafeT|mask|pure|return)\b"
-        ),
+        # C1: type/data constructors invisible; the handled-absence ARM (Nothing ->) is the form. C2: pure/return are plumbing. C3: bracket/finally/onException are cleanup's (verified owner). Resolves haskell-finally-dual-cleanup-safety.
+        "safety": re.compile(r"\b(try|catch|mask|fromMaybe)\b|Nothing\s*->"),
         # safety_neg: Safety Bypasses. Bypassing purity (unsafePerformIO) and partial functions.
         "safety_bypasses": re.compile(
             r"\b(unsafePerformIO|unsafeCoerce|error|undefined|fromJust|head|tail|init|last|throw|unsafeFixIO)\b"
         ),
         # danger: High-Risk Execution. Forceful aborts and Debug-trace leaks in production.
-        "high_risk_execution": re.compile(
-            r"\b(die|exitWith|exitFailure|Debug\.Trace|trace|traceShow|traceIO|traceM)\b"
-        ),
+        # #2878 contract C5: the trace family is debug output, not danger; `error "..."` is the
+        # abort form (C1a).
+        "high_risk_execution": re.compile(r"\b(?:die|exitWith|exitFailure|exitSuccess)\b|\berror\s+\""),
         # io: I/O & Network Boundaries. IO Monad and hardware interactions.
         "io": re.compile(
             r"\b(IO|readFile|writeFile|appendFile|hGetContents|hPutStr|openFile|withFile|getLine|getChar|Socket|Connection|runDB)\b"
@@ -241,9 +247,46 @@ DEFINITION: dict[str, Any] = {
             r"^[ \t]*module\s+[A-Z][a-zA-Z0-9_.]*(?:\s*\([^)]*\))?\s*where|\bforeign\s+export\b",
             re.M,
         ),
+        # #2823: the plural form of #2774's `_visibility_export`. Naming a
+        # function in an export statement is a visibility DECLARATION, not a
+        # use, and `unreferenced_by_name`'s corollary 2 says a declaration must
+        # not clear the flag -- but a Haskell module header names every exported
+        # function at once inside one pair of parens, which no single-capture
+        # rule can express. Group 1 is the whole list; detector.py records the
+        # start offset of each name token in it. Measured on keyword-rosetta:
+        # 12 of haskell's 13 probe functions read as REFERENCED with nothing
+        # calling any of them (0.25 unreferenced per file against a 2.50 corpus
+        # median), every one of them cleared by its own export list.
+        #
+        # The type signature above each equation is the language's other
+        # declaration-shaped repetition of the name and needs no rule: the
+        # slicer's span starts AT the signature, so it already reads as inside
+        # the function's own definition rather than outside it.
+        #
+        # The `where` anchor is what bounds the list: `[^)]*` (which the `api`
+        # rule above can afford, since it only needs to know a header is there)
+        # stops at the first inner paren, and real export lists are full of
+        # them -- `Opt(..)`, `HTMLMathMethod (..)`. The length cap is a
+        # backtracking bound, ~3x the longest list in the crucible (Parsing.hs,
+        # 7183 chars). A header with no export list (`module Main where`) has no
+        # `(` to match and is skipped.
+        "_visibility_export_list": re.compile(
+            r"^module[ \t]+[A-Z][\w.']*\s*\(([\s\S]{0,20000}?)\)\s*where",
+            re.M,
+        ),
         # flux: State Mutation. State mutation (IORef/MVar) and monadic binds (<-).
         "state_mutation": re.compile(
-            r"\b(IORef|STRef|TVar|MVar|TMVar|modifyIORef\'?|writeIORef|putMVar|modify|put|StateT)\b|<-"
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `IORef`/`TVar`/`MVar`/`StateT` in a type name mutable state (corollary 2) and
+            # `<-` binds a name (corollary 3); the write is the operation on the cell.
+            r"\b(?:modifyIORef'?|writeIORef|atomicModifyIORef'?|atomicWriteIORef|modifySTRef'?|writeSTRef"
+            r"|writeTVar|modifyTVar'?|putMVar|modifyMVar_?|swapMVar|writeArray|writeSTArray|unsafeWrite|modify'?|put)\b"
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(
@@ -251,7 +294,8 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # doc: Structured Documentation. Haddock documentation markers.
-        "doc": re.compile(r"--\s*\||--\s*\^|\{-\||--\s*@(?:param|return|author)"),
+        # #2882 contract C4: doc counts the block, not the author tag -- `-- @author` is ownership's alone.
+        "doc": re.compile(r"--\s*\||--\s*\^|\{-\||--\s*@(?:param|return)"),
         # test: Testing & Assertions. Verification framework keywords (QuickCheck/Hspec).
         "test": re.compile(
             r'\b(?:hspec|QuickCheck|prop_[a-zA-Z0-9_\']+|assertEqual|shouldBe|testGroup|testCase)\b|\b(?:describe|it|property)\s+"'
@@ -273,7 +317,9 @@ DEFINITION: dict[str, Any] = {
         # both `=` and intervening lines (e.g. a `{-# NOINLINE #-}`
         # pragma between the signature and the binding).
         "globals": re.compile(
-            r"^[ \t]*[a-z_][a-zA-Z0-9_\']*\s*::\s*(?:IORef|TVar|MVar)[\s\S]{0,200}?unsafePerformIO",
+            r"^[ \t]*[a-z_][a-zA-Z0-9_\']*\s*::\s*(?:IORef|TVar|MVar)[\s\S]{0,200}?unsafePerformIO"
+            # #2858 contract corollary 2: the ambient reads (System.Environment).
+            r"|\b(?:getEnv|lookupEnv|getEnvironment|setEnv|getArgs|getProgName)\b",
             re.M,
         ),
         # decorators: Decorators / Annotations. GHC pragmas (INLINE, LANGUAGE).
@@ -298,7 +344,11 @@ DEFINITION: dict[str, Any] = {
             r"^[ \t]*import\b[\s\S]{0,100}?(?:qualified\b[\s\S]{0,100}?)?([A-Z][a-zA-Z0-9_.]*)", re.M
         ),
         # ownership: Authorship indicators in comments.
-        "ownership": re.compile(r"--\s*\|?\s*(?:Author|Maintainer|Copyright|License):\s+([^\n]+)", re.I),
+        # #2882 contract: C2 `License:`/`Copyright:` out; C1 the GHC header's `Maintainer  :` (spaces before the colon, unprefixed inside `{- |`) in; `-- @author` is ownership's (doc released it, C4)
+        "ownership": re.compile(
+            r"^[ \t]*(?:--+(?:[ \t]*\|)?|\{-+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         "planned_debt": GLOBAL_PLANNED_DEBT,
         "fragile_debt": GLOBAL_FRAGILE_DEBT,
@@ -335,7 +385,7 @@ DEFINITION: dict[str, Any] = {
         # sync_locks: Barricades preventing races.
         "sync_locks": re.compile(r"\b(takeMVar|putMVar|readMVar|swapMVar|atomically|STM|Mutex|lock|unlock)\b"),
         # 45. immutability_locks (Immutability Constraints)
-        "immutability_locks": re.compile(r"\b(pure|return|frozen|immutable|const)\b"),
+        "immutability_locks": None,  # #2772: haskell bindings are immutable by default -- the guarantee is ambient, not site-shaped (the old rule counted monadic `return`). Stated absence, the io/solidity precedent.
         # 46. cleanup (Resource Cleanup / Teardown)
         "cleanup": re.compile(r"\b(hClose|close|free|bracket|finally|onException)\b"),
         # 47. encapsulation (Encapsulation / Access Modifiers)
@@ -345,6 +395,14 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs) Safety Theater.
         "test_skip": re.compile(r"\b(ignore|pending|skip|xit|xdescribe)\b"),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Haskell Specifics) ---
+        # auth_middleware (#3004): yesod's route auth (requireAuth/maybeAuth),
+        # servant's type-level AuthProtect and BasicAuthCheck, and the
+        # credential verification -- bare-word matching is this file's house
+        # style (call is juxtaposition).
+        "auth_middleware": re.compile(
+            r"\b(?:requireAuthId?|maybeAuthId?|AuthProtect|BasicAuthCheck"
+            r"|verifyPassword|validatePassword)\b"
+        ),
         "serialization_parsing": re.compile(
             r"\b(Data\.Aeson|decode|decodeStrict|fromJSON|Data\.Binary|Data\.Serialize)\b"
         ),
@@ -359,5 +417,8 @@ DEFINITION: dict[str, Any] = {
         "ipc_rpc_bridges": re.compile(
             r"\b(System\.Process|createProcess|callProcess|callCommand|forkIO|Control\.Concurrent)\b"
         ),
+        # system_config_mutation (#3084): contract-level absence. no dedicated
+        # config-mutation primitive; a conf-file write is ordinary I/O (io's).
+        "system_config_mutation": None,
     },
 }

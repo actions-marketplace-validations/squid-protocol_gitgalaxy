@@ -6,7 +6,7 @@
 >
 > **Summary:** Measures technical debt density using developer code annotations (`TODO`, `FIXME`, `HACK`, `XXX`). It differentiates between planned pending work (`TODO`, `WIP`) and admitted logic fragility (`HACK`, `FIXME`), calculating a weighted stress score normalized per 100 lines of code.
 >
-> **Effect:** Maps directly to the GitGalaxy Universal Risk Spectrum:
+> **Effect:** Maps directly to the GitGalaxy Universal Surface Spectrum:
 > * 🟦 **VERY LOW (Score 0-19):** Polished. Code aligns with expectations with no active debt annotations.
 > * 🟨 **INTERMEDIATE (Score 40-59):** Active Development. A moderate density of planned task markers.
 > * 🟥 **VERY HIGH (Score 80-100):** High Risk. High density of fragile fixes (`HACK`, `FIXME`) and unfinished stubs (`TODO`).
@@ -29,7 +29,8 @@ The analysis engine categorizes comment tokens into two debt classes:
 1. **Stress Sum Calculation:**
 $$\text{StressSum} = (\text{PlannedDebt} \times 1.0) + (\text{FragileDebt} \times 3.0) + (Irc \times 0.5)$$
 2. **Density Normalization (per 100 LOC):**
-$$\text{Density} = \left( \frac{\text{StressSum}}{\max(\text{LOC}, 1)} \right) \times 100.0$$
+$$\text{Density} = \left( \frac{\text{StressSum}}{\max(\text{LOC}, 50)} \right) \times 100.0$$
+The denominator is the UEF evidence-mass floor ([08-03](08-03-transforming-regex-counts.md)): a `TODO` and a `FIXME` in a 6-line config file and the same pair in a 49-line one carry the same debt score (#2655).
 3. **Sigmoidal Threshold Mapping:**
 $$\text{RawScore} = \frac{100.0}{1 + e^{-0.5 \times (\text{Density} - 5.0)}}$$
 4. **Apply Path Modifier:**
@@ -65,4 +66,4 @@ Currently, the system is strictly lexical and static. Future iterations plan to 
 ## Related Components
 - Static Analysis Engine
 - Path Modifier ($Mp$)
-- Implicit Risk Correction ($Irc$)
+- Implicit Risk Correction ($Irc$) — one point per strictness gap of the language ([08-03](08-03-transforming-regex-counts.md)), 0 for data and markup formats

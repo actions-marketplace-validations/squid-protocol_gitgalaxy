@@ -47,6 +47,7 @@ _M4_SIMPLE_CASES = [
     ("scientific", "m4_eval(1 + 2)", "AC_SUBST(FOO)"),
     ("reflection_metaprogramming", "patsubst(FOO, o, 0)", "AC_SUBST(FOO)"),
     ("import", "include(foo.m4)", "AC_SUBST(FOO)"),
+    ("_dependency_capture", "include(foo.m4)", "AC_SUBST(FOO)"),
     ("ownership", "dnl Author: Jane Doe", "dnl just a note"),
     ("planned_debt", "dnl TODO: fix this", "dnl done"),
     ("fragile_debt", "dnl HACK: workaround", "dnl clean"),
@@ -58,7 +59,7 @@ _M4_SIMPLE_CASES = [
     ("panics_and_aborts", "AC_MSG_ERROR([fatal])", "AC_SUBST(FOO)"),
     ("thread_sleeps", "sleep 5", "AC_SUBST(FOO)"),
     ("cleanup", "AT_CLEANUP", "AC_SUBST(FOO)"),
-    ("encapsulation", "m4_pattern_forbid([^MY_])", "AC_SUBST(FOO)"),
+    # encapsulation is None since #2766 -- pattern_forbid is error generation, not visibility.
     ("test_skip", "AT_SKIP_IF([test x = y])", "AC_SUBST(FOO)"),
 ]
 
@@ -80,7 +81,6 @@ _M4_DEEP_CASES = [
     ("func_start", "AC_DEFUN_ONCE([foo])", "AC_DEFUN_ONCE_EXTRA([foo])"),
     ("func_start", "AU_DEFUN([foo], [bar])", "echo AU_DEFUN"),
     ("func_start", "m4_defun([foo], [bar])", "m4_defun_not"),
-
     # args
     ("args", "$1", "${1}"),
     ("args", "$123", "$a"),
@@ -88,28 +88,24 @@ _M4_DEEP_CASES = [
     ("args", "$*", "$_"),
     ("args", "$#", "$!"),
     ("args", " $0 ", "${\\@}"),
-
     # branch
     ("branch", "AS_IF([test], [true])", "AS_IF_SUFFIX"),
     ("branch", "ifelse(A, B, C)", "my_ifelse()"),
     ("branch", "m4_case([$1], [a], [b])", "m4_case_X"),
     ("branch", "m4_ifval([$1], [yes])", "m4_ifvalue"),
     ("branch", "AS_CASE([$x], [y], [z])", "HAS_CASE"),
-
     # structural_boundaries
     ("structural_boundaries", "divert(-1)", "divert_text"),
     ("structural_boundaries", "m4_divert(1)", "m4_divert_text"),
     ("structural_boundaries", "AC_REQUIRE([foo])", "AC_REQUIRE_CPP"),
     ("structural_boundaries", "undivert(1)", "undiverted"),
     ("structural_boundaries", "m4_require([foo])", "m4_requirements"),
-
     # safety (missing plurals we just fixed)
     ("safety", "AC_CHECK_HEADERS([foo.h])", "AC_CHECK_HEADERS_EXTRA"),
     ("safety", "AC_CHECK_FUNCS([foo_func])", "AC_CHECK_FUNCS_EXTRA"),
     ("safety", "AC_CHECK_PROGS([AWK])", "AC_CHECK_PROGS_EXTRA"),
     ("safety", "AC_CHECK_HEADER([bar.h])", "AC_CHECK_HEADER_X"),
     ("safety", "AC_CHECK_PROG([foo])", "AC_CHECK_PROG_X"),
-
     # spec_exposure (fixing the bug we found)
     ("spec_exposure", "[SPEC-999]", "[special]"),
     ("spec_exposure", "[audit]", "[specific]"),
@@ -222,16 +218,19 @@ def test_m4_api_vs_macros_ac_define_intentional_double_classification():
     assert M4_RULES["macros"].search(line)
 
 
-def test_m4_cleanup_vs_state_mutation_popdef_intentional_double_classification():
+def test_m4_popdef_is_cleanup_not_state_mutation_2765():
     """
-    Ambiguity sweep finding: `popdef(...)` legitimately fires both
-    `state_mutation` (restoring the previous stack-pushed macro definition
-    is itself a mutation of macro state) and `cleanup` (releasing/undoing
-    a pushdef stack frame) -- both true at once, intentional.
+    #2765 (state_mutation contract, count contract corollary 4): `popdef(...)`
+    releases a pushdef stack frame and is the `cleanup` rule's token; it is not
+    also a write. `pushdef` is the write. This reverses the earlier "intentional
+    double-classification" reading, which put the corpus's c.m4 at 2 against a
+    planted 0.
     """
     line = "popdef([foo])"
-    assert M4_RULES["state_mutation"].search(line)
+    assert not M4_RULES["state_mutation"].search(line)
     assert M4_RULES["cleanup"].search(line)
+    assert M4_RULES["state_mutation"].search("pushdef([foo], [bar])")
+    assert not M4_RULES["cleanup"].search("pushdef([foo], [bar])")
 
 
 def test_m4_cleanup_vs_test_at_cleanup_intentional_double_classification():
@@ -260,16 +259,17 @@ def test_m4_dependency_injection_vs_structural_boundaries_ac_require_intentional
     assert M4_RULES["dependency_injection"].search(line)
 
 
-def test_m4_doc_vs_ownership_ac_copyright_intentional_double_classification():
+def test_m4_ac_copyright_is_doc_alone():
     """
-    Ambiguity sweep finding (mirrors the abap/fortran doc-vs-ownership
-    cases): `AC_COPYRIGHT(...)` legitimately fires both `doc` (it inserts
-    licensing documentation into the generated output) and `ownership`
-    (it's authorship/copyright metadata) -- both true at once, intentional.
+    #2882 C2 retired the intentional dual pinned here: `AC_COPYRIGHT(...)`
+    inserts a copyright notice into the generated output -- rights, not
+    responsibility -- so it is `doc`'s alone and `ownership` no longer
+    counts it. `dnl Author:` / `# Maintainer:` are the ownership forms.
     """
     line = "AC_COPYRIGHT([Copyright (C) 2026 Jane Doe])"
     assert M4_RULES["doc"].search(line)
-    assert M4_RULES["ownership"].search(line)
+    assert not M4_RULES["ownership"].search(line)
+    assert M4_RULES["ownership"].search("dnl Maintainer: Jane Doe")
 
 
 def test_m4_no_block_comment_family_confusion():
@@ -300,8 +300,57 @@ def test_m4_redos_immunity_sweep():
     assert_redos_immune(M4_RULES["spec_exposure"], "[SPEC-1" + "a" * 100000, timeout_sec=3.0)
     assert_redos_immune(M4_RULES["import"], "include" + " " * 100000, timeout_sec=3.0)
     assert_redos_immune(M4_RULES["args"], "$" * 100000, timeout_sec=3.0)
+    assert_redos_immune(M4_RULES["_dependency_capture"], "include(" + " " * 100000, timeout_sec=3.0)
+    assert_redos_immune(M4_RULES["_dependency_capture"], "m4_include([" + "`" * 100000, timeout_sec=3.0)
 
     # sanity: all still match their real positive cases after the sweep
     assert M4_RULES["func_start"].search("AC_DEFUN([MY_MACRO], [")
     assert M4_RULES["dead_code"].search("dnl define(OLD_MACRO, [x])")
     assert M4_RULES["ownership"].search("dnl Author: Jane Doe")
+
+
+# ==============================================================================
+# #2668 / #2652 shape: m4 gains a DAG capture (Batch C.2 of #2669)
+# ==============================================================================
+_M4_DEPENDENCY_CAPTURE_CASES = [
+    # (source line, expected captured target or None)
+    ("include(b.m4)", "b.m4"),
+    ("sinclude(b.m4)", "b.m4"),
+    ("m4_include([build-aux/foo.m4])", "build-aux/foo.m4"),
+    ("m4_sinclude([foo])", "foo"),
+    # m4's own quoting characters are stripped, not captured.
+    ("include(`b.m4')", "b.m4"),
+    ('include("b.m4")', "b.m4"),
+    ("  include( b.m4 )", "b.m4"),
+    # Negatives: the four spellings are whole words at statement position,
+    # and a commented-out include is not a dependency.
+    ("dnl include(b.m4)", None),
+    ("includes(b.m4)", None),
+    ("m4_define(include, [x])", None),
+    ("AC_CONFIG_FILES([Makefile])", None),
+]
+
+
+@pytest.mark.parametrize("line,expected", _M4_DEPENDENCY_CAPTURE_CASES)
+def test_m4_dependency_capture_targets(line, expected):
+    """
+    #2668: m4 had an `import` signal but no `_dependency_capture`, so its
+    references never became DAG edges (keyword-rosetta ledger entry
+    `no-dependency-capture-languages`). Group 1 is what galaxyscope feeds to
+    the resolver, so it must be the bare included file, quoting removed.
+    """
+    match = M4_RULES["_dependency_capture"].search(line)
+    assert (match.group(1) if match else None) == expected
+
+
+def test_m4_dependency_capture_does_not_claim_embedded_c_includes():
+    """
+    autoconf routinely quotes C source inside its macros
+    (`AC_CHECK_TYPES([...], [[#include <signal.h>]])`). Those are C
+    preprocessor directives belonging to a compile test, not m4 file
+    inclusions -- capturing them would invent dependencies on system headers
+    for every configure.ac. All seven real .m4/.ac files in language-crucible
+    are this shape and must capture nothing.
+    """
+    embedded = "AC_CHECK_TYPES([sig_atomic_t], [], [], [[#include <signal.h>]])\n\t#include <gmp.h>\n"
+    assert not M4_RULES["_dependency_capture"].search(embedded)

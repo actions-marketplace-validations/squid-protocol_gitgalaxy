@@ -37,8 +37,12 @@ DEFINITION: dict[str, Any] = {
         # 1. branch (Control Flow / Branching)
         # Decisions and logical jumps. Includes modern typed throws (throws(Error)).
         # EXCLUDES throw/rethrows (bailout_hits).
+        # #2859 (branch contract C3, #2822): a switch `default:` is a decision, but
+        # the dotted singleton accessor (`FileManager.default`, `.default`) is not --
+        # it is io/events' hit. The `(?<!\.)` guard keeps the switch case and drops
+        # the accessor, the mirror of the fix #2858 made on the `globals` side.
         "branch": re.compile(
-            r"\b(if|else|guard|switch|case|default|for|while|repeat|do|catch|break|continue|defer|try|throws)\b|&&|\|\||\?|\?\?"
+            r"\b(if|guard|switch|case|for|while|repeat|break|continue)\b|(?<!\.)\bdefault\b|\}\s*else\b|&&|\|\||\?|\?\?"
         ),
         # 2. args (Parameters / Coupling)
         # Parameter blocks. Bounded negation [^)]* and <[^>]*> to prevent ReDoS.
@@ -70,7 +74,7 @@ DEFINITION: dict[str, Any] = {
         # 3. linear (Sequential Boundaries)
         # Structural boundaries. EXCLUDES: Access modifiers (encapsulation) and let (freeze_hits).
         "structural_boundaries": re.compile(
-            r"\b(func|init|subscript|var|struct|class|enum|protocol|extension|actor|macro|import|typealias|associatedtype|mutating|nonmutating|isolated|nonisolated|return|yield|await|inout)\b|(?<!\blet )(?<!\bvar )(?<!\bfunc )(?<!\bclass )(?<!\bstruct )\b(some|any|consume|borrow|discard)\b|~Copyable"
+            r"\b(func|init|subscript|var|struct|class|enum|protocol|extension|actor|macro|import|typealias|associatedtype|mutating|nonmutating|isolated|nonisolated|return|yield|await|inout|try|throws|defer|do)\b|(?<!\blet )(?<!\bvar )(?<!\bfunc )(?<!\bclass )(?<!\bstruct )\b(some|any|consume|borrow|discard)\b|~Copyable"
         ),
         # 4. func_start (Executable Logic Anchors)
         # ONLY executable logic blocks. EXCLUDES types/classes. Steps over Concurrency modifiers.
@@ -138,19 +142,66 @@ DEFINITION: dict[str, Any] = {
         # could only fire when a word char immediately preceded the
         # `@`, never true for how attributes are actually written.
         # Never matched at all.
+        # BUG FIX (#2544): `open` sat in the same bare
+        # `\b(?:public|open|package)\b` alternative as `public`/`package`, so it
+        # matched the word anywhere -- string literals, prose, a bare `open(path)`
+        # call -- not its one real meaning: an access modifier in front of a
+        # declaration. Now its own alternative, requiring a declaration keyword.
+        # Two shape decisions worth keeping: NOT line-anchored, because real Swift
+        # puts attributes ahead of the modifier (`@_spi(WebSocket) open func foo()`,
+        # per Alamofire in the real-world corpus), and a bounded modifier stepper
+        # between the two, because Swift allows `open override func`,
+        # `open private(set) var`, `open class func`. `class` is in both the
+        # modifier and declaration lists on purpose; backtracking resolves it. The
+        # stepper is `{0,4}` not `*` -- an unbounded nested quantifier over a
+        # `[ \t]+`-separated alternation is a ReDoS shape (see
+        # test_swift_api_open_redos_immunity).
+        # BUG FIX #2730 (api contract): `public`/`package` were the two
+        # alternatives this rule did NOT anchor, so they counted the bare
+        # token anywhere -- including `let package = Package(...)` in a
+        # SwiftPM manifest and the word inside a diagnostic string. Folded
+        # into `open`'s alternative, which was already written to exactly the
+        # contract's shape (a modifier followed by the declaration it
+        # modifies); `typealias`/`associatedtype`/`case`/`operator`/
+        # `precedencegroup` join the declaration set, all of which take an
+        # access modifier in Swift.
         "api": re.compile(
-            r"\b(?:public|open|package)\b"
+            r"\b(?:public|package|open)\b[ \t]+"
+            r"(?:(?:final|override|weak|unowned|lazy|static|class|mutating|nonmutating|convenience|required|dynamic|indirect|(?:private|internal|fileprivate|public)\(set\))[ \t]+){0,4}"
+            r"(?:class|func|var|let|subscript|init\??|actor|struct|enum|protocol|extension|typealias|associatedtype|case|operator|precedencegroup)\b"
             r"|@usableFromInline|@objc|@objcMembers|@_exported|@IBAction|@IBOutlet|@Published"
         ),
         # 11. flux (State Mutation)
         # Mutation of state. EXCLUDES let (freeze_hits).
         "state_mutation": re.compile(
-            r"\b(var|inout|mutating|didSet|willSet|_modify)\b|@(?:State|Binding|FocusState|Bindable|Observable)|^[ \t]*(?:self\.)?[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*){0,5}\s*[-+*/]?=|\.(?:append|insert|remove|toggle|updateValue)\("
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `var`/`inout`/`mutating`/`didSet`/`willSet`/`@State`... declare or annotate
+            # mutable state (corollaries 1 and 2); the write is `x = v`, `x += 1`,
+            # `.append(`... Named arguments use `:`, so `(` is not a statement start.
+            r"(?:^|[;{}])[ \t]*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%&|^]|<<|>>)?=(?![=])(?![^\n(]{0,300},[ \t]*$)"
+            r"|\.(?:append|insert|remove|removeAll|removeLast|removeFirst|toggle|updateValue|swapAt|sort|reverse|popLast)\s*\(",
+            re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(r"//[ \t]*(?:let|var|func|class|struct|actor|extension|if|guard|return)\b"),
         # 13. doc (Structured Documentation)
-        "doc": re.compile(r"///|/\*\*|-\s*parameter|-\s*returns:|-\s*throws:|-\s*warning:"),
+        # BUG FIX #2672: `/**`, `///` and the markup tags (`- parameter`,
+        # `- returns:`, ...) were independent alternatives, so a `///`
+        # comment with a tag on the same line (e.g. `/// - parameter x:`)
+        # counted twice. Block form first (bounded 0,15000 chars
+        # non-greedy span, the #2658 shape), then the line-marker form so
+        # `///` swallows the rest of its line -- tag included -- as one
+        # hit; bare tags stay last so a tag outside any doc comment still
+        # counts. A run of consecutive `///` lines still counts once per
+        # line (unchanged, no corpus signal to fold that further).
+        "doc": re.compile(r"/\*\*[\s\S]{0,15000}?\*/|///[^\n]*|-\s*parameter|-\s*returns:|-\s*throws:|-\s*warning:"),
         # 14. test (Testing & Assertions)
         "test": re.compile(
             r"\b(?:XCTest|XCTestCase|XCTAssert[A-Za-z]*|setUp|tearDown)\b|@(?:Test|Suite)\b|#(?:expect|require)\b"
@@ -173,7 +224,11 @@ DEFINITION: dict[str, Any] = {
         ),
         # 18. globals (Global / Shared State)
         "globals": re.compile(
-            r"\b(?:static\s+let|static\s+var|shared|standard|default|NotificationCenter\.default|UserDefaults\.standard|FileManager\.default)\b|@Environment\b"
+            # #2858 contract corollary 3: a singleton/ambient accessor counts in its
+            # dotted form (`UserDefaults.standard`, `.shared`, `.default`); the bare
+            # word is an ordinary identifier or a `switch` case's `default:`.
+            r"\b(?:static[ \t]+(?:let|var)|NotificationCenter\.default|UserDefaults\.standard|FileManager\.default|ProcessInfo\.processInfo|CommandLine\.arguments)\b"
+            r"|\.(?:shared|standard|default)\b(?![ \t]*:)|@Environment\b"
         ),
         # 19. decorators (Decorators / Annotations)
         "decorators": re.compile(r"@[a-zA-Z_]\w*(?:\([^)]*\))?"),
@@ -196,11 +251,15 @@ DEFINITION: dict[str, Any] = {
         # 24. import (Dependency Inclusions)
         "import": re.compile(r"^[ \t]*(?:@_exported[ \t]+)?import\s+[a-zA-Z_]\w*", re.M),
         "_dependency_capture": re.compile(
-            r"^[ \t]*(?:@_exported[ \t]+)?import\s+(?:(?:typealias|struct|class|enum|protocol|let|var|func)\s+)?([a-zA-Z_][\w.]+)",
+            r"^[ \t]*(?:@_exported[ \t]+)?import\s+(?:(?:typealias|struct|class|enum|protocol|let|var|func)\s+)?([a-zA-Z_][\w.]*)",
             re.M,
         ),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"//\s*(?:Created by|Author:|Copyright):\s+(.*)", re.I),
+        # #2882 contract: C2 `Copyright:` out; `- Author:` callouts and Xcode's dated `Created by` in
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)(?:[ \t]*-|)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*//+[ \t]*Created[ \t]+by[ \t]+(\S[^\n]*?)[ \t]+on[ \t]+\d[^\n]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -216,7 +275,11 @@ DEFINITION: dict[str, Any] = {
         "spec_exposure": re.compile(r"\[(?:\s*SPEC\s*-\s*\d{1,10}|spec|audit)[^\]]{0,300}\]", re.I),
         # 31. ssr_boundaries (Server-Side Rendering)
         "ssr_boundaries": re.compile(
-            r"\b(Vapor|Hummingbird|Request|Response|Route|app\.get|app\.post|EventLoopFuture)\b"
+            # #2899: bare `Request`/`Response` matched ordinary identifiers and prose;
+            # anchored to the type-annotation (`: Request`) and initializer (`Request(`)
+            # forms, the shapes a server handler actually uses.
+            r"\b(Vapor|Hummingbird|Route|app\.get|app\.post|EventLoopFuture)\b"
+            r"|:\s*(?:Request|Response)\b|\b(?:Request|Response)\("
         ),
         # 32. events (Event Emitters / Pub-Sub)
         # BUG FIX: `@Published` is `@`-prefixed -- same leading-\b bug.
@@ -272,7 +335,7 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 45. immutability_locks (Immutability Constraints)
-        "immutability_locks": re.compile(r"\b(let|final|static|readonly|Immutable|Sendable)\b"),
+        "immutability_locks": None,  # #2772 C1: `let` is swift's ordinary binding declaration (the rust/swift inversion this contract exists to fix); swift has no added data-lock form. Stated absence.
         # 46. cleanup (Resource Cleanup / Teardown)
         "cleanup": re.compile(r"\b(deinit|close|free|dispose|shutdown|removeAll)\b\s*\("),
         # 47. encapsulation (Access Modifiers / Encapsulation)
@@ -287,6 +350,14 @@ DEFINITION: dict[str, Any] = {
         # (`double()`), where `)` follows instead.
         "test_skip": re.compile(r"\bXCTSkip\b|\bmock\(|\bstub\(|\bfake\(|\bdouble\("),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Swift Specifics) ---
+        # auth_middleware (#3004): LocalAuthentication's context and policy
+        # evaluation, and Sign in with Apple's controller.
+        "auth_middleware": re.compile(
+            r"\.evaluatePolicy\("
+            r"|\bcanEvaluatePolicy\("
+            r"|\bLAContext\("
+            r"|\bASAuthorizationController\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(JSONDecoder|JSONEncoder|PropertyListSerialization|NSKeyedUnarchiver|XMLParser)\b"
         ),
@@ -298,7 +369,13 @@ DEFINITION: dict[str, Any] = {
         ),
         # BUG FIX: `Process\(\)` ends on `)` -- same bug. Never matched.
         "ipc_rpc_bridges": re.compile(
-            r"\b(?:URLSession|NSXPCConnection|NotificationCenter|DispatchQueue)\b|\bProcess\(\)"
+            # #2898: DispatchQueue removed -- in-process dispatch is concurrency's
+            # (its rule already counts it); a bridge crosses a process boundary.
+            r"\b(?:URLSession|NSXPCConnection|NotificationCenter)\b|\bProcess\(\)"
         ),
+        # system_config_mutation (#3084): contract-level absence. app layer;
+        # UserDefaults/plist writes are the app's own state (state_mutation's),
+        # not shared infrastructure.
+        "system_config_mutation": None,
     },
 }

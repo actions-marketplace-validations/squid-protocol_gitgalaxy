@@ -39,7 +39,7 @@ DEFINITION: dict[str, Any] = {
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
-        "branch": re.compile(r"\b(if|else|switch|case|default|for|while|in|try|catch|finally)\b|\?"),
+        "branch": re.compile(r"\b(if|else|switch|case|default|for|while|in)\b|\?"),
         # 2. args (Parameters / Coupling)
         # Captures standard method arguments and Groovy closures (x, y ->)
         # CRITICAL FIX: Anchored the parenthesis capture to method signatures so it
@@ -74,11 +74,82 @@ DEFINITION: dict[str, Any] = {
         # overcounted every zero/one-arg signature by +1 the same way
         # Python's did (#1199). Name group added to branch 1 too, purely
         # so existing extraction tests keep passing.
+        # BUG FIX (#2782): the modifier run is `{0,10}` and the return-type run
+        # `{0,3}` -- BOTH able to match zero times -- and neither branch checked
+        # what FOLLOWED the parameter list, so the whole first alternative
+        # degenerated to `^[ \t]*IDENT(...)`, which is equally the shape of a bare
+        # call statement. Every call written on its own line (`close(conn)`,
+        # `assertEquals(kit, kit)`, `implementation project(':lib')`,
+        # `outputContains(output2)`) was counted as a declared parameter surface.
+        # Per docs/args_rule_contract.md, `args` matches the parameters a callable
+        # DECLARES; a call site CONSUMES a parameter surface, it does not publish
+        # one. `args` has no downstream validator (unlike `func_start`, whose
+        # `_slice_by_braces` pass re-checks every match for a real body), so the
+        # anchor has to live in the regex itself.
+        # Fixed by splitting the declaration form into the two shapes Groovy
+        # actually has, each with its own anchor (the same four-shape menu #2773
+        # used for typescript/objective-c):
+        #   arm 1 (BODIED): keeps the fully-optional modifier/return-type prefix --
+        #     Groovy really does declare `def entry(argv) {` and bare constructors
+        #     `MyClass(Project project) {` with no prefix at all -- and anchors on
+        #     the `{` that opens the body instead, via a LOOKAHEAD so group(0) still
+        #     ends at the closing `)` (test_groovy_args_nested_paren_default_value_
+        #     regression asserts that exact span). An optional `throws` clause is
+        #     allowed between the two, as func_start's own branch 2 already does.
+        #   arm 2 (BODYLESS): interface methods, `@Managed` model-rule interfaces and
+        #     `abstract` property getters have no body for a `{` lookahead to reach
+        #     (`Call<JiraVersion> getVersion(@Path("id") String id);`,
+        #     `abstract DirectoryProperty getClasspath()`, `int getAge()`). Their
+        #     terminator is `;` or nothing at all, which is exactly a bare call's
+        #     terminator too -- so, as in typescript (where readmitting a bare `;`
+        #     brought back thousands of call statements), the construct is named
+        #     explicitly instead: this arm makes the DECLARATION TYPE mandatory and
+        #     restricts it to a primitive keyword, `def`, or an uppercase-initial
+        #     type name. That is what separates a real bodyless declaration from
+        #     Groovy's paren-less-call DSL sugar, whose receiver is always a
+        #     lowercase property name (`implementation project(':lib')`,
+        #     `storePassword getReleaseKeystorePassword()`, `raw _("Dismiss")`,
+        #     `srcDir file("src/json-shade/java")`) -- the same false-positive class
+        #     func_start met in #2558/#2676. The `{0,2}` trailing token run keeps the
+        #     multi-param generic return type working (`Map<String,` + `Integer>` are
+        #     two space-separated tokens; see the return-type comment above).
+        # The closure arm (`x, y ->`) is unchanged.
+        # STRING-LITERAL FIX (same change): both declaration arms now check what
+        # follows the parameter list, so the list has to close on the signature's
+        # OWN `)`. The flat `[^()]` body stopped at any `)` inside a default value's
+        # string literal (`def foo(String a = "default), with, commas") {`, the
+        # pathological case in test_groovy.py) and the lookahead then failed on the
+        # remaining `, ...) {`. Added quote-delimited alternatives (and dropped the
+        # quotes from the plain class) so a string literal is consumed whole. The
+        # alternatives have disjoint first characters, so this stays linear -- the
+        # existing assert_redos_immune cases plus a 20k-quote payload all run in
+        # <50 ms. The closure arm's list is untouched.
+        # Measured (code stream, coding_analysis raw counts):
+        #   keyword-rosetta/data/groovy: args 19 -> 13 against func_start 13 (the
+        #     6 removals are exactly the 6 call sites the issue lists, and 13 is the
+        #     value SPEC.md plants -- no corpus authoring change needed).
+        #   language-crucible/data/groovy (306 files): args 2193 -> 1012 against
+        #     func_start 883 (a/f 2.48 -> 1.15). The new set is a strict SUBSET of
+        #     the old one (0 additions); of the 1172 removals, 1165 are call
+        #     statements and 7 are `def (a, b) = ...` multiple-assignment
+        #     destructuring, which declares locals, not parameters.
         "args": re.compile(
+            # arm 1: bodied declaration -- anchored on the `{` that opens the body.
             r"^[ \t]*(?:(?:public|private|protected|static|final|def|abstract|@[A-Za-z0-9_.]+(?:\([^)]*\))?)[ \t\n]+){0,10}"
             r"(?:(?:(?:void|int|long|short|byte|char|float|double|boolean)(?:\[\])?|[a-zA-Z_][a-zA-Z0-9_<>\[\]?,\.]*)[ \t]+){0,3}"
             r"(?!(?:if|for|while|switch|catch|synchronized)\b)"
-            r"([A-Za-z_$][\w_$]*|\"[^\"]*\"|'[^']*')[ \t\n]*(\((?:[^()]|\([^()]*\))*\))"
+            r"([A-Za-z_$][\w_$]*|\"[^\"]*\"|'[^']*')[ \t\n]*(\((?:[^()\"']|\"[^\"]*\"|'[^']*'|\([^()]*\))*\))"
+            r"(?=[ \t\n]*(?:throws[ \t\n]+[\w.,<>$ \t\n]{0,200})?\{)"
+            # arm 2: bodyless declaration (interface / abstract) -- no `{` to anchor
+            # on, so the declaration type is mandatory and must be a primitive,
+            # `def`, or an uppercase-initial type.
+            r"|^[ \t]*(?:(?:public|private|protected|static|final|abstract|synchronized|native|transient|@[A-Za-z0-9_.]+(?:\([^)]*\))?)[ \t\n]+){0,10}"
+            r"(?:(?:void|int|long|short|byte|char|float|double|boolean)(?:\[\])?|def|[A-Z][a-zA-Z0-9_<>\[\]?,\.]*)[ \t]+"
+            r"(?:[a-zA-Z_][a-zA-Z0-9_<>\[\]?,\.]*[ \t]+){0,2}"
+            r"(?!(?:if|for|while|switch|catch|synchronized)\b)"
+            r"([A-Za-z_$][\w_$]*|\"[^\"]*\"|'[^']*')[ \t\n]*(\((?:[^()\"']|\"[^\"]*\"|'[^']*'|\([^()]*\))*\))"
+            r"(?=[ \t]*(?:throws[ \t\n]+[\w.,<>$ \t\n]{0,200})?[ \t]*(?:;|$))"
+            # arm 3: closure parameter list (`{ x, y ->`), unchanged.
             r"|(?:\{[ \t\n]*)?(\((?:[^()]|\([^()]*\))*\)|[a-zA-Z_$][\w_$]{0,100}|)[ \t\n]*->",
             re.M,
         ),
@@ -141,13 +212,31 @@ DEFINITION: dict[str, Any] = {
         # at all after it) as a legitimate declaration, so this costs no real
         # coverage. Confirmed via a 188-file corpus scan: after this fix, the
         # remaining "def"-named entries in the named function list dropped to zero.
+        # BUG FIX (#2558): branch 1 (the >=1-prefix-token branch) treats any bare
+        # identifier as a plausible type/modifier prefix, so a paren-less
+        # single-argument builder call -- `raw _("Dismiss")`, Groovy's
+        # optional-parens sugar for `raw(_("Dismiss"))` -- gets misread as a
+        # declaration: "raw" satisfies the bare-identifier prefix, then "_"
+        # immediately followed by "(" satisfies branch 1's lenient lookahead. A
+        # real declaration is never named "_" in this engine's corpora, so
+        # excluding it costs no coverage (same reasoning as "def" above).
+        # Full-corpus scan (language-crucible groovy/, 305 files): 964 -> 961
+        # branch-1 matches, all 3 removals this shape, nothing else affected.
+        # BUG FIX (#2676): branch 1's bare-identifier prefix alternative had no
+        # keyword guard, so a statement keyword (new/return/throw/assert/yield)
+        # satisfies the prefix and the *next* identifier is captured as the
+        # "function name" -- `throw new IllegalArgumentException(msg)` misreads as
+        # a declaration, same for `return foo(x)` and the paren-less-call-with-
+        # `new`-argument shape. Guarded the same way the name capture already is.
+        # Full-corpus scan (language-crucible groovy/, 305 files): 968 -> 885
+        # (-83) branch-1 matches, all genuine non-declarations; rosetta stays 13.
         "func_start": re.compile(
             r"^[ \t]*(?:"
-            r"(?:(?:public|private|protected|static|final|def|abstract|@[A-Za-z0-9_.]+(?:\([^)]*\))?|<[^>]{0,100}(?:<[^>]{0,100}>[^>]{0,100}){0,5}>|(?:void|int|long|short|byte|char|float|double|boolean)(?:\[\])?|[a-zA-Z_][a-zA-Z0-9_<>\[\]?,\.]*)[ \t\n]+){1,18}"
-            r"(?!(?:if|for|while|switch|catch|synchronized|new|return|class|interface|enum|trait|def|implementation|testImplementation|api|compileOnly|runtimeOnly|classpath|dependency|from|file|mavenCentral|plugins|dependencies|repositories|task|project|allprojects|subprojects|ext)\b)"
+            r"(?:(?:public|private|protected|static|final|def|abstract|@[A-Za-z0-9_.]+(?:\([^)]*\))?|<[^>]{0,100}(?:<[^>]{0,100}>[^>]{0,100}){0,5}>|(?:void|int|long|short|byte|char|float|double|boolean)(?:\[\])?|(?!(?:new|return|throw|assert|yield)[ \t\n])[a-zA-Z_][a-zA-Z0-9_<>\[\]?,\.]*)[ \t\n]+){1,18}"
+            r"(?!(?:if|for|while|switch|catch|synchronized|new|return|class|interface|enum|trait|def|implementation|testImplementation|api|compileOnly|runtimeOnly|classpath|dependency|from|file|mavenCentral|plugins|dependencies|repositories|task|project|allprojects|subprojects|ext|_)\b)"
             r"([A-Za-z_$][\w_$]*|\"[^\"]*\"|'[^']*')(?=[ \t\n]*\()"
             r"|"
-            r"(?!(?:if|for|while|switch|catch|synchronized|new|return|class|interface|enum|trait|def|implementation|testImplementation|api|compileOnly|runtimeOnly|classpath|dependency|from|file|mavenCentral|plugins|dependencies|repositories|task|project|allprojects|subprojects|ext)\b)"
+            r"(?!(?:if|for|while|switch|catch|synchronized|new|return|class|interface|enum|trait|def|implementation|testImplementation|api|compileOnly|runtimeOnly|classpath|dependency|from|file|mavenCentral|plugins|dependencies|repositories|task|project|allprojects|subprojects|ext|_)\b)"
             r"([A-Za-z_$][\w_$]*|\"[^\"]*\"|'[^']*')(?=[ \t\n]*\((?![^)]*\b[A-Za-z_$][\w$]*:(?!:))[^)]*\)[ \t\n]*(?:throws[ \t\n]+[\w.,<> \t\n]+)?[ \t\n]*\{)"
             r")",
             re.M,
@@ -168,29 +257,72 @@ DEFINITION: dict[str, Any] = {
         ),
         # --- PHASE 2: RISK ENGINE (Structural Integrity) ---
         # 6. safety (Defensive Programming / Validation)
-        "safety": re.compile(
-            r"\b(try|catch|finally|assert|instanceof|Optional)\b|@(?:Valid|Validated|NotNull|NonNull|Immutable)"
-        ),
+        # C1: Optional is a type name; @Immutable is not runtime validation (twin of java.py).
+        "safety": re.compile(r"\b(try|catch|finally|assert|instanceof)\b|@(?:Valid|Validated|NotNull|NonNull)"),
         # 7. safety_neg (Safety Bypasses / Unchecked Types)
         "safety_bypasses": re.compile(
             r"\b(null)\b|return\s+null|catch\s*\(\s*(?:Exception|Throwable)\b|@SuppressWarnings|@SneakyThrows|\.get\(\)"
         ),
         # 8. danger (High-Risk Execution / System Calls)
-        "high_risk_execution": re.compile(r"\b(System\.exit|Runtime\.getRuntime\(\)\.exec|execute)\b"),
+        # #2878 contract C2: bare `execute` was retrofit's `.execute().body()` and `void execute()`;
+        # the GDK process spawn is `.execute()` on a string or list literal. Eval.me/GroovyShell
+        # run text as code (C1b).
+        "high_risk_execution": re.compile(
+            r"\b(?:System\.exit|Runtime\.getRuntime\(\)\.(?:exec|halt)|Eval\.(?:me|x|xy|xyz)|GroovyShell)\s*\(|(?:\"|\'|\])\.execute\s*\("
+        ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
-            r"\b(File|Files|Paths|FileReader|FileWriter|file|copy|sync|uri|url|Socket|Connection|ResultSet)\b"
+            # #2841 contract C1: lowercase file/copy/sync/uri/url matched
+            # ordinary identifiers and strings; the type names and Gradle's
+            # file(...) call form are the io constructs.
+            r"\b(File|Files|Paths|FileReader|FileWriter|Socket|Connection|ResultSet)\b|\bfile\s*\("
         ),
         # 10. api (Public Surface Area)
         # Groovy classes/methods are implicitly public by default, making the whole file highly exposed.
+        # BUG FIX #2730 (api contract): a bare `\bpublic\b` counted the
+        # access modifier ANYWHERE in the code stream -- inside a string
+        # literal, a `switch` case, a dotted name -- not only where it
+        # declares something. The alternatives below anchor it to the
+        # declaration it modifies, per docs/api_rule_contract.md ("a
+        # declaration that makes a named function or type visible outside
+        # this file"). Every quantifier is bounded (Rule 5) and the modifier
+        # stepper is `{0,5}`, not `*`, so the `[ \t\n]+`-separated
+        # alternation cannot nest unboundedly (the ReDoS shape swift's `open`
+        # alternative was already written against).
+        # Measured: 16 crucible matches before, 12 after -- the four dropped
+        # were prose and string literals ("Could not open the public key
+        # ring.", `accepted-public-api-changes.json`, a `website/public/3.x`
+        # path). Groovy declarations are implicitly public, so this rule's
+        # own docstring still holds: the explicit modifier is the exception,
+        # not the measure.
         "api": re.compile(
-            r"\b(public)\b|@(RestController|Controller|Service|Component|Bean|RequestMapping|GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping)\b"
+            r"\bpublic[ \t\n]+"
+            r"(?:(?:static|final|abstract|synchronized|native|strictfp|transient|volatile|@[\w.]+(?:\([^)\n]{0,200}\))?)[ \t\n]+){0,5}"
+            r"(?:class|interface|trait|enum|@interface|void\b|def\b"
+            r"|[A-Za-z_$][\w$.]*(?:[ \t\n]*<(?:[^<>]|<[^<>]*>){0,200}>)?(?:\[[ \t\n]*\])*[ \t\n]+[A-Za-z_$][\w$]*[ \t\n]*[({=;,]"
+            r"|[A-Za-z_$][\w$]*[ \t\n]*\()"
+            r"|@(RestController|Controller|Service|Component|Bean|RequestMapping|GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping)\b"
         ),
         # 11. flux (State Mutation)
         # BUG FIX: the trailing bare `=` matched the first `=` of `==`,
         # miscounting every equality comparison (`result == expected`) as
         # an assignment. Added a negative lookahead to exclude `==`.
-        "state_mutation": re.compile(r"^[ \t]*\w+(?:\.\w+)*[ \t]*=(?!=)|@(?:Setter|Data)\b", re.M),
+        "state_mutation": re.compile(
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `@Setter`/`@Data` generate accessors (corollary 2). `=~`/`==~` are regex
+            # operators, not writes.
+            r"(?:^|[;{}])[ \t]*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%&|^]|<<|>>|\*\*|\?)?=(?![=~>])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_(*]"
+            r"|\.(?:add|addAll|put|putAll|remove|clear|push|pop|set)\s*\(",
+            re.M,
+        ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         # Tuned to catch dead Gradle definitions and Groovy logic.
         # BUG FIX (Rule 12): groovy is `standard_block` (both `//` and
@@ -201,14 +333,22 @@ DEFINITION: dict[str, Any] = {
             r"(?://|/\*)[ \t]*(?:def|class|void|if|for|while|import|implementation|compile|api|testImplementation)\b"
         ),
         # 13. doc (Structured Documentation)
-        "doc": re.compile(r"/\*\*|@param|@return|@throws|@deprecated|@see"),
+        # BUG FIX #2672: pair `/**` with its closing `*/` into one bounded
+        # (0,15000 chars) non-greedy span so a groovydoc block counts once,
+        # not once per tag inside it (the #2658 shape). Bare tags stay last
+        # so a tag outside any doc block still counts.
+        "doc": re.compile(r"/\*\*[\s\S]{0,15000}?\*/|@param|@return|@throws|@deprecated|@see"),
         # 14. test (Testing & Assertions)
         # Integrates Spock Framework keywords (given:, when:, then:, expect:) alongside JUnit.
         # BUG FIX (Rule 5): `^\s*` matches newlines in re.M mode, so the
         # Spock-label anchor could stretch across blank lines. Bounded to
         # `[ \t]*` (same-line whitespace only).
         "test": re.compile(
-            r"@(?:Test|Before|After|BeforeEach|AfterEach|Mock)|assert\w*\s*\(|^[ \t]*(?:given|when|then|expect|setup|cleanup|where):",
+            # #2853 contract C1: `assert\w{1,40}\(` (was `\w*`) keeps `assertEquals(`
+            # but drops groovy's parenthesized power-assert `assert(cond)` -- a
+            # runtime guard, safety's. Spock block labels are untouched. Bounded so
+            # a long `\w` run with no `(` can't catastrophically backtrack.
+            r"@(?:Test|Before|After|BeforeEach|AfterEach|Mock)|assert\w{1,40}\s*\(|^[ \t]*(?:given|when|then|expect|setup|cleanup|where):",
             re.M,
         ),
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
@@ -271,7 +411,11 @@ DEFINITION: dict[str, Any] = {
             r"^[ \t]*import[ \t\n\\]+(?:static[ \t\n\\]+)?([\w*]+(?:[ \t\n]*\.[ \t\n]*[\w*]+)*)[ \t]*;?", re.M
         ),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"@author\s+(.*)", re.I),
+        # #2882 contract: C1 keyed lines join @author
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,

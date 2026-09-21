@@ -42,7 +42,14 @@ DEFINITION: dict[str, Any] = {
         # 1. branch (Control Flow / Branching)
         # Decisions and logical jumps. Includes modern 'when' and Elvis operator.
         # EXCLUDES throw (bailout_hits).
-        "branch": re.compile(r"\b(if|else|when|for|while|do|try|catch|finally|break|continue|return)\b|\?:|&&|\|\|"),
+        # #2545: `return` was previously counted here, making every early-return function
+        # phantom-count branch mass with no real decision point -- kotlin's own JVM sibling
+        # java doesn't count `return` as branch (nor do 10 other checked languages across
+        # every relevant family, including rust/csharp which share kotlin's early-return
+        # idiom). `return` is already tracked under `structural_boundaries` below, matching
+        # java/c/rust/go/csharp's convention -- removing it here is a pure de-duplication,
+        # not a signal loss. Corpus impact: kotlin branch 19 (planted 3, +280%) -> exact.
+        "branch": re.compile(r"\b(if|else|when|for|while|do)\b|\?:|&&|\|\|"),
         # 2. args (Parameters / Coupling)
         # OPTIMIZED: Removed overlapping whitespace quantifiers to fix Regex Sludge.
         "args": re.compile(
@@ -78,7 +85,9 @@ DEFINITION: dict[str, Any] = {
         ),
         # 3. linear (Sequential Boundaries)
         # Structural boundaries defining file architecture and control returns.
-        "structural_boundaries": re.compile(r"\b(package|import|return|class|interface|object|fun|typealias)\b"),
+        "structural_boundaries": re.compile(
+            r"\b(package|import|return|break|continue|class|interface|object|fun|typealias|try|catch|finally)\b"
+        ),
         # 4. func_start (Executable Logic Anchors)
         # OPTIMIZED: Bound annotation parenthesis scanning to prevent multi-line bleeding.
         "func_start": re.compile(
@@ -129,34 +138,76 @@ DEFINITION: dict[str, Any] = {
         ),
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
         # 6. safety (Defensive Programming / Validation)
+        # C2: error() raises. C1: sealed/Result type-level. C4: bare fold is an ordinary fold.
         "safety": re.compile(
-            r"\?\.(?!.)|as\?|\b(require|requireNotNull|check|checkNotNull|error|sealed|is|!is|Result|onSuccess|onFailure|fold|runCatching)\b|\?:"
+            r"\?\.(?!.)|as\?|\b(require|requireNotNull|check|checkNotNull|is|!is|onSuccess|onFailure|runCatching)\b|\?:"
         ),
         # 7. safety_neg (Safety Bypasses / Unchecked Types)
         # Force unwrapping, unsafe casts, and suppression.
         "safety_bypasses": re.compile(r"!!|as(?!\?)\b|\blateinit\s+var\b|@Suppress\b"),
         # 8. danger (High-Risk Execution / System Calls)
         # Process killers and raw system triggers. EXCLUDES println (Phase 5).
-        "high_risk_execution": re.compile(r"\b(System\.exit|exitProcess|Runtime\.getRuntime|Thread\.stop)\b"),
+        # #2878 contract C2: bare `Runtime.getRuntime` is every `.availableProcessors()`; the
+        # spawn/halt calls are the sites.
+        "high_risk_execution": re.compile(
+            r"\b(?:System\.exit|exitProcess|Runtime\.getRuntime\(\)\.(?:exec|halt)|Thread\.stop)\b"
+        ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
             r"\b(File|InputStream|OutputStream|Retrofit|OkHttpClient|Ktor|HttpClient|RoomDatabase|Dao|SharedPreferences|DataStore|java\.nio)\b"
         ),
         # 10. api (Public Surface Area)
         # Exposed surface. Implicit public/internal defaults + Ktor/Spring routes.
+        # BUG FIX #2730 (api contract): a bare `\bpublic|internal\b` counted the
+        # access modifier ANYWHERE in the code stream -- inside a string
+        # literal, a `switch` case, a dotted name -- not only where it
+        # declares something. The alternatives below anchor it to the
+        # declaration it modifies, per docs/api_rule_contract.md ("a
+        # declaration that makes a named function or type visible outside
+        # this file"). Every quantifier is bounded (Rule 5) and the modifier
+        # stepper is `{0,5}`, not `*`, so the `[ \t\n]+`-separated
+        # alternation cannot nest unboundedly (the ReDoS shape swift's `open`
+        # alternative was already written against).
+        # Kotlin always spells the declaration out with a keyword, so the
+        # anchor is just that keyword set. Measured: 17 crucible matches
+        # before, 5 after -- the 12 dropped were all the package segment in
+        # `import okhttp3.internal.<name>`, i.e. a reference to another
+        # module's internals, the exact opposite of a public declaration.
         "api": re.compile(
-            r"\b(public|internal)\b|@(RestController|Controller|Service|Component|RequestMapping|GetMapping|PostMapping|Route)\b"
+            r"\b(?:public|internal)[ \t\n]+"
+            r"(?:(?:open|abstract|final|override|suspend|inline|tailrec|infix|operator|external|expect|actual|data|sealed|enum|annotation|inner|companion|lateinit|const|value|vararg|@[\w.]+(?:\([^)\n]{0,200}\))?)[ \t\n]+){0,5}"
+            r"(?:class|interface|object|fun|val|var|typealias|constructor)\b"
+            r"|@(RestController|Controller|Service|Component|RequestMapping|GetMapping|PostMapping|Route)\b"
         ),
         # 11. flux (State Mutation)
         # CRITICAL FIX: Added re.M so it scans every line, not just the first line of the file!
         "state_mutation": re.compile(
-            r"\b(var|MutableList|MutableMap|MutableSet|MutableState|MutableStateFlow|Atomic[A-Za-z0-9]+)\b|^[ \t]*(?:this\.)?[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*\s*[-+*/%]?=|\.(?:add|addAll|remove|put|set|update)\(",
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `var x = v` declares and `Mutable*`/`Atomic*` name mutable state (corollaries
+            # 1 and 2); `x = v`, `x++`, `.add(`... are the writes. `=>` never appears in
+            # kotlin but `==`/`===` do; a trailing-comma line is a named argument.
+            r"(?:^|[;{}])[ \t]*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%])?=(?![=])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_(*]"
+            r"|\.(?:add|addAll|remove|removeAt|put|putAll|set|update|clear|getAndSet|compareAndSet|incrementAndGet|decrementAndGet)\s*\(",
             re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(r"//[ \t]*(?:val|var|fun|class|interface|object|if|when|for|return|import)\b"),
         # 13. doc (Structured Documentation)
-        "doc": re.compile(r"/\*\*|@param|@return|@property|@receiver|@constructor|@throws|@see|@since"),
+        # BUG FIX #2672: pair `/**` with its closing `*/` into one bounded
+        # (0,15000 chars) non-greedy span so a KDoc block counts once, not
+        # once per tag inside it (the #2658 shape). Bare tags stay last so a
+        # tag outside any doc block still counts.
+        "doc": re.compile(
+            r"/\*\*[\s\S]{0,15000}?\*/|@param|@return|@property|@receiver|@constructor|@throws|@see|@since"
+        ),
         # 14. test (Testing & Assertions)
         "test": re.compile(
             r"@(?:Test|ParameterizedTest|BeforeTest|AfterTest)|\b(?:assert[A-Za-z0-9_]*|mockk|spyk|test)\s*\(|\b(?:shouldBe|shouldNotBe)\b|\b(?:every|verify)\s*\{"
@@ -174,8 +225,18 @@ DEFINITION: dict[str, Any] = {
         # OPTIMIZED: Removed overlapping whitespace quantifiers to fix ReDoS.
         "closures": re.compile(r"\{[ \t\n]*[a-zA-Z_][a-zA-Z0-9_ \t\n:<>,.?]{0,150}?->"),
         # 18. globals (Global / Shared State)
+        # BUG FIX (#2673): The single indented `val` alternative couldn't tell a
+        # `companion object { const val LIMIT = 5 }` (a real global) from a
+        # function-local `val TIMEOUT = 3000` (a false positive). Kotlin permits
+        # `const val` only at top level or on an object/companion object member --
+        # a compile error elsewhere -- so `const val` is a global at any
+        # indentation, while a bare `val` is a global only at true column-0.
         "globals": re.compile(
-            r"\b(object|companion\s+object)\b|^[ \t]*(?:const[ \t]+)?val\s+[A-Z_0-9]+[ \t]*=",
+            # #2858 contract corollary 3: the NAMED object declaration is the global
+            # (a singleton); `object : Runnable {` is an anonymous object expression.
+            r"\bobject[ \t]+[A-Za-z_`]|\bcompanion[ \t]+object\b"
+            r"|^[ \t]*const[ \t]+val\s+[A-Za-z_]\w*[ \t]*="
+            r"|^(?![ \t])(?:const[ \t]+)?val\s+[A-Z_0-9]+[ \t]*=",
             re.M,
         ),
         # 19. decorators (Decorators / Annotations)
@@ -202,9 +263,10 @@ DEFINITION: dict[str, Any] = {
         "import": re.compile(r"^[ \t]*import\s+(?:static[ \t]+)?[\w.]+;?", re.M),
         "_dependency_capture": re.compile(r"^[ \t]*import[ \t\n]+(?:static[ \t\n]+)?([\w.*]+)", re.M),
         # 25. ownership (Authorship Metadata)
+        # #2882 contract: C2 `@since` is a version tag, `Copyright:` a notice -- neither is ownership
         "ownership": re.compile(
-            r"@(?:author|since)\s+(.*)|//\s*(?:Created by|Maintainer|Copyright):\s+(.*)",
-            re.I,
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
@@ -265,7 +327,9 @@ DEFINITION: dict[str, Any] = {
         # 44. sync_locks (Resource Management & Stability)
         "sync_locks": re.compile(r"\b(mutex|lock|synchronized|Semaphore|Atomic[A-Z]\w*)\b", re.I),
         # 45. immutability_locks (Immutability Constraints)
-        "immutability_locks": re.compile(r"\b(val|const|immutable|readonly)\b"),
+        "immutability_locks": re.compile(
+            r"\bconst\b(?=[ \t]+val\b)"
+        ),  # #2772 C1: `val` is kotlin's ordinary binding; `const val` is the added compile-time lock
         # 46. cleanup (Resource Cleanup / Teardown)
         "cleanup": re.compile(r"\b(close|dispose|shutdown|use|cleanup)\b\s*\("),
         # 47. encapsulation (Access Modifiers / Encapsulation)
@@ -280,6 +344,16 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"@(?:Ignore|Disabled)|test\.skip\(|mockk|spyK|fake\("),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Kotlin Specifics) ---
+        # auth_middleware (#3004): Spring's method-security annotations, Ktor's
+        # Authentication plugin install and authenticate route block (guarded
+        # against its own `fun authenticate` definition), and route
+        # authorization.
+        "auth_middleware": re.compile(
+            r"@(?:PreAuthorize|PostAuthorize|Secured|RolesAllowed)\("
+            r"|\binstall\(Authentication\)"
+            r"|\.authorizeHttpRequests\b"
+            r"|(?<!fun )\bauthenticate[ \t]*[({]"
+        ),
         # BUG FIX: `Gson\(\)` ends on `)` -- shared trailing \b never
         # fired. Never matched.
         "serialization_parsing": re.compile(
@@ -305,5 +379,8 @@ DEFINITION: dict[str, Any] = {
         "ipc_rpc_bridges": re.compile(
             r"\b(?:BroadcastReceiver|ProcessBuilder|bindService)\b|\bIntent\(|\bHttpClient\("
         ),
+        # system_config_mutation (#3084): contract-level absence. JVM app layer;
+        # same reasoning as java -- no host-config primitive of its own.
+        "system_config_mutation": None,
     },
 }

@@ -1,0 +1,469 @@
+{
+  "accuracy": 1.0,
+  "ambiguous_rejected": 1,
+  "ambiguous_rejection_rate": 1.0,
+  "ambiguous_total": 1,
+  "auto_accuracy": 1.0,
+  "auto_scored": 2722,
+  "confusion": {},
+  "corpus_files": 3531,
+  "correct": 3231,
+  "determinable_accuracy": 1.0,
+  "determinable_scored": 3231,
+  "explicit_accuracy": 1.0,
+  "explicit_correct": 509,
+  "explicit_scored": 509,
+  "label_sources": {
+    "ambiguous": 1,
+    "exact_filename": 18,
+    "explicit": 514,
+    "extension": 2704,
+    "unknown_extension": 294
+  },
+  "languages": {
+    "abap": {
+      "correct": 7,
+      "precision": 1.0,
+      "predicted": 7,
+      "recall": 1.0,
+      "support": 7
+    },
+    "ada": {
+      "correct": 50,
+      "precision": 1.0,
+      "predicted": 50,
+      "recall": 1.0,
+      "support": 50
+    },
+    "agc_assembly": {
+      "correct": 10,
+      "precision": 1.0,
+      "predicted": 10,
+      "recall": 1.0,
+      "support": 10
+    },
+    "apex": {
+      "correct": 7,
+      "precision": 1.0,
+      "predicted": 7,
+      "recall": 1.0,
+      "support": 7
+    },
+    "assembly": {
+      "correct": 234,
+      "precision": 1.0,
+      "predicted": 234,
+      "recall": 1.0,
+      "support": 234
+    },
+    "batch": {
+      "correct": 5,
+      "precision": 1.0,
+      "predicted": 5,
+      "recall": 1.0,
+      "support": 5
+    },
+    "blp": {
+      "correct": 5,
+      "precision": 1.0,
+      "predicted": 5,
+      "recall": 1.0,
+      "support": 5
+    },
+    "bms": {
+      "correct": 10,
+      "precision": 1.0,
+      "predicted": 10,
+      "recall": 1.0,
+      "support": 10
+    },
+    "c": {
+      "correct": 40,
+      "precision": 1.0,
+      "predicted": 40,
+      "recall": 1.0,
+      "support": 40
+    },
+    "cobol": {
+      "correct": 570,
+      "precision": 1.0,
+      "predicted": 570,
+      "recall": 1.0,
+      "support": 570
+    },
+    "cpp": {
+      "correct": 29,
+      "precision": 1.0,
+      "predicted": 29,
+      "recall": 1.0,
+      "support": 29
+    },
+    "csharp": {
+      "correct": 8,
+      "precision": 1.0,
+      "predicted": 8,
+      "recall": 1.0,
+      "support": 8
+    },
+    "css": {
+      "correct": 38,
+      "precision": 1.0,
+      "predicted": 38,
+      "recall": 1.0,
+      "support": 38
+    },
+    "csv": {
+      "correct": 7,
+      "precision": 1.0,
+      "predicted": 7,
+      "recall": 1.0,
+      "support": 7
+    },
+    "dart": {
+      "correct": 7,
+      "precision": 1.0,
+      "predicted": 7,
+      "recall": 1.0,
+      "support": 7
+    },
+    "db2_sql": {
+      "correct": 10,
+      "precision": 1.0,
+      "predicted": 10,
+      "recall": 1.0,
+      "support": 10
+    },
+    "dockerfile": {
+      "correct": 5,
+      "precision": 1.0,
+      "predicted": 5,
+      "recall": 1.0,
+      "support": 5
+    },
+    "embedded_python": {
+      "correct": 14,
+      "precision": 1.0,
+      "predicted": 14,
+      "recall": 1.0,
+      "support": 14
+    },
+    "fortran": {
+      "correct": 6,
+      "precision": 1.0,
+      "predicted": 6,
+      "recall": 1.0,
+      "support": 6
+    },
+    "go": {
+      "correct": 69,
+      "precision": 1.0,
+      "predicted": 69,
+      "recall": 1.0,
+      "support": 69
+    },
+    "groovy": {
+      "correct": 305,
+      "precision": 1.0,
+      "predicted": 305,
+      "recall": 1.0,
+      "support": 305
+    },
+    "haskell": {
+      "correct": 7,
+      "precision": 1.0,
+      "predicted": 7,
+      "recall": 1.0,
+      "support": 7
+    },
+    "hlasm": {
+      "correct": 18,
+      "precision": 1.0,
+      "predicted": 18,
+      "recall": 1.0,
+      "support": 18
+    },
+    "hlo": {
+      "correct": 3,
+      "precision": 1.0,
+      "predicted": 3,
+      "recall": 1.0,
+      "support": 3
+    },
+    "html": {
+      "correct": 54,
+      "precision": 1.0,
+      "predicted": 54,
+      "recall": 1.0,
+      "support": 54
+    },
+    "java": {
+      "correct": 14,
+      "precision": 1.0,
+      "predicted": 14,
+      "recall": 1.0,
+      "support": 14
+    },
+    "javascript": {
+      "correct": 20,
+      "precision": 1.0,
+      "predicted": 20,
+      "recall": 1.0,
+      "support": 20
+    },
+    "jcl": {
+      "correct": 186,
+      "precision": 1.0,
+      "predicted": 186,
+      "recall": 1.0,
+      "support": 186
+    },
+    "json": {
+      "correct": 10,
+      "precision": 1.0,
+      "predicted": 10,
+      "recall": 1.0,
+      "support": 10
+    },
+    "kotlin": {
+      "correct": 6,
+      "precision": 1.0,
+      "predicted": 6,
+      "recall": 1.0,
+      "support": 6
+    },
+    "livecode": {
+      "correct": 98,
+      "precision": 1.0,
+      "predicted": 98,
+      "recall": 1.0,
+      "support": 98
+    },
+    "lua": {
+      "correct": 113,
+      "precision": 1.0,
+      "predicted": 113,
+      "recall": 1.0,
+      "support": 113
+    },
+    "m4": {
+      "correct": 8,
+      "precision": 1.0,
+      "predicted": 8,
+      "recall": 1.0,
+      "support": 8
+    },
+    "makefile": {
+      "correct": 4,
+      "precision": 1.0,
+      "predicted": 4,
+      "recall": 1.0,
+      "support": 4
+    },
+    "markdown": {
+      "correct": 106,
+      "precision": 1.0,
+      "predicted": 106,
+      "recall": 1.0,
+      "support": 106
+    },
+    "matlab": {
+      "correct": 6,
+      "precision": 1.0,
+      "predicted": 6,
+      "recall": 1.0,
+      "support": 6
+    },
+    "mlir": {
+      "correct": 3,
+      "precision": 1.0,
+      "predicted": 3,
+      "recall": 1.0,
+      "support": 3
+    },
+    "nix": {
+      "correct": 5,
+      "precision": 1.0,
+      "predicted": 5,
+      "recall": 1.0,
+      "support": 5
+    },
+    "objective-c": {
+      "correct": 6,
+      "precision": 1.0,
+      "predicted": 6,
+      "recall": 1.0,
+      "support": 6
+    },
+    "perl": {
+      "correct": 21,
+      "precision": 1.0,
+      "predicted": 21,
+      "recall": 1.0,
+      "support": 21
+    },
+    "php": {
+      "correct": 36,
+      "precision": 1.0,
+      "predicted": 36,
+      "recall": 1.0,
+      "support": 36
+    },
+    "plaintext": {
+      "correct": 55,
+      "precision": 1.0,
+      "predicted": 55,
+      "recall": 1.0,
+      "support": 55
+    },
+    "pli": {
+      "correct": 3,
+      "precision": 1.0,
+      "predicted": 3,
+      "recall": 1.0,
+      "support": 3
+    },
+    "powershell": {
+      "correct": 126,
+      "precision": 1.0,
+      "predicted": 126,
+      "recall": 1.0,
+      "support": 126
+    },
+    "proto": {
+      "correct": 4,
+      "precision": 1.0,
+      "predicted": 4,
+      "recall": 1.0,
+      "support": 4
+    },
+    "python": {
+      "correct": 269,
+      "precision": 1.0,
+      "predicted": 269,
+      "recall": 1.0,
+      "support": 269
+    },
+    "rexx": {
+      "correct": 25,
+      "precision": 1.0,
+      "predicted": 25,
+      "recall": 1.0,
+      "support": 25
+    },
+    "ruby": {
+      "correct": 13,
+      "precision": 1.0,
+      "predicted": 13,
+      "recall": 1.0,
+      "support": 13
+    },
+    "rust": {
+      "correct": 46,
+      "precision": 1.0,
+      "predicted": 46,
+      "recall": 1.0,
+      "support": 46
+    },
+    "scala": {
+      "correct": 7,
+      "precision": 1.0,
+      "predicted": 7,
+      "recall": 1.0,
+      "support": 7
+    },
+    "scheme": {
+      "correct": 5,
+      "precision": 1.0,
+      "predicted": 5,
+      "recall": 1.0,
+      "support": 5
+    },
+    "shell": {
+      "correct": 264,
+      "precision": 1.0,
+      "predicted": 264,
+      "recall": 1.0,
+      "support": 264
+    },
+    "solidity": {
+      "correct": 7,
+      "precision": 1.0,
+      "predicted": 7,
+      "recall": 1.0,
+      "support": 7
+    },
+    "sqlite": {
+      "correct": 76,
+      "precision": 1.0,
+      "predicted": 76,
+      "recall": 1.0,
+      "support": 76
+    },
+    "swift": {
+      "correct": 6,
+      "precision": 1.0,
+      "predicted": 6,
+      "recall": 1.0,
+      "support": 6
+    },
+    "tcl": {
+      "correct": 32,
+      "precision": 1.0,
+      "predicted": 32,
+      "recall": 1.0,
+      "support": 32
+    },
+    "td": {
+      "correct": 4,
+      "precision": 1.0,
+      "predicted": 4,
+      "recall": 1.0,
+      "support": 4
+    },
+    "typescript": {
+      "correct": 29,
+      "precision": 1.0,
+      "predicted": 29,
+      "recall": 1.0,
+      "support": 29
+    },
+    "xml": {
+      "correct": 14,
+      "precision": 1.0,
+      "predicted": 14,
+      "recall": 1.0,
+      "support": 14
+    },
+    "yacc": {
+      "correct": 4,
+      "precision": 1.0,
+      "predicted": 4,
+      "recall": 1.0,
+      "support": 4
+    },
+    "yaml": {
+      "correct": 45,
+      "precision": 1.0,
+      "predicted": 45,
+      "recall": 1.0,
+      "support": 45
+    },
+    "zig": {
+      "correct": 37,
+      "precision": 1.0,
+      "predicted": 37,
+      "recall": 1.0,
+      "support": 37
+    }
+  },
+  "refusals": 1,
+  "scored": 3231,
+  "tier_5_conflicts": 1,
+  "tier_distribution": {
+    "0": 296,
+    "1": 160,
+    "1.5": 221,
+    "2": 2554,
+    "5": 1
+  }
+}

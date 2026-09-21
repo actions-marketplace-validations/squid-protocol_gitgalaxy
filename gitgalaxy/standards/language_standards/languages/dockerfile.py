@@ -43,13 +43,23 @@ DEFINITION: dict[str, Any] = {
     "shebangs": [],
     # UPGRADED: Maps to Family 3 (Pure Hash)
     # Rationale: Docker natively uses '#' exclusively for line-level comments and parser directives.
+    # #2866 contract (corollary 4): the units `func_start` extracts are build
+    # INSTRUCTIONS (RUN/CMD/ENTRYPOINT/HEALTHCHECK, Mode A labels), and no
+    # Dockerfile syntax reaches an instruction by naming it -- a build executes
+    # its instructions in the order they are written, every time. The construct
+    # that IS reached by name -- `FROM base AS builder` / `COPY --from=builder`
+    # -- is the named build stage, which is `class_start`'s unit (#2856), not a
+    # member of the function population this census walks. TOP-LEVEL property,
+    # not a rule: language_lens.py's pre-compiler would turn a string inside
+    # `rules` into re.compile("positional") (the #2806 trap).
+    "invocation_model": "positional",
     "lexical_family": "line_exclusive",
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
         # Control flow executing inside RUN shell blocks. High density indicates complex embedded shell scripts.
         "branch": re.compile(
-            r"\b(?:if|elif|else|fi|case|esac|for|while|do|done|until)\b|&&|\|\|",
+            r"\b(?:if|elif|else|case|for|while|until)\b|&&|\|\|",
             re.I,
         ),
         # 2. args (Parameters / Coupling)
@@ -58,7 +68,9 @@ DEFINITION: dict[str, Any] = {
         # 3. linear (Sequential Boundaries)
         # Structural boundaries defining straight-line execution and environment contexts.
         # CRITICAL GUARDRAIL: EXCLUDES `FROM` and `RUN`/`CMD` to maintain geometric stability.
-        "structural_boundaries": re.compile(r"^[ \t]*(?:WORKDIR|USER|VOLUME|STOPSIGNAL|SHELL|LABEL)\b", re.M | re.I),
+        "structural_boundaries": re.compile(
+            r"^[ \t]*(?:WORKDIR|USER|VOLUME|STOPSIGNAL|SHELL|LABEL)\b|\b(?:fi|esac|done|do)\b", re.M | re.I
+        ),
         # 4. func_start (Executable Logic Anchors)
         # CRITICAL GUARDRAIL: Anchors logic blocks. ONLY executable logic blocks.
         # In Docker, `RUN`, `CMD`, and `ENTRYPOINT` execute logic, generating discrete intermediate image layers.
@@ -104,11 +116,22 @@ DEFINITION: dict[str, Any] = {
         # word chars, so the old pattern could never match the single most catastrophic
         # command a Dockerfile could contain. Pulled out of the shared group, same as the
         # Rule 9 playbook's canonical fix.
-        "high_risk_execution": re.compile(r"\brm[ \t]+-rf[ \t]+/(?![A-Za-z])|\beval\b|\bexec\b", re.M | re.I),
+        # #2878 contract C4: root-only recursive delete, the same form in shell/makefile/yaml.
+        "high_risk_execution": re.compile(
+            r"\brm[ \t]+(?:-[rR][fF]|-[fF][rR])[ \t]+[\"']?/(?![A-Za-z])|\beval\b|\bexec\b", re.M | re.I
+        ),
         # 9. io (I/O & Network Boundaries)
         # Interaction with external networks, copying files from host, or executing package managers.
+        # BUG FIX (#2675): the bare package-manager names matched their own
+        # cleanup subcommands too (`apt-get clean`, `yum clean all`), which
+        # touch no network and no external file -- `cleanup` already owns
+        # those exact phrases. Now requires a non-clean subcommand. The
+        # corpus's probe_cleanup in c.dockerfile (`apt-get clean` + `yum
+        # clean all`) contributed the entire +2 over the planted value.
         "io": re.compile(
-            r"^[ \t]*(?:COPY|ADD)[ \t]+|\b(?:wget|curl|apt-get|apk|yum|dnf|git[ \t]+clone|tar[ \t]+-[cx]f|unzip|pip[ \t]+install|npm[ \t]+install)\b",
+            r"^[ \t]*(?:COPY|ADD)[ \t]+"
+            r"|\b(?:wget|curl|git[ \t]+clone|tar[ \t]+-[cx]f|unzip|pip[ \t]+install|npm[ \t]+install)\b"
+            r"|\b(?:apt-get|apk|yum|dnf)[ \t]+(?!clean\b|cache[ \t]+clean\b)[a-z-]+",
             re.M | re.I,
         ),
         # 10. api (Public Surface Area)
@@ -117,7 +140,11 @@ DEFINITION: dict[str, Any] = {
         # 11. flux (State Mutation)
         # Mutation of state. Setting Environment variables that permanently alter the image layer state.
         "state_mutation": re.compile(
-            r"^[ \t]*ENV[ \t]+[a-zA-Z0-9_]+|export[ \t]+[a-zA-Z0-9_]+[ \t]*=",
+            # #2765 contract: `ENV NAME value` declares a build-time global and is the
+            # `globals` rule's token (count contract corollary 4) -- it is not also a
+            # write. What a Dockerfile writes is the shell payload of a RUN step:
+            # `export X=` / `X=` assignments (the fallback family).
+            r"\bexport[ \t]+[a-zA-Z0-9_]+[ \t]*=",
             re.M | re.I,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
@@ -128,8 +155,9 @@ DEFINITION: dict[str, Any] = {
         ),
         # 13. doc (Structured Documentation)
         # Intent documentation meant for developers or image registries.
+        # #2882 contract C4: doc counts the block, not the author tag -- `LABEL maintainer=`, `org.opencontainers.image.authors=`, `# Author:`/`# Maintainer:` is ownership's alone.
         "doc": re.compile(
-            r"^[ \t]*LABEL[ \t]+(?:maintainer|org\.opencontainers|version|description)=|^[ \t]*#[ \t]*(?:Description|Usage|Author|Maintainer):",
+            r"^[ \t]*LABEL[ \t]+(?:org\.opencontainers\.image\.(?!authors=)|version|description)[\w.]*=|^[ \t]*#[ \t]*(?:Description|Usage):",
             re.M | re.I,
         ),
         # 14. test (Testing & Assertions)
@@ -185,17 +213,20 @@ DEFINITION: dict[str, Any] = {
         # 24. import (Dependency Inclusions)
         # Base images or dependencies pulled from other build stages (`COPY --from=`).
         "import": re.compile(
-            r"^[ \t]*(?:FROM(?:\s+(?:\\\s+)*)(?:--[\w-]+=[^\s]+(?:\s+(?:\\\s+)*))*[a-zA-Z0-9_./:-]+|COPY(?:\s+(?:\\\s+)*)(?:--[\w-]+(?:=[^\s]+)?(?:\s+(?:\\\s+)*))*--from=[a-zA-Z0-9_./:-]+)",
+            # #2875 contract C4: `FROM scratch` names the reserved empty base -- no image
+            # is pulled, nothing is bound (class_start still opens the stage, #2856).
+            r"^[ \t]*(?:FROM(?:\s+(?:\\\s+)*)(?:--[\w-]+=[^\s]+(?:\s+(?:\\\s+)*))*(?!scratch(?![a-zA-Z0-9_./:-]))[a-zA-Z0-9_./:-]+|COPY(?:\s+(?:\\\s+)*)(?:--[\w-]+(?:=[^\s]+)?(?:\s+(?:\\\s+)*))*--from=[a-zA-Z0-9_./:-]+)",
             re.M | re.I,
         ),
         "_dependency_capture": re.compile(
-            r"^[ \t]*(?:FROM(?:\s+(?:\\\s+)*)(?:--[\w-]+=[^\s]+(?:\s+(?:\\\s+)*))*([a-zA-Z0-9_./:-]+)|COPY(?:\s+(?:\\\s+)*)(?:--[\w-]+(?:=[^\s]+)?(?:\s+(?:\\\s+)*))*--from=([a-zA-Z0-9_./:-]+))",
+            r"^[ \t]*(?:FROM(?:\s+(?:\\\s+)*)(?:--[\w-]+=[^\s]+(?:\s+(?:\\\s+)*))*(?!scratch(?![a-zA-Z0-9_./:-]))([a-zA-Z0-9_./:-]+)|COPY(?:\s+(?:\\\s+)*)(?:--[\w-]+(?:=[^\s]+)?(?:\s+(?:\\\s+)*))*--from=([a-zA-Z0-9_./:-]+))",  # #2875 C4
             re.M | re.I,
         ),
         # 25. ownership (Authorship Metadata)
         # Standard metadata tracing image ownership (legacy MAINTAINER or modern LABEL).
+        # #2882 contract: C1 `# Author:`/`# Maintainer:` comment lines join (doc released them, C4)
         "ownership": re.compile(
-            r"^[ \t]*(?:MAINTAINER|LABEL[ \t]+maintainer=|LABEL[ \t]+org\.opencontainers\.image\.authors=)[ \t]*(.*)",
+            r"^[ \t]*(?:MAINTAINER|LABEL[ \t]+maintainer=|LABEL[ \t]+org\.opencontainers\.image\.authors=)[ \t]*(.*)|^[ \t]*(?:#+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.M | re.I,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -273,7 +304,10 @@ DEFINITION: dict[str, Any] = {
         ),
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # Explicitly encapsulating logic in multi-stage builds (`AS builder`). Hides intermediate build layers.
-        "encapsulation": re.compile(r"^[ \t]*FROM[ \t]+[^\n]+[ \t]+AS[ \t]+[a-zA-Z0-9_-]+", re.M | re.I),
+        # #2766: contract-level absence. `FROM ... AS name` declares a build-stage
+        # alias (structure/reuse), not a marker excluding a name from a public
+        # surface; dockerfile has no name-visibility construct.
+        "encapsulation": None,
         # 48. listeners (Event Listeners / Observers)
         # Exposing ports for network consumption. .
         "listeners": re.compile(r"^[ \t]*EXPOSE[ \t]+[0-9]+", re.M | re.I),
@@ -284,6 +318,11 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Dockerfile Specifics) ---
+        # auth_middleware (#3004): contract-level absence. The identity/privilege
+        # construct here is the USER instruction, and it is already owned:
+        # `USER nonroot` is safety's hardening token and `USER root|0` is
+        # safety_bypasses' -- one construct, one owner. No auth surface remains.
+        "auth_middleware": None,
         # CRITICAL GUARDRAIL: all four sensors below MUST carry re.M -- `(?i)` alone
         # anchors `^` to the true start of the whole code_stream string (Python re
         # default), not the start of each line, which silently broke every one of
@@ -305,5 +344,9 @@ DEFINITION: dict[str, Any] = {
             r"|RUN\s+[^\n]*(?:\\\r?\n[^\n]*){0,50}sleep)\b"
         ),
         "ipc_rpc_bridges": re.compile(r"(?im)^(?:EXPOSE|VOLUME|ENTRYPOINT|CMD|STOPSIGNAL)\b"),
+        # system_config_mutation (#3084): contract-level absence. every
+        # instruction mutates the image being built -- the build's own artifact,
+        # not shared infrastructure; a RUN's command text is shell's morphology.
+        "system_config_mutation": None,
     },
 }

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 # Adjust imports to match your architecture
+from gitgalaxy.core.spatial_correlation import weighted_count
 from gitgalaxy.galaxyscope import Orchestrator, _process_file_worker, _worker_state
 
 
@@ -488,6 +489,99 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
         )
 
     # ==============================================================================
+    # TEST 8.6: THE CONTEXTUAL BASELINE FIX READS A CASE-FOLDED EDGE (#2871)
+    # ==============================================================================
+    @patch("gitgalaxy.galaxyscope.logger")
+    def test_resolver_case_folds_for_case_insensitive_import_languages(self, mock_logger):
+        """
+        Regression for #2871 (#2540's residue). Haskell module names must be
+        capitalised, so `import B` names b.hs. #2540 taught network_risk_sensor's
+        graph that (the one pagerank and the recorded `popularity` column read),
+        but THIS resolver -- the one the Contextual Baseline Fix is gated on --
+        kept an exact-case fast path plus a stem fallback whose `len(stem) >= 3`
+        guard rejects `b`. So b.hs recorded popularity 1 and pagerank identical to
+        java's while its orphans were never wiped: keyword-rosetta haskell a/b/c
+        read unreferenced_by_name 3 and risk_tech_debt 97 against a stratum
+        median of 30, with every visible input on the median.
+
+        The folded retry is scoped exactly like the sensor's Stage 1c: only
+        after the exact-case forms miss, only for a case-insensitive-resolution
+        language, only onto that language's own files.
+        """
+        scope = Orchestrator(".", self.mock_config)
+        scope.ram_cache = {
+            # haskell: `import B` must bind b.hs even though the module name is
+            # one capital letter (the fallback's length guard rejects it).
+            "hs/a.hs": {"lang_id": "haskell", "raw_imports": {"import B"}},
+            "hs/b.hs": {"lang_id": "haskell", "raw_imports": set()},
+            # go is case-sensitive: `import "B"` must NOT fold onto b.go.
+            "go/a.go": {"lang_id": "go", "raw_imports": {"B"}},
+            "go/b.go": {"lang_id": "go", "raw_imports": set()},
+            # a haskell import must not fold across languages onto a same-named
+            # file of another language. One letter, so the long-standing
+            # language-agnostic stem fallback (`len(stem) >= 3`) cannot reach
+            # it either and only the folded path is under test.
+            "hs/c.hs": {"lang_id": "haskell", "raw_imports": {"import Q"}},
+            "py/q.py": {"lang_id": "python", "raw_imports": set()},
+        }
+        scope.stem_map = {k: k for k in scope.ram_cache.keys()}
+
+        scope._resolve_dependency_graph()
+
+        self.assertEqual(scope.popularity_scores["hs/b.hs"], 1, "haskell `import B` must resolve to b.hs case-folded")
+        self.assertEqual(scope.popularity_scores["go/b.go"], 0, "a case-sensitive language must not gain folding")
+        self.assertEqual(scope.popularity_scores["py/q.py"], 0, "folding never invents a cross-language edge")
+
+    # ==============================================================================
+    # TEST 8.7: FAST PATH 1 MUST NOT CROSS LANGUAGES ON A BARE IMPORT (#2988)
+    # ==============================================================================
+    @patch("gitgalaxy.galaxyscope.logger")
+    def test_resolver_rejects_cross_language_extensionless_import(self, mock_logger):
+        """
+        Regression for #2988. A bare `import base64` in a Python file must NOT
+        credit curl's C `lib/curlx/base64.c` popularity. The extensionless import
+        token 'base64' exact-matches the extensionless suffix key "base64", which
+        lumps every same-stemmed file across languages; FAST PATH 1 (unlike the
+        stem fallback) had no language guard, so Python's stdlib base64 credited
+        the C file. That spurious edge fired the Contextual Baseline Fix and the
+        api_exposure network multiplier, so `state_unreferenced` / `risk_api_exposure`
+        / `risk_tech_debt` on base64.c differed between two commits with a
+        byte-identical blob and an identical import graph -- read as engine
+        non-determinism. The guard uses the IMPORTER's extension because the token
+        itself carries none (bare module imports).
+        """
+        scope = Orchestrator(".", self.mock_config)
+        scope.ram_cache = {
+            # Python test file importing the STDLIB base64 module (no extension).
+            "tests/certs.py": {"lang_id": "python", "raw_imports": {"import base64"}},
+            # curl's C module: nothing #includes a .c implementation file.
+            "lib/curlx/base64.c": {"lang_id": "c", "raw_imports": set()},
+            "lib/curlx/base64.h": {"lang_id": "c", "raw_imports": set()},
+            # a legitimate SAME-language bare import that must still resolve.
+            "app/main.py": {"lang_id": "python", "raw_imports": {"import helper"}},
+            "app/helper.py": {"lang_id": "python", "raw_imports": set()},
+        }
+        scope.stem_map = {k: k for k in scope.ram_cache.keys()}
+
+        scope._resolve_dependency_graph()
+
+        self.assertEqual(
+            scope.popularity_scores["lib/curlx/base64.c"],
+            0,
+            "Python `import base64` must not credit curl's C base64.c",
+        )
+        self.assertEqual(
+            scope.popularity_scores["lib/curlx/base64.h"],
+            0,
+            "Python `import base64` must not credit a C header either",
+        )
+        self.assertEqual(
+            scope.popularity_scores["app/helper.py"],
+            1,
+            "a legitimate same-language bare import must still resolve",
+        )
+
+    # ==============================================================================
     # TEST 9: INCREMENTAL DELTA SHIFT (State Rehydration)
     # ==============================================================================
     @patch("gitgalaxy.galaxyscope.Orchestrator._extract_features_parallel")
@@ -550,9 +644,10 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
         scope = Orchestrator(".", self.mock_config)
         scope.MICRO_MASS_GRACE_LIMIT = 5  # Lower for faster testing
 
-        # Mock Git returning 10 tiny files in the same directory
+        # Mock Git returning 10 tiny files in the same directory.
+        # #2555: census now consumes `git ls-files -z` (NUL-delimited) output.
         fake_files = [f"src/assets/icon_{i}.svg" for i in range(10)]
-        mock_git.return_value = "\n".join(fake_files)
+        mock_git.return_value = "\0".join(fake_files) + "\0"
 
         # Mock aperture returning: is_valid=True, size=10 bytes (under MICRO_MASS_BYTES)
         mock_aperture.return_value = (True, 10, "Passed")
@@ -594,9 +689,8 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
     # ==============================================================================
     # TEST 12: ZERO-DEPENDENCY MODE SURVIVAL
     # ==============================================================================
-    @patch("gitgalaxy.galaxyscope.HAS_NETWORKX", False)
     @patch("gitgalaxy.galaxyscope.HAS_TIKTOKEN", False)
-    @patch("gitgalaxy.galaxyscope.ML_AVAILABLE", False)
+    @patch("gitgalaxy.galaxyscope.HAS_PANDAS", False)
     @patch("gitgalaxy.galaxyscope.Orchestrator._build_file_census")
     @patch("gitgalaxy.galaxyscope.Orchestrator._extract_features_parallel")
     @patch("gitgalaxy.galaxyscope.Orchestrator._resolve_dependency_graph")
@@ -607,8 +701,8 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
     def test_zero_dependency_mode_execution(self, mock_fw, mock_xr, mock_api, mock_calc, mock_res, mock_ext, mock_cen):
         """
         DEVIOUS EDGE CASE: Running on a stripped-down Alpine Linux container without
-        Pandas, NetworkX, or Tiktoken. The pipeline must disable the ML and network
-        modules without throwing ImportError exceptions.
+        Pandas or Tiktoken. The pipeline must disable the ML module without
+        throwing ImportError exceptions.
         """
         scope = Orchestrator(".", self.mock_config)
         scope.parsed_files = [{"path": "dummy.py", "telemetry": {}}]
@@ -698,6 +792,123 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
             result["data"]["equations"]["sec_high_risk_execution"], 1, "Worker dropped security equations!"
         )
 
+    # ==============================================================================
+    # TEST 13.1: SECURITY LENS ON INERT FORMATS (#2978)
+    # ==============================================================================
+    @patch("gitgalaxy.galaxyscope.ApertureFilter")
+    @patch("gitgalaxy.galaxyscope.Prism")
+    @patch("gitgalaxy.galaxyscope.LanguageDetector")
+    @patch("gitgalaxy.galaxyscope.SecurityLens")
+    @patch("gitgalaxy.galaxyscope.Path.is_file", return_value=True)
+    def test_security_lens_runs_on_inert_formats_by_default(
+        self, mock_is_file, MockSecurity, MockDetector, MockPrism, MockAperture
+    ):
+        """
+        #2978: a hardcoded secret in a YAML/JSON/markdown/csv/plaintext config file
+        must be visible to sec_hardcoded_secrets -- Phase 5.5 no longer skips
+        SecurityLens.scan_content() for the 5 formats galaxyscope classifies inert.
+        """
+        import logging
+        from unittest.mock import mock_open
+
+        from gitgalaxy.galaxyscope import _init_worker, _process_file_worker
+
+        mock_aperture_inst = MockAperture.return_value
+        mock_aperture_inst.evaluate_path_integrity.return_value = (True, 1024, "Passed")
+        mock_aperture_inst.is_in_scope.return_value = {"is_in_scope": True, "reason": None}
+
+        mock_prism_inst = MockPrism.return_value
+        mock_prism_inst.split_streams.return_value = {
+            "code_stream": 'api_key: "R0SETTA-PLANT-SECRET-2026"',
+            "comment_stream": "",
+            "coding_loc": 1,
+            "doc_loc": 0,
+        }
+
+        mock_sec_inst = MockSecurity.return_value
+        mock_sec_inst.scan_content.return_value = {
+            "counts": {"hardcoded_secrets": 1},
+            "snippets": {"hardcoded_secrets": ['api_key: "R0SETTA-PLANT-SECRET-2026"']},
+            "positions": {"hardcoded_secrets": [1]},
+        }
+
+        for lang_id in ("yaml", "json", "markdown", "csv", "plaintext"):
+            with self.subTest(lang_id=lang_id):
+                mock_sec_inst.scan_content.reset_mock()
+                MockDetector.return_value.inspect.return_value = {
+                    "lang_id": lang_id,
+                    "intensity": 0.99,
+                    "lock_tier": 1,
+                    "source_proof": "Test",
+                }
+                self.mock_config["LANGUAGE_DEFINITIONS"] = {}  # inert langs need no lang_defs entry
+                _init_worker(
+                    root_str=".",
+                    config=self.mock_config,
+                    ext_tally={f".{lang_id}": 1},
+                    log_level=logging.INFO,
+                    git_tracked={f"config.{lang_id}"},
+                    census=set(),
+                )
+                with patch("builtins.open", mock_open(read_data='api_key: "R0SETTA-PLANT-SECRET-2026"')):
+                    result = _process_file_worker(f"config.{lang_id}")
+
+                mock_sec_inst.scan_content.assert_called_once()
+                self.assertEqual(
+                    result["data"]["equations"]["sec_hardcoded_secrets"],
+                    1,
+                    f"Security lens skipped for inert format '{lang_id}'!",
+                )
+
+    @patch("gitgalaxy.galaxyscope.ApertureFilter")
+    @patch("gitgalaxy.galaxyscope.Prism")
+    @patch("gitgalaxy.galaxyscope.LanguageDetector")
+    @patch("gitgalaxy.galaxyscope.SecurityLens")
+    @patch("gitgalaxy.galaxyscope.Path.is_file", return_value=True)
+    def test_security_lens_inert_formats_can_be_opted_out(
+        self, mock_is_file, MockSecurity, MockDetector, MockPrism, MockAperture
+    ):
+        """
+        #2978: SECURITY_SCAN_INERT_FORMATS=False must restore the old skip
+        behavior for repos that find the lens too noisy on docs/config formats.
+        """
+        import logging
+        from unittest.mock import mock_open
+
+        from gitgalaxy.galaxyscope import _init_worker, _process_file_worker
+
+        mock_aperture_inst = MockAperture.return_value
+        mock_aperture_inst.evaluate_path_integrity.return_value = (True, 1024, "Passed")
+        mock_aperture_inst.is_in_scope.return_value = {"is_in_scope": True, "reason": None}
+
+        MockDetector.return_value.inspect.return_value = {
+            "lang_id": "yaml",
+            "intensity": 0.99,
+            "lock_tier": 1,
+            "source_proof": "Test",
+        }
+        MockPrism.return_value.split_streams.return_value = {
+            "code_stream": 'api_key: "R0SETTA-PLANT-SECRET-2026"',
+            "comment_stream": "",
+            "coding_loc": 1,
+            "doc_loc": 0,
+        }
+
+        self.mock_config["LANGUAGE_DEFINITIONS"] = {}
+        self.mock_config["SECURITY_SCAN_INERT_FORMATS"] = False
+        _init_worker(
+            root_str=".",
+            config=self.mock_config,
+            ext_tally={".yaml": 1},
+            log_level=logging.INFO,
+            git_tracked={"config.yaml"},
+            census=set(),
+        )
+        with patch("builtins.open", mock_open(read_data='api_key: "R0SETTA-PLANT-SECRET-2026"')):
+            _process_file_worker("config.yaml")
+
+        MockSecurity.return_value.scan_content.assert_not_called()
+
     @patch("gitgalaxy.galaxyscope.ApertureFilter")
     @patch("gitgalaxy.galaxyscope.Prism")
     @patch("gitgalaxy.galaxyscope.LanguageDetector")
@@ -762,7 +973,8 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
         self.assertFalse(sec_content.startswith("﻿"), "BOM leaked into the security scan!")
 
     # ==============================================================================
-    # TEST 13.5: THE DOUBLE CORROBORATION (Additive sec_ Merge, #344)
+    # TEST 13.5: security_lens findings are recorded under their sec_ signal
+    # (originally the #344 double-corroboration test; detector-side taint removed in #3101)
     # ==============================================================================
     @patch("gitgalaxy.galaxyscope.ApertureFilter")
     @patch("gitgalaxy.galaxyscope.Prism")
@@ -773,15 +985,12 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
         self, mock_is_file, MockSecurity, MockDetector, MockPrism, MockAperture
     ):
         """
-        Regression test for #344: detector.py's own in-segment proximity check
-        (block 1, "Taint Tracking") and security_lens.py's independent variable-echo
-        check both contribute to the same "sec_tainted_injection" signal. Before the
-        fix, galaxyscope.py's Phase 5.5 merge used a plain assignment, so whichever
-        of the two ran second silently discarded the other's finding entirely.
-        This drives a real detector.py contribution (via a genuine
-        high_risk_execution/io proximity hit) together with a mocked
-        security_lens.py contribution, and asserts the final count is their SUM,
-        not just security_lens.py's value alone.
+        Originally a #344 regression test for the additive merge of two
+        sec_tainted_injection contributors (detector.py's block-1 taint proximity
+        check + security_lens.py's variable-echo check). The taint tracker was removed
+        in #3101, so only the Phase 5.5 sec_-prefix merge path remains under test here:
+        a security_lens.py count is recorded under its "sec_" signal and survives into
+        the equations, weighted at its raw value (no proximity pair).
         """
         import logging
         from unittest.mock import mock_open
@@ -813,9 +1022,9 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
         mock_sec_inst = MockSecurity.return_value
         mock_sec_inst.scan_content.return_value = {"counts": {"tainted_injection": 3}, "snippets": {}}
 
-        # Real per-language rules so detector.py's own block 1 correlation fires for
-        # real: "eval(" is high_risk_execution, "input(" is io, well within the
-        # 250-char proximity radius -- this should corroborate to exactly 1 hit.
+        # Real per-language rules ("eval(" -> high_risk_execution, "input(" -> io). The
+        # detector-side taint corroboration these used to trigger was removed in #3101;
+        # they are retained here only to exercise a realistic worker parse.
         self.mock_config["LANGUAGE_DEFINITIONS"] = {
             "python": {
                 "extensions": [".py"],
@@ -838,12 +1047,20 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
             result = _process_file_worker("src/main.py")
 
         self.assertEqual(result["status"], "success", "Worker failed to successfully parse the file!")
+        # #3101: detector.py's taint corroboration and its amplified_rce tally were removed
+        # with the taint tracker, so sec_tainted_injection is now just security_lens.py's
+        # (here mocked) finding (3), recorded raw and weighted the same (no proximity pair).
         self.assertEqual(
             result["data"]["equations"]["sec_tainted_injection"],
-            4,
-            "Additive merge regressed: detector.py's own corroboration (1) and "
-            "security_lens.py's independent finding (3) must both survive (1 + 3 = 4), "
-            "not just whichever system ran last.",
+            3,
+            "security_lens.py's finding (3) must survive as the recorded sec_ count.",
+        )
+        self.assertEqual(
+            weighted_count(
+                result["data"]["equations"], result["data"]["mitigation_telemetry"], "sec_tainted_injection"
+            ),
+            3,
+            "sec_tainted_injection has no proximity pair after #3101, so it is its raw count.",
         )
 
     # ==============================================================================
@@ -1082,7 +1299,9 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
 
         self.assertEqual(result["status"], "success", "Worker failed to successfully parse the file!")
         self.assertEqual(result["data"]["equations"].get("sec_amplified_sql_injection", 0), 1)
-        self.assertEqual(result["data"]["mitigation_telemetry"].get("amplified_sql_injection", 0), 1)
+        # #3018: the telemetry key names the shape (api near a db sink), not a verdict.
+        self.assertEqual(result["data"]["mitigation_telemetry"].get("api_near_db_sink", 0), 1)
+        self.assertNotIn("amplified_sql_injection", result["data"]["mitigation_telemetry"])
 
     # ==============================================================================
     # TEST 14: THE MEMORY HOLE (SARIF Sanitization & Inline Suppressions)
@@ -1190,12 +1409,14 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
         scope.model_auditor.audit_repository.return_value = scope.parsed_files
         scope.processor = MagicMock()
         scope.processor.summarize_galaxy_metrics.return_value = {
-            "repo_macro_species": {"z_score": 3.7},
+            "repo_macro_species": {"name": "Typed Library", "z_score": 3.7},
         }
 
         scope.execute_pipeline("fake.json")
 
         self.assertEqual(scope.parsed_files[0]["telemetry"]["repo_z_score"], 3.7)
+        # #1159: the name travels with the z, or file_data.ecosystem_baseline stays "Unknown".
+        self.assertEqual(scope.parsed_files[0]["telemetry"]["repo_macro_species"], "Typed Library")
 
     # ==============================================================================
     # TEST 14.6: THE TYPOSQUAT HITS BACKFILL (#376)
@@ -1308,15 +1529,18 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
         test_args = ["galaxyscope", "/fake/chameleon_project"]
 
         # Inject our fake project into the global overrides
-        with patch.dict(
-            "gitgalaxy.galaxyscope.PROJECT_OVERRIDES",
-            {
-                "chameleon_project": {
-                    "_shield_": {"exclude_dirs": ["weird_build_dir"]},
-                    "python": {"extensions": [".chameleon"]},
-                }
-            },
-        ), patch.object(sys, "argv", test_args):
+        with (
+            patch.dict(
+                "gitgalaxy.galaxyscope.PROJECT_OVERRIDES",
+                {
+                    "chameleon_project": {
+                        "_shield_": {"exclude_dirs": ["weird_build_dir"]},
+                        "python": {"extensions": [".chameleon"]},
+                    }
+                },
+            ),
+            patch.object(sys, "argv", test_args),
+        ):
             # Force the mock to simulate a clean run
             mock_orchestrator.return_value.policy_failed = False
             main()
@@ -1376,7 +1600,9 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
         from gitgalaxy.standards.analysis_lens import RECORDING_SCHEMAS
 
         risk_schema = RECORDING_SCHEMAS.get("RISK_SCHEMA", [])
-        self.assertEqual(len(leak_node["risk_vector"]), len(risk_schema), "risk_vector length drifted from RISK_SCHEMA!")
+        self.assertEqual(
+            len(leak_node["risk_vector"]), len(risk_schema), "risk_vector length drifted from RISK_SCHEMA!"
+        )
         self.assertEqual(
             leak_node["risk_vector"][risk_schema.index("secrets_risk")],
             100.0,
@@ -1385,6 +1611,255 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
 
         self.assertIsNotNone(model_node, "Tensor Scanner failed to force model onto the map.")
         self.assertEqual(model_node["telemetry"]["domain_context"]["architecture"], "Llama")
+
+    # ==============================================================================
+    # TEST 17b: #2536 -- RAW PRE-ADJUSTMENT SNAPSHOT (Contextual Baseline Fix)
+    # ==============================================================================
+    def test_contextual_baseline_fix_snapshots_raw_signals(self):
+        """
+        COVERAGE TARGET: The Contextual Baseline Fix block in _calculate_risk_exposures.
+        #2536: the fix rewrites api += unreferenced_by_name / unreferenced_by_name = 0 for any
+        imported file (popularity > 0) BEFORE recording, making the raw extraction
+        counts unrecoverable. meta["raw_pre_adjustment"] must snapshot the raw
+        values first -- unconditionally, so untouched files carry raw == adjusted.
+        """
+        from gitgalaxy.standards.analysis_lens import RECORDING_SCHEMAS
+
+        scope = Orchestrator(".", self.mock_config)
+
+        scope.ram_cache = {
+            # Imported by the ecosystem: 3 orphans get converted into API exposure.
+            "src/imported_lib.py": {
+                "path": "src/imported_lib.py",
+                "coding_loc": 100,
+                "lang_id": "python",
+                "equations": {"api": 2, "unreferenced_by_name": 3},
+                "functions": [{"name": "helper", "usage_status": 1}],
+            },
+            # Never imported: the adjustment must not touch it.
+            "src/island.py": {
+                "path": "src/island.py",
+                "coding_loc": 50,
+                "lang_id": "python",
+                "equations": {"api": 1, "unreferenced_by_name": 4},
+            },
+        }
+        scope.popularity_scores = {"src/imported_lib.py": 2, "src/island.py": 0}
+
+        scope._calculate_risk_exposures()
+
+        by_path = {f.get("path"): f for f in scope.parsed_files}
+        lib = by_path["src/imported_lib.py"]
+        island = by_path["src/island.py"]
+
+        # 1. Adjusted behavior is byte-identical to before: orphans folded into api.
+        self.assertEqual(lib["equations"]["api"], 5, "Contextual Baseline Fix no longer folds orphans into api!")
+        self.assertEqual(
+            lib["equations"]["unreferenced_by_name"], 0, "Contextual Baseline Fix no longer wipes orphans!"
+        )
+
+        # 2. The raw pre-adjustment values survive on the snapshot, and the
+        #    invariant adjusted api == raw_api + raw_unreferenced_by_name holds.
+        self.assertEqual(lib["raw_pre_adjustment"], {"api": 2, "unreferenced_by_name": 3})
+        self.assertEqual(
+            lib["equations"]["api"],
+            lib["raw_pre_adjustment"]["api"] + lib["raw_pre_adjustment"]["unreferenced_by_name"],
+            "adjusted api must equal raw api + raw unreferenced_by_name",
+        )
+
+        # 3. The adjusted values are what flow into the recorder's hit_vector.
+        signal_schema = RECORDING_SCHEMAS.get("SIGNAL_SCHEMA", [])
+        if "api" in signal_schema and "unreferenced_by_name" in signal_schema:
+            self.assertEqual(lib["hit_vector"][signal_schema.index("api")], 5)
+            self.assertEqual(lib["hit_vector"][signal_schema.index("unreferenced_by_name")], 0)
+
+        # 4. Untouched file: snapshot still present, raw == adjusted.
+        self.assertEqual(island["raw_pre_adjustment"], {"api": 1, "unreferenced_by_name": 4})
+        self.assertEqual(island["equations"]["api"], 1)
+        self.assertEqual(island["equations"]["unreferenced_by_name"], 4)
+
+    # ==============================================================================
+    # TEST 17c: #2731 -- THE CONTEXTUAL BASELINE FIX CREDITS ONLY NEW SURFACE
+    # ==============================================================================
+    def test_contextual_baseline_fix_skips_already_declared_orphans(self):
+        """
+        #2731: a function that is both declared public and uncalled used to be
+        counted twice by the Contextual Baseline Fix -- once by the language's
+        own api rule at its declaration, once as a converted orphan (go: three
+        exported, uncalled functions recorded api 6). Only the orphans the api
+        rule did NOT already count are new public surface.
+
+        detector.py supplies the overlap as meta["api_declared_orphans"]; the
+        conversion has to subtract it, and has to stay clamped -- the two numbers
+        are counted in different passes over the file.
+        """
+        scope = Orchestrator(".", self.mock_config)
+
+        scope.ram_cache = {
+            # go/a.go's shape: 3 exported functions, none called in-file, all 3
+            # already counted by the api rule. Nothing new to credit.
+            "src/all_exported.go": {
+                "path": "src/all_exported.go",
+                "coding_loc": 100,
+                "lang_id": "go",
+                "equations": {"api": 3, "unreferenced_by_name": 3},
+                "api_declared_orphans": 3,
+            },
+            # Mixed: 3 orphans, 1 of them already public -> credit the other 2.
+            "src/mixed.go": {
+                "path": "src/mixed.go",
+                "coding_loc": 100,
+                "lang_id": "go",
+                "equations": {"api": 1, "unreferenced_by_name": 3},
+                "api_declared_orphans": 1,
+            },
+            # No overlap reported (the pre-#2731 shape, and every language whose
+            # api rule marks something other than function declarations): the
+            # original conversion is unchanged.
+            "src/no_overlap.py": {
+                "path": "src/no_overlap.py",
+                "coding_loc": 100,
+                "lang_id": "python",
+                "equations": {"api": 2, "unreferenced_by_name": 3},
+            },
+            # Defensive: an overlap larger than the orphan count must not
+            # subtract public surface the api rule genuinely measured.
+            "src/overclaimed.go": {
+                "path": "src/overclaimed.go",
+                "coding_loc": 100,
+                "lang_id": "go",
+                "equations": {"api": 4, "unreferenced_by_name": 2},
+                "api_declared_orphans": 5,
+            },
+        }
+        scope.popularity_scores = dict.fromkeys(scope.ram_cache, 2)
+
+        scope._calculate_risk_exposures()
+        by_path = {f.get("path"): f for f in scope.parsed_files}
+
+        self.assertEqual(
+            by_path["src/all_exported.go"]["equations"]["api"],
+            3,
+            "3 exported, uncalled functions must record 3 units of public surface, not 6!",
+        )
+        self.assertEqual(
+            by_path["src/mixed.go"]["equations"]["api"], 3, "only the un-declared orphans are new surface!"
+        )
+        self.assertEqual(
+            by_path["src/no_overlap.py"]["equations"]["api"],
+            5,
+            "a file with no reported overlap must convert as before!",
+        )
+        self.assertEqual(
+            by_path["src/overclaimed.go"]["equations"]["api"],
+            4,
+            "the overlap subtraction is clamped to the orphan count!",
+        )
+
+        # The debt wipe is unconditional either way: the file is imported, so
+        # none of its orphans are dead weight -- an already-declared orphan is
+        # surface the api rule had counted already, not debt. #2536's raw
+        # snapshot still carries the pre-adjustment counts.
+        for path, raw_orphans in (
+            ("src/all_exported.go", 3),
+            ("src/mixed.go", 3),
+            ("src/no_overlap.py", 3),
+            ("src/overclaimed.go", 2),
+        ):
+            self.assertEqual(
+                by_path[path]["equations"]["unreferenced_by_name"], 0, f"{path}: imported file kept its orphan debt!"
+            )
+            self.assertEqual(
+                by_path[path]["raw_pre_adjustment"]["unreferenced_by_name"],
+                raw_orphans,
+                f"{path}: #2536's raw snapshot must still hold the pre-adjustment orphan count",
+            )
+
+    # ==============================================================================
+    # TEST 17d: #2904 -- TIER-3 EXTERNAL-ENTRY-POINT RESCUE (makefile .PHONY)
+    # ==============================================================================
+    def test_contextual_baseline_fix_tier3_external_entry_points(self):
+        """
+        #2904: a makefile is never imported (popularity is structurally 0), so the
+        tier-2 fix can never reach it and every `.PHONY:` entry point falls through
+        to tech debt. A language that opts in via `export_visibility:
+        external_entry_points` gets its DECLARED entry-point orphans
+        (`api_declared_orphans`) cleared from the census -- while a genuinely
+        internal, UNdeclared orphan stays real dead weight, and the raw census
+        survives in `raw_pre_adjustment`. `api` is NOT re-credited: a declared
+        entry point's declaration line is already an api-rule hit.
+        """
+        scope = Orchestrator(".", self.mock_config)
+
+        scope.ram_cache = {
+            # bootos/Makefile's real shape: 3 orphans (all, clean, runqemu), all 3
+            # declared external entry points -> census clears to 0, api unchanged.
+            "asm/Makefile": {
+                "path": "asm/Makefile",
+                "coding_loc": 18,
+                "lang_id": "makefile",
+                "equations": {"api": 5, "unreferenced_by_name": 3},
+                "api_declared_orphans": 3,
+                "exports_are_external_entry_points": True,
+                "functions": [
+                    {"name": "all", "usage_status": 1, "is_public": True},
+                    {"name": "clean", "usage_status": 1, "is_public": True},
+                    {"name": "runqemu", "usage_status": 1, "is_public": True},
+                ],
+            },
+            # Mixed: 2 orphans, only 1 declared. The undeclared internal orphan
+            # (is_public False) must stay dead weight.
+            "asm/Internal.mk": {
+                "path": "asm/Internal.mk",
+                "coding_loc": 9,
+                "lang_id": "makefile",
+                "equations": {"api": 3, "unreferenced_by_name": 2},
+                "api_declared_orphans": 1,
+                "exports_are_external_entry_points": True,
+                "functions": [
+                    {"name": "all", "usage_status": 1, "is_public": True},
+                    {"name": "_secret", "usage_status": 1, "is_public": False},
+                ],
+            },
+            # A language that did NOT opt in: unchanged, orphans stay as debt even
+            # though it too is never imported (popularity 0).
+            "src/lib.py": {
+                "path": "src/lib.py",
+                "coding_loc": 40,
+                "lang_id": "python",
+                "equations": {"api": 1, "unreferenced_by_name": 2},
+                "api_declared_orphans": 2,
+                "functions": [{"name": "helper", "usage_status": 1, "is_public": True}],
+            },
+        }
+        scope.stem_map = {k: k for k in scope.ram_cache}
+        scope.popularity_scores = dict.fromkeys(scope.ram_cache, 0)  # nothing is imported
+
+        scope._calculate_risk_exposures()
+        by_path = {f.get("path"): f for f in scope.parsed_files}
+
+        # 1. All orphans declared: census cleared, api NOT re-credited, functions healed.
+        boot = by_path["asm/Makefile"]
+        self.assertEqual(boot["equations"]["unreferenced_by_name"], 0, "declared .PHONY orphans stayed as debt!")
+        self.assertEqual(
+            boot["equations"]["api"], 5, "tier-3 must not re-credit api (declaration is already an api hit)!"
+        )
+        self.assertEqual(boot["raw_pre_adjustment"], {"api": 5, "unreferenced_by_name": 3})
+        self.assertTrue(all(f["usage_status"] == 0 for f in boot["functions"]), "declared entry points not healed!")
+
+        # 2. Only the declared orphan is cleared; the internal one stays dead weight.
+        internal = by_path["asm/Internal.mk"]
+        self.assertEqual(
+            internal["equations"]["unreferenced_by_name"], 1, "undeclared internal orphan wrongly exempted!"
+        )
+        healed = {f["name"]: f["usage_status"] for f in internal["functions"]}
+        self.assertEqual(healed["all"], 0, "declared entry point not healed!")
+        self.assertEqual(healed["_secret"], 1, "internal undeclared orphan wrongly healed!")
+
+        # 3. A non-opted-in language is untouched, popularity 0 or not.
+        lib = by_path["src/lib.py"]
+        self.assertEqual(lib["equations"]["unreferenced_by_name"], 2, "a non-opted-in language must keep its census!")
+        self.assertEqual(lib["equations"]["api"], 1)
 
     # ==============================================================================
     # TEST 18: WORKER I/O ERRORS & BINARY THREAT ESCALATION
@@ -1561,6 +2036,64 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
         mock_sarif.assert_called_once()
 
     # ==============================================================================
+    # TEST 20b: AI GUARDRAILS SKIP FLAG (#1178)
+    # ==============================================================================
+    def _run_pipeline_with_guardrail_spies(self, config):
+        """Runs execute_pipeline with the TEST 20 phase mocks plus spies on the
+        two Phase 5 sensor classes; returns the (firewall, sensor) class mocks."""
+        scope = Orchestrator(".", config)
+
+        scope.ram_cache = {}
+        scope.stem_map = {}
+        scope.network_sensor = MagicMock()
+        scope.network_sensor.build_dependency_graph.return_value = ([], {})
+        scope.processor = MagicMock()
+        scope.processor.summarize_galaxy_metrics.return_value = {}
+        scope.auditor = MagicMock()
+        scope.auditor.audit.return_value = ([], [])
+        scope.model_auditor = MagicMock()
+        scope.model_auditor.audit_repository.return_value = []
+        scope.gpu_recorder = MagicMock()
+
+        with (
+            patch("gitgalaxy.galaxyscope.DevAgentFirewall") as mock_firewall,
+            patch("gitgalaxy.galaxyscope.AIAppSecSensor") as mock_sensor,
+            patch("gitgalaxy.recorders.sarif_recorder.SarifRecorder.generate_report"),
+            patch("gitgalaxy.galaxyscope.run_api_audit", return_value={}),
+            patch("gitgalaxy.galaxyscope.run_xray_audit", return_value={}),
+            patch("gitgalaxy.galaxyscope.run_firewall_audit", return_value={}),
+        ):
+            mock_firewall.return_value.evaluate_ecosystem.side_effect = lambda files: files
+            mock_sensor.return_value.hunt_threats.side_effect = lambda files: files
+            scope.execute_pipeline("test_output.json")
+
+        return mock_firewall, mock_sensor
+
+    def test_ai_guardrails_off_by_default(self):
+        """gitgalaxy#1178: Phase 5 is opt-in -- without AI_GUARDRAILS the
+        pipeline must bypass it entirely (neither sensor constructed) while
+        still completing."""
+        config = self.mock_config.copy()
+        config["SARIF_ONLY"] = True  # narrow the export routing, as in TEST 20
+
+        mock_firewall, mock_sensor = self._run_pipeline_with_guardrail_spies(config)
+
+        mock_firewall.assert_not_called()
+        mock_sensor.assert_not_called()
+
+    def test_ai_guardrails_run_when_enabled(self):
+        """gitgalaxy#1178: AI_GUARDRAILS=True (--ai-guardrails) must run both
+        Phase 5 sensors."""
+        config = self.mock_config.copy()
+        config["SARIF_ONLY"] = True
+        config["AI_GUARDRAILS"] = True
+
+        mock_firewall, mock_sensor = self._run_pipeline_with_guardrail_spies(config)
+
+        mock_firewall.return_value.evaluate_ecosystem.assert_called_once()
+        mock_sensor.return_value.hunt_threats.assert_called_once()
+
+    # ==============================================================================
     # TEST 21: GIT METADATA FALLBACKS
     # ==============================================================================
     @patch("subprocess.check_output")
@@ -1610,13 +2143,25 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
 
         # Safely mock the state rehydrator into sys.modules to avoid ImportError/AttributeError
         mock_rehydrator_cls = MagicMock()
-        mock_rehydrator_cls.return_value.load_latest_state.return_value = {
+        mock_rehydrator_cls.return_value.load_state.return_value = {
             "commit_hash": "old_hash",
             "ram_cache": {"src/a.py": {}},
         }
         mock_module = MagicMock()
         mock_module.StateRehydrator = mock_rehydrator_cls
 
+        # #3200: these entries used to be injected and never restored, so EVERY
+        # later test in the session that imported StateRehydrator got a MagicMock
+        # whose load_state returns `{"commit_hash": "old", "ram_cache": {}}`.
+        # That is a silent, action-at-a-distance failure -- a rehydration test
+        # elsewhere passes alone and fails in the full suite with an empty cache
+        # and no traceback pointing here. Restore what was there.
+        for _mod in ("gitgalaxy.state_rehydrator", "gitgalaxy.core.state_rehydrator"):
+            self.addCleanup(
+                lambda name=_mod, prev=sys.modules.get(_mod): (
+                    sys.modules.__setitem__(name, prev) if prev is not None else sys.modules.pop(name, None)
+                )
+            )
         # Inject into sys.modules to ensure any underlying import passes smoothly
         sys.modules["gitgalaxy.state_rehydrator"] = mock_module
         sys.modules["gitgalaxy.core.state_rehydrator"] = mock_module
@@ -1724,13 +2269,25 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
         mock_rehydrator_cls = MagicMock()
         mock_module = MagicMock()
         mock_module.StateRehydrator = mock_rehydrator_cls
+        # #3200: these entries used to be injected and never restored, so EVERY
+        # later test in the session that imported StateRehydrator got a MagicMock
+        # whose load_state returns `{"commit_hash": "old", "ram_cache": {}}`.
+        # That is a silent, action-at-a-distance failure -- a rehydration test
+        # elsewhere passes alone and fails in the full suite with an empty cache
+        # and no traceback pointing here. Restore what was there.
+        for _mod in ("gitgalaxy.state_rehydrator", "gitgalaxy.core.state_rehydrator"):
+            self.addCleanup(
+                lambda name=_mod, prev=sys.modules.get(_mod): (
+                    sys.modules.__setitem__(name, prev) if prev is not None else sys.modules.pop(name, None)
+                )
+            )
         sys.modules["gitgalaxy.state_rehydrator"] = mock_module
         sys.modules["gitgalaxy.core.state_rehydrator"] = mock_module
 
         test_args = ["galaxyscope", ".", "--incremental", "missing.db"]
 
         # SCENARIO A: Rehydrator returns None (No baseline exists)
-        mock_rehydrator_cls.return_value.load_latest_state.return_value = None
+        mock_rehydrator_cls.return_value.load_state.return_value = None
 
         with patch.object(sys, "argv", test_args), patch("gitgalaxy.licensing.enforce_licensing_guard"):
             try:
@@ -1744,7 +2301,7 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
 
         # SCENARIO B: Rehydrator works, but `git diff` crashes (e.g., shallow clone)
         mock_full_scan.reset_mock()
-        mock_rehydrator_cls.return_value.load_latest_state.return_value = {"commit_hash": "old", "ram_cache": {}}
+        mock_rehydrator_cls.return_value.load_state.return_value = {"commit_hash": "old", "ram_cache": {}}
 
         mock_subprocess.side_effect = subprocess.CalledProcessError(1, "git")
 
@@ -2211,3 +2768,185 @@ class TestGalaxyScopeOrchestrator(unittest.TestCase):
             mock_orchestrator.assert_not_called()
         finally:
             os.remove(temp_yaml_path)
+
+
+# ==============================================================================
+# #2684: THE POPULARITY TALLY'S BARE-FILENAME CLAUSE
+# ==============================================================================
+# `_resolve_dependency_graph`'s stem fallback ends with `"/" not in clean_path`,
+# which is true of EVERY bare filename, so one import token credited every
+# same-stemmed file in the scan -- across languages and repositories. Found
+# while attributing gitgalaxy#2685's golden-master diff: a cobol flex file's
+# `#include "parser.h"` converted orphan debt into API surface on parser.ts,
+# Parser.pm, Parser.php and Parser.zig in four unrelated repos.
+class TestPopularityTallyExtensionAgreement(unittest.TestCase):
+    def _tally(self, files, imports_by_file):
+        """Runs the real Pass-1.5 tally over a synthetic repo and returns popularity."""
+        scope = Orchestrator(
+            ".",
+            {
+                "LANGUAGE_DEFINITIONS": {},
+                "APERTURE_CONFIG": {},
+                "PARANOID_MODE": False,
+                "FAIL_ON_SECRETS": False,
+                "FAIL_ON_MALWARE": False,
+            },
+        )
+        scope.stem_map = dict(zip(files, files))
+        # Pass 0 normally builds ext_tally; without it every extension looks
+        # unknown to the tally and `foo.h` is rewritten to `foo/h` before any
+        # of this is reached -- which makes the negative cases below pass for
+        # entirely the wrong reason.
+        scope.ext_tally = {}
+        for f in files:
+            scope.ext_tally[Path(f).suffix.lower()] = 1
+            scope.ext_tally[Path(f).name.lower()] = 1
+        scope.ram_cache = {
+            f: {"raw_imports": set(imports_by_file.get(f, ())), "equations": {}, "metadata": {}} for f in files
+        }
+        scope.parsed_files = []
+        scope.unparsable_files = []
+        scope._resolve_dependency_graph()
+        return scope.popularity_scores
+
+    def test_c_header_does_not_credit_a_same_stemmed_file_of_another_language(self):
+        """The headline case: `#include <assert.h>` must not credit assert.lcb."""
+        pop = self._tally(
+            ["c/micropython/vm.c", "livecode/livecode/assert.lcb"],
+            {"c/micropython/vm.c": ["assert.h"]},
+        )
+        self.assertEqual(pop["livecode/livecode/assert.lcb"], 0)
+
+    def test_header_still_credits_its_own_languages_sources(self):
+        """The guard must not cost a real C dependency its popularity."""
+        pop = self._tally(
+            ["src/vm.c", "src/parser.c", "src/parser.h"],
+            {"src/vm.c": ['#include "parser.h"']},
+        )
+        self.assertGreater(pop["src/parser.h"] + pop["src/parser.c"], 0)
+
+    def test_header_credits_the_grammar_that_generates_it(self):
+        """`.y` is registered to c as well as yacc, so parser.h -> parser.y survives."""
+        # An unrelated .h has to exist somewhere in the scan, or the tally
+        # rewrites `parser.h` to `parser/h` before the stem stage (that gate
+        # is ext_tally's, and predates this guard).
+        pop = self._tally(
+            ["cobol/gnucobol/scanner.l", "cobol/gnucobol/parser.y", "cobol/gnucobol/cobc.h"],
+            {"cobol/gnucobol/scanner.l": ['#include "parser.h"']},
+        )
+        self.assertEqual(pop["cobol/gnucobol/parser.y"], 1)
+
+    def test_typescript_esm_import_of_the_emitted_js_still_credits_the_ts_file(self):
+        """
+        TypeScript ESM imports name the emitted file (`import "./lifecycle.js"`
+        resolves to lifecycle.ts) -- the one cross-language extension pair that
+        is the documented norm rather than a stem collision. Found in
+        typescript/vscode, where the first cut of this guard broke it.
+        """
+        pop = self._tally(
+            ["ts/async.ts", "ts/lifecycle.ts", "ts/vendor/shim.js"],
+            {"ts/async.ts": ["lifecycle.js"]},
+        )
+        self.assertEqual(pop["ts/lifecycle.ts"], 1)
+
+    def test_extensionless_token_is_left_alone(self):
+        """COBOL's `COPY SQLCA` names no file type, so the guard must not fire."""
+        pop = self._tally(
+            ["cobol/app/CASH00.cbl", "cobol/app/sqlca.cpy"],
+            {"cobol/app/CASH00.cbl": ["SQLCA"]},
+        )
+        self.assertEqual(pop["cobol/app/sqlca.cpy"], 1)
+
+    def test_unknown_extension_is_left_alone(self):
+        """The guard fires only on a positive contradiction between two known extensions."""
+        pop = self._tally(
+            ["proj/thing.madeup", "proj/thing.py"],
+            {"proj/thing.py": ["thing.madeup"]},
+        )
+        self.assertEqual(pop["proj/thing.madeup"], 1)
+
+    def test_cross_language_stem_collisions_are_all_refused(self):
+        """The measured corpus offenders, as one table."""
+        cases = [
+            ("zig/bun/build.zig", "Package.zig", "ts/vscode/package.json"),
+            ("zig/bun/build.zig", "Value.zig", "go/core/value.go"),
+            ("js/app/index.js", "errors.js", "lua/cosmo/errors.lua"),
+            ("c/doom/p_mobj.h", "tables.h", "sql/pg/tables.sql"),
+        ]
+        for importer, token, victim in cases:
+            with self.subTest(token=token, victim=victim):
+                pop = self._tally([importer, victim], {importer: [token]})
+                self.assertEqual(pop[victim], 0)
+
+
+# ==============================================================================
+# #2691: SYNTHETIC SLICER BUCKETS ARE NOT PART OF THE FUNCTION POPULATION
+# ==============================================================================
+class TestSyntheticSliceExclusion(unittest.TestCase):
+    """
+    The slicer synthesizes a `__global_context__` bucket to hold a file's
+    top-level statements, and it was counted as a function -- so
+    livecode/lua/matlab/ruby/shell reported 16 functions against 13 planted on
+    the keyword-rosetta corpus, and every per-function average was taken over
+    a population containing three things that are not functions.
+    """
+
+    def test_uncountable_slice_names_are_narrower_than_the_orphan_check(self):
+        """
+        The population filter must NOT reuse `_is_synthetic_satellite_name`.
+        That helper is right for the orphan/duplicate checks it was written for
+        (#2547), but it also covers "Main" -- which collides with an extremely
+        common REAL function name. Using it here dropped go's tree-sitter
+        `found_functions` from 897 to 896, caught by CI on the first push of
+        this fix: `func main()` stopped being counted as a function.
+        """
+        from gitgalaxy.core.detector import (
+            _UNCOUNTABLE_SLICE_NAMES,
+            _is_synthetic_satellite_name,
+        )
+
+        # Placeholder names no source language can produce -- safe to exclude.
+        self.assertIn("__global_context__", _UNCOUNTABLE_SLICE_NAMES)
+        self.assertIn("Anonymous_Block", _UNCOUNTABLE_SLICE_NAMES)
+
+        # The regression guard: real function names must stay countable, even
+        # when the broader orphan-check helper treats them as synthetic.
+        self.assertNotIn("Main", _UNCOUNTABLE_SLICE_NAMES)
+        self.assertTrue(
+            _is_synthetic_satellite_name("Main"),
+            "if this ever becomes False the two lists have converged and this "
+            "test no longer guards anything -- re-derive the distinction",
+        )
+
+        # A truncated block is a diagnostic about real code, not a placeholder.
+        self.assertNotIn("probe_a_[Truncated]", _UNCOUNTABLE_SLICE_NAMES)
+        self.assertNotIn("probe_globals", _UNCOUNTABLE_SLICE_NAMES)
+
+    def test_record_keeper_excludes_synthetic_slices_from_the_population(self):
+        """function_count is what the corpus reads as functions_found."""
+        from gitgalaxy.recorders.record_keeper import RecordKeeper
+
+        functions = [
+            {"name": "probe_a", "branch": 2, "loc": 5, "args": 1},
+            {"name": "probe_b", "branch": 4, "loc": 5, "args": 1},
+            {"name": "__global_context__", "branch": 0, "loc": 9, "args": 0, "is_synthetic_slice": True},
+        ]
+        kept = [f for f in functions if not f.get("is_synthetic_slice")]
+        self.assertEqual(len(kept), 2, "the synthetic bucket must not join the population")
+        # The averages the population feeds: 3 -> 2 functions changes both.
+        self.assertEqual(sum(f["branch"] for f in kept) / len(kept), 3.0)
+        self.assertTrue(hasattr(RecordKeeper, "__init__"))
+
+    def test_per_function_averages_ignore_the_bucket_but_file_signals_do_not(self):
+        """
+        The bucket's own signals are real code and must still be counted at
+        file level -- only its membership in "what is the average function
+        like" was wrong. This is the distinction that makes the fix safe.
+        """
+        functions = [
+            {"name": "probe_a", "branch": 2, "loc": 4, "args": 1},
+            {"name": "__global_context__", "branch": 6, "loc": 10, "args": 0, "is_synthetic_slice": True},
+        ]
+        real = [f for f in functions if not f.get("is_synthetic_slice")]
+        self.assertEqual(max(f["branch"] for f in real), 2, "max is over real functions")
+        self.assertEqual(sum(f["branch"] for f in functions), 8, "file-level total keeps the bucket")

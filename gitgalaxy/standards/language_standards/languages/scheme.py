@@ -140,10 +140,31 @@ DEFINITION: dict[str, Any] = {
         # 10. api (Public Surface Area)
         # Module exports defining the public surface.
         "api": re.compile(r"^[ \t]*\([ \t]*(?:export|define-public)(?![^ \t)\]\n\r])", re.M),
+        # #2823: the plural form of #2774's `_visibility_export`. Naming a
+        # function in an export statement is a visibility DECLARATION, not a
+        # use, and `unreferenced_by_name`'s corollary 2 says a declaration must
+        # not clear the flag. Scheme never got one of #2774's five rules, so 12
+        # of its 13 keyword-rosetta probe functions read as REFERENCED with
+        # nothing calling any of them (0.25 unreferenced per file against a 2.50
+        # corpus median), each cleared by its own `(export probe-globals)`.
+        #
+        # The list form rather than the singular one because both of Scheme's
+        # export constructs take an arbitrary number of names in one clause: the
+        # R7RS `(export a b c)` inside a `define-library`, and Guile's
+        # `#:export (a b c)` inside a `define-module`. Group 1 or group 2 is the
+        # clause's contents; detector.py records the start offset of each name
+        # token in it. Both arms exclude nested parens, so a renaming export
+        # (`(export (rename internal external))`) is deliberately not matched --
+        # the name in it is not the one the definition writes.
+        "_visibility_export_list": re.compile(
+            r"\([ \t]*export[ \t\r\n]+([^()]*)\)|#:export[ \t\r\n]*\(([^()]*)\)",
+            re.M,
+        ),
         # 11. flux (State Mutation)
         # Mutation of state. In Scheme, all mutating functions end with a bang (!).
         "state_mutation": re.compile(
-            r"(?<![^ \t\n\r(\[])(set!|vector-set!|string-set!|hash-table-set!|bytevector-u8-set!)(?![^ \t)\]\n\r])"
+            # #2765 contract: a `set!`-family form in operator position writes.
+            r"(?<![^ \t\n\r(\[])(set!|vector-set!|string-set!|hash-table-set!|hashtable-set!|bytevector-u8-set!|set-box!|list-set!|vector-fill!)(?![^ \t)\]\n\r])"
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         # Commented out S-expressions.
@@ -176,6 +197,21 @@ DEFINITION: dict[str, Any] = {
         # a top-level binding using the "X->Y" convention (e.g.
         # `default->value`) failed to match at all.
         "globals": re.compile(r"^[ \t]*\([ \t]*define\s+[a-zA-Z0-9_!?*+/<>=.~$%^&:-]+\s+[^(\s]", re.M),
+        # #2674: the regex above matches BOTH a module-level `(define x v)` (a
+        # real global) and an internal define inside a lambda/let/procedure
+        # body (a local binding, R7RS 5.3.2) -- and in Scheme indentation
+        # doesn't separate them: the whole of Chez's cpnanopass.ss sits inside
+        # a `(let () ...)` wrapper, so its 682 defines are ALL indented and
+        # the #2651 column-0 anchor would have zeroed them. Measured over the
+        # language-crucible Chez/Racket sources the bare regex is 42.7%
+        # precise (53 globals / 71 locals). The discriminator is the
+        # ENCLOSING FORM, which no flat pattern can see, so detector.py's
+        # coding_analysis runs a paren-depth scope pass over the segment and
+        # keeps only the matches whose define is module-level (top level,
+        # `library`/`module`/`define-library`, or a bindings-less let-family
+        # file wrapper). See `_lisp_module_level_define_offsets` in
+        # detector.py; on the same corpus it keeps 53 / drops 71.
+        "_scope_filters": {"globals": "lisp_body_position"},
         # 19. decorators
         "decorators": None,
         # 20. generics
@@ -187,8 +223,10 @@ DEFINITION: dict[str, Any] = {
         ),
         # 22. scientific (Numerical / Compute Libraries)
         # Scheme's native mathematical tower.
+        # #2899: anchored to head (operator) position -- directly after `(`/`[` -- so
+        # `exp` as a field/variable name in operand position no longer counts.
         "scientific": re.compile(
-            r"(?<![^ \t\n\r(\[])(sin|cos|tan|asin|acos|atan|exp|log|sqrt|expt|abs|gcd|lcm|numerator|denominator|floor|ceiling|truncate|round|exact->inexact)(?![^ \t)\]\n\r])"
+            r"(?<=[(\[])(sin|cos|tan|asin|acos|atan|exp|log|sqrt|expt|abs|gcd|lcm|numerator|denominator|floor|ceiling|truncate|round|exact->inexact)(?![^ \t)\]\n\r])"
         ),
         # 23. heat_triggers (Metaprogramming & Reflection)
         # Metaprogramming and syntactic abstractions.
@@ -198,9 +236,22 @@ DEFINITION: dict[str, Any] = {
         # 24. import (Dependency Inclusions)
         # Scheme module resolution dependencies.
         "import": re.compile(r"^[ \t]*\([ \t]*(?:import|use-modules|require)(?![^ \t)\]\n\r])", re.M),
+        # BUG FIX (#2652): added _dependency_capture to support DAG edge creation.
+        # Handles both the rosetta corpus's bare `(import a)` form and real R7RS
+        # `(import (scheme base))` / Guile `(use-modules (ice-9 popen))` library-list
+        # forms; captures the last path component / module name as the DAG resolver
+        # expects. The optional leading `\(?` and bounded `{0,6}` component repeat
+        # keep this ReDoS-safe (no nested unbounded quantifiers).
+        "_dependency_capture": re.compile(
+            r"^[ \t]*\([ \t\n]*(?:import|use-modules|require)[ \t\n]+"
+            r"\(?[ \t\n]*(?:[a-zA-Z0-9_!?*+/<>=.~$%^&:-]+[ \t\n]+){0,6}"
+            r"([a-zA-Z0-9_!?*+/<>=.~$%^&:-]+)[ \t\n]*\)?[ \t\n]*\)",
+            re.M,
+        ),
         # 25. ownership (Authorship Metadata)
+        # #2882 contract: C2 `Copyright:` out; `Authors:` joins
         "ownership": re.compile(
-            r"^[ \t]*;+\s*(?:Author|Created by|Maintainer|Copyright):\s+(.*)",
+            r"^[ \t]*(?:;+|#\|)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.I | re.M,
         ),
         # --- 🌌 PHASE 4: EXTENDED DIMENSIONS (Specialized Sub-Equations) ---
@@ -231,9 +282,10 @@ DEFINITION: dict[str, Any] = {
         "pointers": None,
         # 36. memory_alloc
         # Explicit heap instantiations.
-        "memory_alloc": re.compile(
-            r"(?<![^ \t\n\r(\[])(make-vector|make-string|make-bytevector|make-hash-table|cons|list)(?![^ \t)\]\n\r])"
-        ),
+        # #2898: contract-level absence. cons/list/make-* are all GC-managed allocation
+        # (cons alone was 150/file); the registry reads memory_alloc as UNMANAGED
+        # allocation only, and portable scheme has no unmanaged form.
+        "memory_alloc": None,
         # 37. inline_asm
         "inline_asm": None,
         # --- PHASE 5: RESOURCE MANAGEMENT & STABILITY ---
@@ -259,10 +311,12 @@ DEFINITION: dict[str, Any] = {
         # 45. immutability_locks (Immutability Constraints)
         # Immutable strings and explicit quotations (meaning the list cannot be mutated safely).
         "immutability_locks": re.compile(
-            r"(?<![^ \t\n\r(\[])(quote|string->immutable-string)(?![^ \t)\]\n\r])|\'(?=\()"
-        ),
+            r"(?<![^ \t\n\r(\[])(string->immutable-string)(?![^ \t)\]\n\r])"
+        ),  # #2772: a quote is the ordinary literal syntax (987 crucible hits were datum quotes); the explicit lock call stays
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"(?<![^ \t\n\r(\[])(close-input-port|close-output-port|close-port)(?![^ \t)\]\n\r])"),
+        "cleanup": re.compile(
+            r"(?<=[(\[])[ \t]*(close-input-port|close-output-port|close-port)(?![^ \t)\]\n\r])"
+        ),  # #2888 C3: head position only; `(call-port-handler close-port ...)` passes the name
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # Module-internal definitions.
         "encapsulation": re.compile(r"^[ \t]*\([ \t]*define-private(?![^ \t)\]\n\r])", re.M),

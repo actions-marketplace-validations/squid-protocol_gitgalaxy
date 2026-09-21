@@ -17,6 +17,7 @@ from typing import Any, Optional, TypedDict, Union
 
 from gitgalaxy.standards.gitgalaxy_config import EXACT_FILE_MATCH
 from gitgalaxy.standards.language_standards import (
+    COMPILED_HANDSHAKE_REGISTRY,
     LANGUAGE_DEFINITIONS,  # noqa: F401
     LENS_CONFIG,
 )
@@ -47,6 +48,95 @@ class FocusingError(Exception):
     """Exception raised for I/O or execution failures during linguistic classification."""
 
     pass
+
+
+# #3116: a shebang's trigger used to be tested as a bare substring of the whole
+# line, so shell's "sh" fired on `tclsh`/`wish`/`jimsh`/`swift-sh`/`racketsh`
+# and javascript's "node" fired on `ts-node`. The bogus language then
+# contradicted the file's own extension, and the Identity Conflict Trap dumped
+# real Tcl/Swift/Scheme/TypeScript files to Tier 5 -- `undeterminable`,
+# intensity 0.0, plus an "Identity Masking" anomaly flag that reads as a
+# malware finding on an ordinary script. Match the interpreter as a token
+# instead: the basename of the first path word after `#!`, except for the
+# `env` form, where it is the first following token that is neither a flag
+# (`-S`, `-u`) nor a `VAR=value` assignment.
+_SHEBANG_ENV_SKIP = re.compile(r"^(?:-|[A-Za-z_]\w*=)")
+
+
+def _shebang_interpreter(first_line: str) -> str:
+    """The interpreter token of a shebang line, lowercased, or "" if absent."""
+    if not first_line.startswith("#!"):
+        return ""
+    words = first_line[2:].split()
+    if not words:
+        return ""
+    interpreter = words[0].rsplit("/", 1)[-1].lower()
+    if interpreter in ("env", "env.exe"):
+        # `#!/usr/bin/env -S python3 -u`, `#!/usr/bin/env VAR=1 python3`
+        for word in words[1:]:
+            if not _SHEBANG_ENV_SKIP.match(word):
+                return word.rsplit("/", 1)[-1].lower()
+        return ""
+    return interpreter
+
+
+# #3133: the portable-trampoline idiom. A script whose real interpreter is not
+# guaranteed to live at a fixed path bootstraps through a POSIX shell and
+# re-execs itself: a plain shell shebang on line 1, then
+#     # the next line restarts using tclsh \
+#     exec tclsh "$0" ${1+"$@"}
+# That is sqlite's own test-harness header and the canonical Tcl portability
+# trick. (The shebang line is described rather than quoted on purpose: a
+# literal `#!` + `/bin/` sequence anywhere in the first 8 KiB trips the X-Ray
+# binary-anomaly detector's embedded-execution-header check, whose exemption
+# is scoped to .sh/.bash/.zsh/.command files -- so quoting it here failed CI.)
+# The shebang really IS `sh`, so it legitimately contradicts
+# the file's `.tcl` extension -- and the Identity Conflict Trap read that as
+# masquerading and refused the file at Tier 5 with an "Identity Masking" flag.
+# A generic shell shebang is the standard bootstrap vehicle and carries almost
+# no identity weight; an `exec <interpreter>` in the opening lines is what the
+# file actually runs as. Bounded to the first 10 lines and a single line-scan.
+_TRAMPOLINE_EXEC = re.compile(r"^[ \t]*exec[ \t]+(?:\S*/)?([\w.-]{1,40})", re.M)
+# Languages whose interpreters serve as portable-LAUNCHER vehicles, i.e. whose
+# shebang says "bootstrap" rather than "this is what I am". Only a conflict
+# raised against one of these is eligible for trampoline suppression.
+_BOOTSTRAP_SHELL_LANGS = frozenset({"shell"})
+
+# #3134: extensions that mark a file as a TEMPLATE rather than naming its
+# language -- the real language is whatever sits inside (`Makefile.pre.in` is
+# Makefile syntax, `langref.html.in` is HTML). A template extension therefore
+# does NOT outrank a filename prefix: `Makefile.pre.in` should stay Makefile
+# via its `Makefile` prefix, even though `.in` is registered to m4. (The
+# separate question of whether m4 should claim `.in` at all is a registry
+# matter, not this rule's.) Distinct from SAFE_WRAPPERS, which unwraps a
+# wrapper to reach a KNOWN inner extension; these are the cases where the
+# inner extension is absent or itself unregistered.
+_TEMPLATE_EXTENSIONS = frozenset({".in", ".template", ".tmpl", ".dist"})
+
+
+def _trampoline_interpreter(content: str) -> str:
+    """The interpreter a trampoline re-execs, lowercased, or "" if none."""
+    head = "\n".join(content.split("\n", 10)[:10])
+    match = _TRAMPOLINE_EXEC.search(head)
+    return match.group(1).lower() if match else ""
+
+
+def _shebang_trigger_matches(trigger: str, interpreter: str) -> bool:
+    """Whether a registry shebang trigger names this interpreter.
+
+    Exact match, or the trigger plus a pure version suffix -- `python` names
+    `python3` and `python3.12`, `perl` names `perl5.36`. Only digits and dots
+    may follow, so `python` does NOT name `micropython` (a different word, and
+    embedded_python's own trigger) and `sh` does NOT name `tclsh`.
+    """
+    if not trigger or not interpreter:
+        return False
+    if interpreter == trigger:
+        return True
+    if not interpreter.startswith(trigger):
+        return False
+    tail = interpreter[len(trigger) :]
+    return bool(tail) and all(ch in "0123456789." for ch in tail)
 
 
 class LanguageDetector:
@@ -96,22 +186,30 @@ class LanguageDetector:
         self.COLLISION_FREQUENCIES = set(LENS_CONFIG.get("COLLISION_FREQUENCIES", set()))
         self.PROSE_ANCHORS = set(LENS_CONFIG.get("PROSE_ANCHORS", set()))
 
+        # #3137: memoised sibling-content vote, keyed by (directory, contested
+        # ext). Any file that reaches ecosystem gravity has already FAILED
+        # content resolution (a Tier 2 internal-discriminator match locks at
+        # tier 2 and never calls gravity), so the neighbourhood's verdict is
+        # independent of which sibling triggered it -- one census per directory,
+        # deterministic, and O(files) instead of O(files^2) over a folder.
+        self._sibling_vote_cache: dict[tuple[str, str], tuple[Optional[str], float]] = {}
+        # Bytes read per sibling for that vote. Internal discriminators anchor on
+        # imports/headers near the top of a file, so a bounded sniff is enough
+        # and keeps the extra reads cheap on mega-repos.
+        self.SIBLING_SNIFF_BYTES = 65536
+
         # Compile syntactic disqualifiers on boot to save CPU cycles per file
         self.DISQUALIFIERS = {}
         for key, regex_str in LENS_CONFIG.get("DISQUALIFIERS", {}).items():
             self.DISQUALIFIERS[key] = re.compile(regex_str, re.M | re.I)
 
         # Compile hybrid language handshake triggers (e.g., HTML inside PHP)
-        self.HANDSHAKE_REGISTRY = []
-        for hs in LENS_CONFIG.get("HANDSHAKE_REGISTRY", []):
-            self.HANDSHAKE_REGISTRY.append(
-                {
-                    "trigger": re.compile(hs["trigger"], re.I),
-                    "end": re.compile(hs["end"], re.I),
-                    "target": hs["target"],
-                    "pair": hs["pair"],
-                }
-            )
+        # #2848: this was the third copy of the same compilation, and the
+        # second one missing re.M -- so `_detect_hybrids` reported a polyglot
+        # `lang_mix` only for a file whose very first byte opened the embedded
+        # block, and every ordinary html-with-<script> file read as
+        # single-language. The one compiled registry lives beside the patterns.
+        self.HANDSHAKE_REGISTRY = COMPILED_HANDSHAKE_REGISTRY
 
         self.logger.debug("Initializing O(1) lookup maps for Linguistic Classifier...")
         self._calibrate_lookup_maps()
@@ -119,6 +217,43 @@ class LanguageDetector:
 
     def _calibrate_lookup_maps(self):
         """Builds O(1) dictionaries mapping extensions and exact filenames to languages."""
+        # #3116/#3118: the shebang trigger table, resolved ONCE at boot rather
+        # than re-derived per file. Three properties the per-call substring
+        # loop did not have:
+        #   * triggers are normalised to an interpreter basename, so a
+        #     path-shaped registry entry (tcl's `bin/expect`) still matches
+        #     `#!/usr/bin/expect`;
+        #   * a trigger claimed by MORE THAN ONE language is dropped entirely.
+        #     `deno` and `bun` run both TypeScript and JavaScript, and `csi` is
+        #     both Chicken Scheme's interpreter and the C# script runner, so the
+        #     shebang genuinely does not discriminate. Resolving it to either
+        #     claimant makes the other claimant's files contradict their own
+        #     extension and land at Tier 5 -- measured before this change:
+        #     `.ts` + `#!/usr/bin/env deno` and `.scm` + `#!/usr/bin/csi` both
+        #     returned `undeterminable` with an "Identity Masking" flag. No
+        #     verdict lets the extension decide, which is right for every
+        #     claimant (the same refuse-rather-than-guess posture as Tier 4's
+        #     margin requirement);
+        #   * sorted longest-first, so a specific trigger beats a shorter one
+        #     that is also a legitimate prefix, independent of registry order.
+        trigger_owners: dict[str, set[str]] = {}
+        for lang_id, data in self.languages.items():
+            for raw_trigger in data.get("shebangs", []):
+                trigger = raw_trigger.rsplit("/", 1)[-1].lower()
+                if trigger:
+                    trigger_owners.setdefault(trigger, set()).add(lang_id)
+
+        self._ambiguous_shebangs = {t for t, owners in trigger_owners.items() if len(owners) > 1}
+        if self._ambiguous_shebangs:
+            self.logger.debug(
+                f"Shebang triggers claimed by multiple languages, ignored as non-discriminating: "
+                f"{sorted(self._ambiguous_shebangs)}"
+            )
+        self._shebang_triggers = sorted(
+            ((t, next(iter(owners))) for t, owners in trigger_owners.items() if len(owners) == 1),
+            key=lambda pair: -len(pair[0]),
+        )
+
         for lang_id, data in self.languages.items():
             for ext in data.get("extensions", []):
                 self.extension_map[ext.lower()] = lang_id
@@ -187,7 +322,7 @@ class LanguageDetector:
                 ".gen",
                 ".in",
             }
-            if (ext not in self.extension_map or ext in SAFE_WRAPPERS) and len(path_obj.suffixes) > 1:
+            if (ext not in self.extension_map or ext in SAFE_WRAPPERS) and len(path_obj.suffixes) > 1:  # noqa: SIM102 -- merging the inner `ext in SAFE_WRAPPERS` guard would duplicate the condition
                 if ext in SAFE_WRAPPERS:
                     for middle_ext in reversed(path_obj.suffixes[:-1]):
                         if middle_ext.lower() in self.extension_map:
@@ -240,13 +375,13 @@ class LanguageDetector:
 
         if ext in {".md", ".mdx", ".rst", ".rtf", ".txt", ".log"}:
             # ---> DEFENSIVE GUARD: Catch disguised payloads before early exit <---
-            shebang_lang = self._tier_2_fingerprint_check(content_sample, ext)
+            shebang_lang, evidence_kind = self._tier_2_fingerprint_check(content_sample, ext)
             if shebang_lang and shebang_lang != "undeterminable":
                 self.logger.warning(
-                    f"[{name}] IDENTITY CONFLICT: Prose Ext '{ext}' contradicts Executable Shebang '{shebang_lang}'"
+                    f"[{name}] IDENTITY CONFLICT: Prose Ext '{ext}' contradicts Executable {evidence_kind} '{shebang_lang}'"
                 )
                 result["anomaly_flags"].append(
-                    f"Identity Masking: Prose Extension ({ext}) vs Executable Shebang ({shebang_lang})"
+                    f"Identity Masking: Prose Extension ({ext}) vs Executable {evidence_kind} ({shebang_lang})"
                 )
                 # Drop to lowest trust tier
                 return self._forge_result(
@@ -296,7 +431,14 @@ class LanguageDetector:
 
         if name in self.anchor_map:
             target_id = self.anchor_map.get(name)
-        elif name.split(".")[0] in self.anchor_map:
+        elif name.split(".")[0] in self.anchor_map and not (is_known_code_ext and ext not in _TEMPLATE_EXTENSIONS):
+            # #3134: a real extension outranks a filename PREFIX. `BUILD.mk` is
+            # a Makefile that happens to start with Bazel's `BUILD` anchor, and
+            # anchoring won it for python at Tier 1 before its own `.mk` was
+            # ever consulted (measured by the #3117 harness). An EXACT filename
+            # match still outranks an extension, above -- `Makefile` and
+            # `Dockerfile` have no meaningful extension to defer to; it is only
+            # the prefix form that yields.
             base_anchor = name.split(".")[0]
             target_id = self.anchor_map.get(base_anchor)
             anchor_proof = f"Prefix Anchor ({base_anchor})"
@@ -334,20 +476,19 @@ class LanguageDetector:
                         result,
                         content_sample,
                     )
-            elif ext == ".m":
-                if f"{base_stem}.h" in ext_tally:
-                    return self._forge_result(
-                        "objective-c",
-                        0.99,
-                        0,
-                        "Sibling Anchor (.h)",
-                        result,
-                        content_sample,
-                    )
+            elif ext == ".m" and f"{base_stem}.h" in ext_tally:
+                return self._forge_result(
+                    "objective-c",
+                    0.99,
+                    0,
+                    "Sibling Anchor (.h)",
+                    result,
+                    content_sample,
+                )
 
         # 1. Gather Physical Signals
         ext_lang = self._tier_1_metadata_lock(ext, name)
-        shebang_lang = self._tier_2_fingerprint_check(content_sample, ext)
+        shebang_lang, evidence_kind = self._tier_2_fingerprint_check(content_sample, ext)
 
         # =========================================================================
         # DEFENSIVE GUARD: IDENTITY CONFLICT TRAP
@@ -360,11 +501,32 @@ class LanguageDetector:
             and (ext_lang != shebang_lang)
         )
 
+        # #3129: a generic-shell shebang that re-execs another interpreter is a
+        # portable-launcher bootstrap, not a masquerade. Only suppress the
+        # conflict when the re-exec'd interpreter is one the EXTENSION's own
+        # language claims -- so `.tcl` + `exec tclsh` is cleared while a `.txt`
+        # that re-execs something unrelated still trips the trap.
+        if is_conflict and evidence_kind == "Shebang" and shebang_lang in _BOOTSTRAP_SHELL_LANGS:
+            relaunched = _trampoline_interpreter(content_sample)
+            if relaunched:
+                claimed = self.languages.get(ext_lang or "", {}).get("shebangs", [])
+                if any(_shebang_trigger_matches(t.rsplit("/", 1)[-1].lower(), relaunched) for t in claimed):
+                    self.logger.debug(
+                        f"[{name}] Trampoline bootstrap: shell shebang re-execs '{relaunched}', "
+                        f"which {ext_lang} claims -- no identity conflict."
+                    )
+                    is_conflict = False
+                    shebang_lang, evidence_kind = ext_lang, "Trampoline Exec"
+
         if is_conflict:
-            self.logger.warning(f"[{name}] IDENTITY CONFLICT: Ext '{ext_lang}' contradicts Shebang '{shebang_lang}'")
+            self.logger.warning(
+                f"[{name}] IDENTITY CONFLICT: Ext '{ext_lang}' contradicts {evidence_kind} '{shebang_lang}'"
+            )
 
             # 1. Cache the threat into RAM for the SAST Engine
-            result["anomaly_flags"].append(f"Identity Masking: Extension ({ext_lang}) vs Shebang ({shebang_lang})")
+            result["anomaly_flags"].append(
+                f"Identity Masking: Extension ({ext_lang}) vs {evidence_kind} ({shebang_lang})"
+            )
 
             # 2. Force the file into the Unclassified Baseline
             return self._forge_result(
@@ -397,7 +559,7 @@ class LanguageDetector:
                 ext_lang,
                 0.999,
                 0,
-                "Absolute Consensus (Ext + Shebang)",
+                f"Absolute Consensus (Ext + {evidence_kind})",
             )
         elif ext_lang and ext_lang != "undeterminable" and prior_lang == ext_lang and prior_conf >= 0.75:
             best_lang, best_conf, lock_tier, source_proof = (
@@ -411,7 +573,7 @@ class LanguageDetector:
                 shebang_lang,
                 0.999,
                 0,
-                f"Absolute Consensus (Shebang + {prior_proof})",
+                f"Absolute Consensus ({evidence_kind} + {prior_proof})",
             )
 
         # TIER 1: HIGH-CONFIDENCE PRIOR
@@ -429,7 +591,7 @@ class LanguageDetector:
                 shebang_lang,
                 0.91,
                 2,
-                "Single Indicator (Shebang)",
+                f"Single Indicator ({evidence_kind})",
             )
         elif ext_lang and ext_lang != "undeterminable":
             best_lang, best_conf, lock_tier, source_proof = (
@@ -453,16 +615,29 @@ class LanguageDetector:
         # =========================================================================
         gravity_lang = None
         # Only apply Ecosystem Consensus if we don't already have a strong Tier 2 internal signature
+        #
+        # NOTE (#3129/#3132/#3137): a SAME-extension collision (both rivals
+        # claim `ext`) cannot be resolved by counting extensions -- both score
+        # over the identical files -- which is why 7 of 14 real MicroPython
+        # files in `embedded_python/meow_turtle` once locked to `python` here at
+        # "72% Local Dominance". Two cheap fixes were measured on the #3117
+        # harness and both LOST: making gravity ABSTAIN on same-extension
+        # collisions (0.9964 -> 0.9840, 32 sqlite files fall to db2_sql at Tier
+        # 3), and stripping the contested ext from every discriminator list
+        # (same loss). The fix that landed is inside `_evaluate_ecosystem_gravity`
+        # (#3137): for a same-extension neighbourhood it votes on what the
+        # siblings actually RESOLVED to by content, not their filenames, and
+        # abstains to Tier 3 only when that vote is empty or split. Mixed
+        # neighbourhoods (.h beside .c) still take the extension-count physics.
         if ext in self.COLLISION_FREQUENCIES and ext_tally and lock_tier > 2:
             gravity_lang, dominance = self._evaluate_ecosystem_gravity(file_path, ext, ext_tally)
 
-            if gravity_lang:
-                if dominance >= self.thresholds.get("ECOSYSTEM_DOMINANCE_MIN", 0.70):
-                    best_lang = gravity_lang
-                    best_conf = 0.95
-                    lock_tier = 1.5
-                    source_proof = f"Ecosystem Consensus Lock ({dominance * 100:.0f}% Local Dominance)"
-                    self.logger.debug(f"[{name}] Fast-tracked via Ecosystem Consensus -> {gravity_lang}")
+            if gravity_lang and dominance >= self.thresholds.get("ECOSYSTEM_DOMINANCE_MIN", 0.70):
+                best_lang = gravity_lang
+                best_conf = 0.95
+                lock_tier = 1.5
+                source_proof = f"Ecosystem Consensus Lock ({dominance * 100:.0f}% Local Dominance)"
+                self.logger.debug(f"[{name}] Fast-tracked via Ecosystem Consensus -> {gravity_lang}")
 
         # =========================================================================
         # TIER 1.7: UNKNOWN EXTENSION FALLBACK
@@ -585,6 +760,25 @@ class LanguageDetector:
         except Exception as e:
             self.logger.debug(f"Local folder census failed for '{file_path}': {e}")
 
+        # 2b. SIBLING-CLASSIFICATION VOTE (#3137, closes the #3132 residual)
+        # For a SAME-extension collision the extension-count physics below is
+        # information-free by construction: both rivals score over the identical
+        # set of contested-extension files, so the base-mass fallback (:~780)
+        # counts the same files for each, and the only tie-breaker left is a
+        # `discriminators` self-reference -- python lists its own `.py`, which is
+        # literally where the reported "72% Local Dominance" comes from (base 14
+        # + 14x2 = 42 vs embedded_python's 14 + 1x2 = 16). Counting filenames
+        # cannot separate two languages that share the extension. So when the
+        # neighbourhood carries no DIFFERENT extension-shaped anchor -- the exact
+        # regime where physics is blind -- weigh what the siblings actually
+        # RESOLVED to via their own content instead. The mixed-extension
+        # neighbourhoods gravity was built for (.h beside .c, .asm beside
+        # .jcl/.cbl) keep the extension-count physics untouched.
+        if len(candidates) >= 2 and self._is_same_extension_neighbourhood(candidates, ext, local_tally):
+            sib_lang, sib_dominance = self._resolve_by_sibling_content(file_path, ext, candidates)
+            if sib_lang:
+                return sib_lang, sib_dominance
+
         # 3. TWO-PASS PHYSICS (Local Neighborhood -> Global Repository)
         for scope_name, tally in [("Local", local_tally), ("Global", global_tally)]:
             if not tally:
@@ -605,6 +799,22 @@ class LanguageDetector:
 
                 base_mass = sum(base_contributors.values())
 
+                # #3132/#3137: the CONTESTED extension is counted here as
+                # positive evidence for one of its own claimants -- four profiles
+                # list their own contested ext as a discriminator (python `.py`,
+                # sqlite `.sql`, matlab `.m`, objective-c `.m`) -- and where only
+                # one rival self-references it wins by construction (python 14 +
+                # 14x2 = 42 vs embedded_python's 14 + 1x2 = 16, the old "72%
+                # Local Dominance"). This self-reference cannot simply be removed:
+                # it does real work in BOTH directions on the #3117 corpus
+                # (removing only python's `.py` broke SEVEN plain-python files
+                # into embedded_python), and `.sql` has no content signal to
+                # replace it with -- sqlite's strongest markers cover ~a quarter
+                # of its 80 files. So this physics is LEFT AS IS for the
+                # mixed-extension neighbourhoods it handles well; the
+                # same-extension collisions it is structurally blind to are
+                # short-circuited before this loop by the sibling-content vote
+                # (step 2b above), which never reaches here.
                 discriminators = data.get("discriminators", [])
                 discrim_contributors = {
                     d: tally.get(d.lower(), 0) for d in discriminators if tally.get(d.lower(), 0) > 0
@@ -653,9 +863,8 @@ class LanguageDetector:
             top_lid = max(scores, key=lambda lid: scores[lid])
             dominance = scores[top_lid] / total_gravity
 
-            if ext == ".h" and set(scores.keys()).issubset({"c", "cpp", "objective-c"}):
-                if dominance >= 0.55:
-                    dominance = max(dominance, self.thresholds.get("ECOSYSTEM_DOMINANCE_MIN", 0.70))
+            if ext == ".h" and set(scores.keys()).issubset({"c", "cpp", "objective-c"}) and dominance >= 0.55:
+                dominance = max(dominance, self.thresholds.get("ECOSYSTEM_DOMINANCE_MIN", 0.70))
 
             # Evaluate if this scope produced a statistical winner
             threshold = self.thresholds.get("ECOSYSTEM_DOMINANCE_MIN", 0.70)
@@ -671,6 +880,102 @@ class LanguageDetector:
 
         return None, 0.0
 
+    def _is_same_extension_neighbourhood(self, candidates: list[str], ext: str, local_tally: dict[str, int]) -> bool:
+        """#3137: True when the ONLY extension-shaped signal present locally is
+        the contested extension itself -- no candidate has a *different*-extension
+        ecosystem anchor (a support extension or an extension-shaped
+        `discriminators` entry, e.g. `.c`, `.mpy`, `.jcl`, `.db`) in this folder.
+
+        That is exactly the regime where the extension-count physics is
+        information-free and the sibling-content vote should decide. A
+        mixed-extension neighbourhood -- `.h` beside `.c`, `.asm` beside
+        `.jcl`/`.cbl` -- has a real cross-extension signal and stays with the
+        physics, which was built for it. Filename discriminators (`boot.py`,
+        `requirements.txt`) are deliberately NOT treated as extension anchors:
+        they are too weak to make counting reliable (embedded_python's `boot.py`
+        is the single point that the physics already fails on in #3132).
+        """
+        for lid in candidates:
+            data = self.languages.get(lid, {})
+            for token in list(data.get("extensions", [])) + list(data.get("discriminators", [])):
+                t = token.lower()
+                if t == ext or not t.startswith("."):
+                    continue
+                if local_tally.get(t, 0) > 0:
+                    return False
+        return True
+
+    def _resolve_by_sibling_content(
+        self, file_path: Union[str, Path], ext: str, candidates: list[str]
+    ) -> tuple[Optional[str], float]:
+        """#3137: weigh a same-extension neighbourhood by what its siblings
+        actually RESOLVED to via their own content (shebang / internal
+        discriminator), not by their filenames.
+
+        Returns ``(lang, dominance)`` on a strict, high-dominance content
+        majority among ``candidates``, else ``(None, 0.0)`` so the caller falls
+        back to the extension-count physics. A sibling that classified as
+        ``embedded_python`` because it imports ``machine`` is real evidence about
+        its neighbours; a sibling that merely SHARES the contested extension is
+        not evidence at all and casts no vote. An evenly split or empty
+        neighbourhood abstains -- Tier 3 then decides -- rather than letting
+        ``max()`` iteration order pick a winner (the #3118 silent
+        order-dependence). Memoised per directory+extension (see
+        ``self._sibling_vote_cache``).
+        """
+        try:
+            parent_dir = Path(file_path).parent
+        except Exception:
+            return None, 0.0
+
+        cache_key = (str(parent_dir), ext)
+        cached = self._sibling_vote_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        result: tuple[Optional[str], float] = (None, 0.0)
+        candidate_set = set(candidates)
+        try:
+            siblings = sorted(
+                (c for c in parent_dir.iterdir() if c.is_file() and c.suffix.lower() == ext),
+                key=lambda p: p.name,
+            )
+        except Exception as e:
+            self.logger.debug(f"Sibling-content census failed for '{file_path}': {e}")
+            self._sibling_vote_cache[cache_key] = result
+            return result
+
+        votes: dict[str, int] = {}
+        for sib in siblings:
+            try:
+                with sib.open("r", encoding="utf-8", errors="ignore") as fh:
+                    sample = fh.read(self.SIBLING_SNIFF_BYTES)
+            except OSError as e:
+                self.logger.debug(f"Sibling read failed for '{sib}': {e}")
+                continue
+            sib_lang, _kind = self._tier_2_fingerprint_check(sample, ext)
+            if sib_lang in candidate_set:
+                votes[sib_lang] = votes.get(sib_lang, 0) + 1
+
+        total = sum(votes.values())
+        if total:
+            # deterministic order: highest vote first, ties broken by name so the
+            # abstain-on-tie test below never depends on filesystem order.
+            ranked = sorted(votes.items(), key=lambda kv: (-kv[1], kv[0]))
+            top_lang, top_count = ranked[0]
+            runner_up = ranked[1][1] if len(ranked) > 1 else 0
+            dominance = top_count / total
+            threshold = self.thresholds.get("ECOSYSTEM_DOMINANCE_MIN", 0.70)
+            if top_count > runner_up and dominance >= threshold:
+                self.logger.debug(
+                    f"[{parent_dir.name}] Sibling-content consensus for '{ext}': "
+                    f"{top_lang} ({dominance * 100:.0f}% of {total} resolved siblings, votes={votes})"
+                )
+                result = (top_lang, dominance)
+
+        self._sibling_vote_cache[cache_key] = result
+        return result
+
     def _tier_1_metadata_lock(self, ext: str, file_name: str) -> Optional[str]:
         if file_name in self.anchor_map:
             return self.anchor_map[file_name]
@@ -684,16 +989,33 @@ class LanguageDetector:
             return self.extension_map[ext]
         return None
 
-    def _tier_2_fingerprint_check(self, content: str, ext: str) -> Optional[str]:
+    def _tier_2_fingerprint_check(self, content: str, ext: str) -> tuple[Optional[str], str]:
+        """Content-evidence classification: returns `(lang_id, evidence_kind)`.
+
+        `evidence_kind` is `"Shebang"` or `"Internal Signature"` -- #3116
+        follow-up: this method has always resolved BOTH mechanisms, but every
+        caller labelled the result "Shebang", so a file resolved by its
+        internal discriminator (`ACCTPGM CSECT` in a `.asm`, `/* REXX */` in a
+        `.cmd`) reported `Single Indicator (Shebang)` with no `#!` anywhere in
+        it, and an identity conflict raised against a discriminator match
+        reported the contradiction against a shebang that did not exist.
+        `source_proof` is a load-bearing claim in this engine, so the mechanism
+        travels with the verdict. Kind is `""` when no language matched.
+        """
         # 1. Standard Executable Shebang Check
         if content.startswith("#!"):
             first_line = content.split("\n", 1)[0].lower()
             self.logger.debug(f"Fingerprint Scan: Analyzing shebang line: '{first_line.strip()}'")
 
-            for lang_id, data in self.languages.items():
-                for trigger in data.get("shebangs", []):
-                    if trigger in first_line:
-                        return lang_id
+            # #3116: token match on the interpreter basename, never a substring
+            # of the whole line, against the boot-time trigger table built in
+            # `_calibrate_lookup_maps` (already basename-normalised,
+            # longest-first, and with non-discriminating triggers removed).
+            interpreter = _shebang_interpreter(first_line.strip())
+            if interpreter:
+                for trigger, lang_id in self._shebang_triggers:
+                    if _shebang_trigger_matches(trigger, interpreter):
+                        return lang_id, "Shebang"
 
         # 2. INTERNAL DISCRIMINATOR (Collision Resolution Only)
         # DEFENSIVE GUARD: Internal discriminators are strictly for resolving known
@@ -707,9 +1029,9 @@ class LanguageDetector:
                         self.logger.debug(
                             f"Fingerprint Scan: Internal discriminator matched for '{lang_id}' via '{ext}'"
                         )
-                        return lang_id
+                        return lang_id, "Internal Signature"
 
-        return None
+        return None, ""
 
     def _tier_3_lexical_scan(
         self,
@@ -826,6 +1148,30 @@ class LanguageDetector:
         if coding_loc < self.thresholds.get("TIER_4_MIN_LINES", 20):
             self.logger.debug(f"Tier 4 Discovery aborted: Insufficient physical mass ({coding_loc} < 20 lines).")
             return "plaintext", 0.40
+
+        # #3188: data-shape fast-exit (wordlist / dictionary / bare-token data).
+        # A file with effectively no code-structure punctuation, dominated by
+        # single-token lines, is data -- not code. The discovery scan below would
+        # run every candidate language's full ruleset against it (measured ~0.9s
+        # on haiku's 28,137-line `src/apps/mail/words`) only to find no lexical
+        # family and return `undeterminable` -- which inspect() then turns into
+        # the plaintext "Prose Fallback" anyway. Return that SAME verdict up front
+        # without the scan: byte-identical classification, ~900x cheaper on this
+        # class. Decided on a bounded prefix so the check itself stays O(1) in
+        # file size; the two conditions together (near-zero structural
+        # punctuation AND overwhelmingly one-token-per-line) cannot be met by real
+        # code, whose rules need exactly that punctuation to score at all.
+        _sample = content[:65536]
+        _data_lines = [ln.strip() for ln in _sample.splitlines() if ln.strip()]
+        if len(_data_lines) >= self.thresholds.get("TIER_4_MIN_LINES", 20):
+            _code_punct = sum(_sample.count(ch) for ch in "{}()[];=")
+            _single_token = sum(1 for ln in _data_lines if " " not in ln and "\t" not in ln)
+            if _code_punct <= len(_data_lines) // 50 and _single_token >= len(_data_lines) * 0.85:
+                self.logger.debug(
+                    f"Tier 4 [data-shape]: {_single_token}/{len(_data_lines)} single-token lines, "
+                    f"{_code_punct} structural-punct chars -> data, skipping discovery scan."
+                )
+                return "undeterminable", 0.0
 
         loc = max(coding_loc, 1)
         content_len = len(content)
@@ -1103,19 +1449,17 @@ class LanguageDetector:
 
         distribution = {primary_id: total_len}
         last_processed_idx = 0
-        triggers = []
-
-        for hs in self.HANDSHAKE_REGISTRY:
-            for m in hs["trigger"].finditer(content):
-                triggers.append(
-                    {
-                        "start": m.start(),
-                        "trigger_end": m.end(),
-                        "target": hs["target"],
-                        "end_pattern": hs["end"],
-                        "pair": hs.get("pair"),
-                    }
-                )
+        triggers = [
+            {
+                "start": m.start(),
+                "trigger_end": m.end(),
+                "target": hs["target"],
+                "end_pattern": hs["end"],
+                "pair": hs.get("pair"),
+            }
+            for hs in self.HANDSHAKE_REGISTRY
+            for m in hs["trigger"].finditer(content)
+        ]
 
         triggers.sort(key=lambda x: x["start"])
 

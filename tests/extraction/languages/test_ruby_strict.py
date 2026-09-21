@@ -32,26 +32,22 @@ _RUBY_SIMPLE_CASES = [
     ("branch", "if x then", "x = 1"),
     ("branch", "elsif x == 2", "x = 2"),
     ("branch", "case type\nwhen 1", "type = 1"),
-
     ("args", "def foo(x, y)", "foo(x, y)"),
     ("args", "def self.process(*args, **kwargs)", "process(*args, **kwargs)"),
     ("args", "define_method(:foo) do |x, y|", "define_method"),
-
     ("func_start", "def foo", "foo = 1"),
     ("func_start", "def self.bar", "self.bar = 1"),
     ("func_start", "define_method :baz do", "baz"),
-
     ("class_start", "class Foo", "Foo = Class.new"),
     ("class_start", "module MyMod", "MyMod = Module.new"),
     ("class_start", "class << self", "self.class"),
-
     ("structural_boundaries", "require 'json'", "superclass = Foo"),
     ("safety", "rescue => e", "obj.fetch_all"),
     ("safety_bypasses", "eval(code)", "evaluate_expression(x)"),
     ("high_risk_execution", 'exec("ls")', "executable_path = '/usr/bin/ruby'"),
     ("io", 'File.read("x")', "user.updated_at"),
     ("api", "module_function", "get_user_data"),
-    ("state_mutation", "arr.push(1)", "arr.length"),
+    ("state_mutation", "x = 1", "CONST = 1"),  # #2817: local reassignment counts; constant assignment does not
     ("dead_code", "# def foo", "# just a note"),
     ("doc", "# @param x [String] description", "# some regular comment"),
     ("test", "describe 'Foo' do", "letter_count = 5"),
@@ -245,3 +241,28 @@ def test_ruby_redos_immunity_sweep():
     assert_redos_immune(RUBY_RULES["args"], "def foo('" + "a" * 100000, timeout_sec=3.0)
     assert_redos_immune(RUBY_RULES["args"], 'def foo("' + "a" * 100000, timeout_sec=3.0)
     assert_redos_immune(RUBY_RULES["spec_exposure"], "[SPEC-" + "1" * 100000, timeout_sec=3.0)
+
+
+def test_ruby_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    A top-level `def` is a PRIVATE method on Object; the idiom that
+    publishes one by name is `public :name`, which was unreachable.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = RUBY_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search('public :probe_globals'), 'public :name'
+    assert api.search('public_class_method :new'), 'public_class_method :name'
+    assert api.search('module_function :probe_io'), 'module_function (kept)'
+
+    # Not declarations -- must not match.
+    assert not api.search('def probe_globals(env)'), 'top-level def is private on Object'

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from gitgalaxy.galaxyscope import HAS_NETWORKX, HAS_PYYAML, HAS_TIKTOKEN
+from gitgalaxy.galaxyscope import HAS_PYYAML, HAS_TIKTOKEN
 from gitgalaxy.security.security_auditor import ML_AVAILABLE
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -31,11 +31,16 @@ pytestmark = pytest.mark.golden_crucible
 
 REPO_ROOT = Path(__file__).parent.parent
 CRUCIBLE_DATA_PATH = Path(os.environ.get("LANGUAGE_CRUCIBLE_PATH", REPO_ROOT.parent / "language-crucible")) / "data"
+# The full-corpus scan grows with the corpus and can exceed a tight cap on a
+# loaded machine or a slow runner (the #3246 bless hit the old 180s). This is a
+# hung-scan guard, not a perf gate (a hang is unbounded, so a generous cap still
+# catches it); override with GITGALAXY_GOLDEN_SCAN_TIMEOUT when a host needs more.
+GOLDEN_SCAN_TIMEOUT = int(os.environ.get("GITGALAXY_GOLDEN_SCAN_TIMEOUT", "600"))
 
 
 def _zero_dependency_mode() -> bool:
     # Same condition galaxyscope.py itself uses to decide which mode it ran in.
-    return not (HAS_NETWORKX and HAS_TIKTOKEN and ML_AVAILABLE and HAS_PYYAML)
+    return not (HAS_TIKTOKEN and ML_AVAILABLE and HAS_PYYAML)
 
 
 @pytest.mark.skipif(
@@ -65,8 +70,16 @@ def test_golden_crucible_matches_baseline(tmp_path):
             "--splicing-speed",
         ],
         check=True,
-        timeout=180,
-        env={**os.environ, "GITGALAXY_LICENSE_KEY": "COMMUNITY_FREE_TIER"},
+        timeout=GOLDEN_SCAN_TIMEOUT,
+        env={
+            **os.environ,
+            "GITGALAXY_LICENSE_KEY": "COMMUNITY_FREE_TIER",
+            # #2976: the golden masters pin a corpus whose git history is not part
+            # of the measured structure. Before the chronometer's subdir fix they
+            # got temporal neutrality by accident (the scan root data/ has no .git);
+            # this makes the same neutrality explicit and deterministic.
+            "GITGALAXY_DISABLE_GIT_HISTORY": "1",
+        },
     )
 
     actual_path = output_dir / "data_galaxy_audit.json"

@@ -108,7 +108,7 @@ _FORTRAN_SIMPLE_CASES = [
     ("class_start", "MODULE mymod", "SUBROUTINE foo(x)"),
     ("safety", "IMPLICIT NONE", "X = 1"),
     ("safety_bypasses", "COMMON /blk/ x, y", "X = 1"),
-    ("high_risk_execution", "GOTO 100", "X = 1"),
+    ("high_risk_execution", "STOP", "GOTO 100"),  # #2878 C3: a jump is nobody's signal
     ("io", "OPEN(10, FILE='x.txt')", "X = 1"),
     ("api", "SUBROUTINE foo()", "X = 1"),
     ("state_mutation", "X = 1", "CALL foo(x)"),
@@ -142,7 +142,8 @@ _FORTRAN_SIMPLE_CASES = [
     ("cleanup", "DEALLOCATE(x)", "X = 1"),
     ("encapsulation", "PRIVATE", "PUBLIC"),
     ("serialization_parsing", "FORMAT(I5)", None),
-    ("regex_execution", "INDEX(str, 'x')", "X = 1"),
+    # regex_execution is None since #2898 -- fortran's string intrinsics take no
+    # pattern; tested explicitly in test_fortran_test_vs_regex_execution_no_false_collision.
     ("time_date_logic", "CALL DATE_AND_TIME(date, time)", "X = 1"),
     ("ipc_rpc_bridges", "CALL MPI_Send(buf, count, dtype)", "X = 1"),
 ]
@@ -386,36 +387,30 @@ def test_fortran_dead_code_column_anchor_vs_free_form_inline_comment():
     assert dead_code.search("C IF (x) THEN"), "column-1 legacy comment must still match"
 
 
-def test_fortran_doc_vs_ownership_overlap_is_intentional():
+def test_fortran_doc_vs_ownership_author_no_collision():
     """
-    Ambiguity sweep finding (mirrors the abap case): `doc` and `ownership`
-    both fire on an "! Author: Jane Doe" header line -- both signatures
-    are legitimately about traceability/metadata, and `ownership`
-    additionally captures the specific author name (group 1) for
-    downstream attribution, which `doc` does not attempt.
+    BUG FIX (#2659): `Author:` is exclusively an `ownership` trait. Including it
+    in `doc` caused double-counting on standard authorship headers.
     """
     header = "! Author: Jane Doe"
-    assert FORTRAN_RULES["doc"].search(header)
+    assert not FORTRAN_RULES["doc"].search(header)
     m = FORTRAN_RULES["ownership"].search(header)
     assert m and m.group(1) == "Jane Doe"
 
 
-def test_fortran_ownership_column_anchor_stricter_than_doc():
+def test_fortran_ownership_keyed_line_tolerates_indentation():
     """
-    Positional-family accuracy check: `doc`'s Author/Description/Param/
-    Return alternative tolerates leading whitespace before the `!`
-    (`^[ \\t]*!`), but `ownership`'s equivalent alternative requires the
-    comment character literally in column 1 (`^[cCdD*!]`, no leading
-    whitespace group) -- an indented "! Author:" line matches `doc` but
-    not `ownership`. Confirmed intentional column-strictness difference,
-    not a bug: `ownership`'s docstring targets legacy fixed-form headers,
-    which are always unindented at file/routine scope.
+    #2882 C1 reversed the older column-1 pin: the keyed header line is the
+    tag wherever the comment sits (free-form `!` comments are routinely
+    indented inside a module), so `ownership` tolerates leading whitespace
+    exactly as `doc` does. A fixed-form `C` in column 1 still counts.
     """
-    indented = "   ! Author: Jane Doe"
+    indented = "   ! Description: A thing"
     assert FORTRAN_RULES["doc"].search(indented), "doc should tolerate leading whitespace before '!'"
-    assert not FORTRAN_RULES["ownership"].search(indented), (
-        "ownership requires column-1 anchoring -- indented form must not match"
-    )
+    m = FORTRAN_RULES["ownership"].search("   ! Author: Jane Doe")
+    assert m and m.group(m.lastindex) == "Jane Doe"
+    m = FORTRAN_RULES["ownership"].search("C Author: Jane Doe")
+    assert m and m.group(m.lastindex) == "Jane Doe"
 
 
 def test_fortran_globals_vs_safety_bypasses_common_intentional_double_classification():
@@ -530,13 +525,13 @@ def test_fortran_test_vs_regex_execution_no_false_collision():
     test = FORTRAN_RULES["test"]
     regex_execution = FORTRAN_RULES["regex_execution"]
 
+    # #2898: regex_execution is a contract-level absence -- SCAN/INDEX/VERIFY/
+    # ADJUSTL/ADJUSTR are string intrinsics that take no pattern, and standard
+    # fortran has no regex engine. The old collision scenario is moot.
+    assert regex_execution is None
+
     test_line = "call assert_equal(x, y)"
     assert test.search(test_line)
-    assert not regex_execution.search(test_line)
-
-    regex_line = "pos = INDEX(str, 'x')"
-    assert regex_execution.search(regex_line)
-    assert not test.search(regex_line)
 
 
 def test_fortran_func_start_vs_generics_no_false_collision():
@@ -598,7 +593,7 @@ _FORTRAN_DEEP_CASES = [
     # branch
     ("branch", "SELECT TYPE(a)", "SELECT_TYPE_VAR = 1"),
     ("branch", "SELECT  RANK (b)", "CASE_VAL = 1"),
-    ("branch", "GO TO 10", "DO_SOMETHING(x)"),
+    ("branch", "DO WHILE (x > 0)", "GO TO 10"),  # 2822 corollary 3: high_risk owns GOTO
     ("branch", "DO WHILE (x > 0)", "EXIT_CODE = 0"),
     ("branch", "IF (A .AND. B) THEN", "CYCLE_TIME = 5.0"),
     ("branch", "ELSEWHERE", "WHERE_AM_I = 'HERE'"),

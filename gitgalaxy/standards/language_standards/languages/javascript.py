@@ -70,9 +70,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
         # Decisions and logical jumps. EXCLUDES throw (bailout_hits).
-        "branch": re.compile(
-            r"\b(if|else|switch|case|default|for|while|do|catch|finally|continue|break|try)\b|&&|\|\||\?|\?\?"
-        ),
+        "branch": re.compile(r"\b(if|else|switch|case|default|for|while|do)\b|&&|\|\||\?|\?\?"),
         # 2. args (Parameters / Coupling)
         # Parameter blocks. Bounded to prevent ReDoS on massive positional/destructured sets.
         "args": re.compile(
@@ -83,8 +81,11 @@ DEFINITION: dict[str, Any] = {
             # FIX 1 (Invocation Shield): Injected `(?=[ \t\n]*\{)` at the end of the class
             # method branch, demanding structural proof that the signature opens a logic block.
             # FIX 2 (Control Flow Shield): `while (i < 10) {` structurally mimics a method.
-            # Injected `(?!(?:if|for|while|switch|catch|return)\b)` to prevent reserve words
-            # from being mapped as method names.
+            # Injected `(?!(?:if|for|while|switch|catch|return|with)\b)` to prevent reserve words
+            # from being mapped as method names. (#2539: `with (shape) {` -- sloppy-mode
+            # statement syntax, same `keyword (...) {` shape -- was missing from the list
+            # and counted as a method named `with`. `do` needs no entry: `do {` has no
+            # parens between keyword and block, so this branch can't match it.)
             # FIX 3 (Quadratic Blowup Shield): The arrow-function branch's identifier
             # match used an unbounded `[\w$]*`. On a long line with no `=>` at all
             # (e.g. a single massive minified/obfuscated line), the engine retried the
@@ -117,14 +118,14 @@ DEFINITION: dict[str, Any] = {
             r"(?:"
             r"\b(?:async[ \t\n]+)?function[ \t\n]*\*?[ \t\n]*(\w*)[ \t\n]*(\([^)]*\))|"
             r"(\([^)]*\)|[a-zA-Z_$][\w$]{0,100})[ \t\n]*=>|"
-            r"^[ \t]*(?:static[ \t\n]+)?(?:async[ \t\n]+)?(?:get[ \t\n]+|set[ \t\n]+)?\*?(?!(?:if|for|while|switch|catch|return)\b)(#?[a-zA-Z_$][\w$]*)[ \t\n]*(\([^)]*\))(?=[ \t\n]*\{)"
+            r"^[ \t]*(?:static[ \t\n]+)?(?:async[ \t\n]+)?(?:get[ \t\n]+|set[ \t\n]+)?\*?(?!(?:if|for|while|switch|catch|return|with)\b)(#?[a-zA-Z_$][\w$]*)[ \t\n]*(\([^)]*\))(?=[ \t\n]*\{)"
             r")",
             re.M,
         ),
         # 3. linear (Sequential Boundaries)
         # Structural declaration boundaries. EXCLUDES: Access modifiers (encapsulation) and const (freeze_hits).
         "structural_boundaries": re.compile(
-            r"\b(let|var|import|export|return|class|extends|super|await|delete|yield)\b|=>"
+            r"\b(let|var|import|export|return|break|continue|class|extends|super|await|delete|yield)\b|=>"
         ),
         # 4. func_start (Executable Logic Anchors)
         # Uses positive lookaheads (?=) to stop the match exactly at the identifier name.
@@ -174,7 +175,11 @@ DEFINITION: dict[str, Any] = {
             # working the same as before; only a bare statement with
             # neither `{` nor `=>` anywhere (e.g. `next();`) is newly
             # rejected.
-            r"^[ \t]*(?:static[ \t\n]+)?(?:async[ \t\n]+)?(?:get\s+|set\s+)?\*?(?!(?:if|for|while|switch|catch|return|throw|new|typeof|jQuery|function)\b|\$)#?[a-zA-Z_$][\w$]*(?=[ \t\n]*\([^)(]*\)[ \t\n]*(?::[^{=;]+)?[ \t\n]*(?:=>[ \t\n]*)?\{)"
+            # #2539: `with` added to the exclusion -- `with (shape) {` (sloppy-mode
+            # statement) has the exact `keyword (...) {` shape this branch matches,
+            # so it was counted as a method named `with`. `do` can't be caught the
+            # same way (`do {` has no parens), so it needs no entry.
+            r"^[ \t]*(?:static[ \t\n]+)?(?:async[ \t\n]+)?(?:get\s+|set\s+)?\*?(?!(?:if|for|while|switch|catch|return|throw|new|typeof|jQuery|function|with)\b|\$)#?[a-zA-Z_$][\w$]*(?=[ \t\n]*\([^)(]*\)[ \t\n]*(?::[^{=;]+)?[ \t\n]*(?:=>[ \t\n]*)?\{)"
             r")",
             re.M,
         ),
@@ -196,12 +201,22 @@ DEFINITION: dict[str, Any] = {
         "safety_bypasses": re.compile(r"(?<![=!])==(?!=)|!=(?!=)|\b(with|void)\b|eslint-disable|@ts-nocheck"),
         # 8. danger (High-Risk Execution / System Calls)
         # Catastrophic vulnerabilities. EXCLUDES console.log (print_hits) and TODO (debt).
+        # #2878 contract C2: innerHTML/outerHTML count as the assignment sink, not a read or a
+        # method named innerHTML; `debugger` is the statement, not `'./debugger'`; C5 alert is output.
         "high_risk_execution": re.compile(
-            r"\b(eval|document\.write|innerHTML|outerHTML|dangerouslySetInnerHTML|debugger|alert|process\.exit)\b"
+            r"\b(?:eval|document\.write(?:ln)?|dangerouslySetInnerHTML|process\.(?:exit|abort)|execSync|new\s+Function)\b|\.(?:innerHTML|outerHTML)\s*\+?=(?!=)|(?:^|[;{}])[ \t]*debugger\b",
+            re.M,
         ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
-            r"\b(fetch|axios|http|https|fs|path|database|sql|localStorage|sessionStorage|indexedDB|document\.cookie|XMLHttpRequest|child_process)\b"
+            # #2841 contract C1: fetch/axios/fs fire bare (facility names, no
+            # measured collision); path/http/https only in operative form -- bare
+            # `path` matched probeIo's parameter, bare https matched string URLs.
+            # database/sql dropped: everyday words, nothing plants them.
+            r"\b(fetch|axios|fs|localStorage|sessionStorage|indexedDB|document\.cookie|XMLHttpRequest|child_process)\b"
+            r"|\bhttps?\.(?:get|request|createServer|Agent|globalAgent)\b"
+            r"|\brequire\(\s*['\"](?:https?|path|net|dgram|dns|tls)['\"]\s*\)"
+            r"|\bpath\.(?:join|resolve|basename|dirname|extname|sep)\b"
         ),
         # 10. api (Public Surface Area)
         # Exposure surface. Explicit exports + implicit architectural defaults.
@@ -209,19 +224,49 @@ DEFINITION: dict[str, Any] = {
         # 11. flux (State Mutation)
         # Mutation of state. EXCLUDES const (freeze_hits).
         "state_mutation": re.compile(
-            r"\b(let|var|this\.|setState|mut|push|pop|shift|unshift|splice|sort|reverse|\.current[ \t]*=|\.set\(|\.delete\(|\.add\()\b"
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `let`/`var`/`const` declare (corollary 1) and a bare `this.` is mostly a read
+            # (corollary 3): the write is `x = v`, `this.x = v`, `x++`, or an in-place
+            # mutator on a receiver. `=` directly followed by `{`/quote is a JSX attribute
+            # (`bar={x}`), not a statement.
+            r"(?:^|[;{})])[ \t]*[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\?\.[A-Za-z_$][\w$]*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%&|^]|\*\*|<<|>>>?|&&|\|\||\?\?)?=(?![=>{\"'`])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_$(]"
+            r"|\bsetState\s*\("
+            r"|\.(?:push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin|set|delete|add|clear)\s*\(",
+            re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(r"//[ \t]*(?:if|for|while|function|class|return|var|const|let|import)\b"),
         # 13. doc (Structured Documentation)
-        "doc": re.compile(r"/\*\*|@param|@return|@throws|@deprecated|@typedef|@type|@template"),
+        # BUG FIX #2672: `/**` and the JSDoc tags (`@param`, `@return`, ...)
+        # were independent alternatives, so one JSDoc block counted doc
+        # proportional to its tag density. Block form first (bounded
+        # 0,15000 chars non-greedy span, the #2658 shape); bare tags stay
+        # last so a tag outside any doc block still counts. No corpus
+        # movement -- the rosetta corpus only plants one of {marker, tag}
+        # for this language.
+        "doc": re.compile(r"/\*\*[\s\S]{0,15000}?\*/|@param|@return|@throws|@deprecated|@typedef|@type|@template"),
         # 14. test (Testing & Assertions)
         # (?<!\.) on the it|test alternation: TypeScript's near-identical rule
         # already carries this guard so `myRegex.test('x')` (a regex method
         # call) isn't miscounted as a test-framework call -- JavaScript's own
         # rule never got the same fix despite the identical ambiguity.
+        # #2853 contract C3/C1: the bare menu `describe|expect|assert` fired on
+        # comment/string prose (`methodName === 'assert'`, `/* assert */`). Anchor
+        # the everyday words to their call form (`describe(`, `expect(`), keep the
+        # unambiguous framework names bare, and reduce bare `assert` to the chai
+        # matcher chain `assert.<x>` -- Node/`console.assert` runtime guards are
+        # safety's (C1). The `(?<!\.)\b(?:it|test)\s*\(` half is already
+        # contract-shaped. (`\bcy\.` anchored so it can't match `transparency.`.)
         "test": re.compile(
-            r"\b(describe|expect|assert|beforeEach|afterEach|jest|mocha|vitest|cy\.)\b|(?<!\.)\b(?:it|test)\s*\("
+            r"\b(?:jest|mocha|vitest|beforeEach|afterEach)\b|\bcy\.|(?<!\.)\b(?:describe|it|test)\s*\(|\bexpect\s*\(|\bassert\s*\."
         ),
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
         # 15. concurrency (Asynchronous Execution)
@@ -235,7 +280,13 @@ DEFINITION: dict[str, Any] = {
         # 17. closures (Closures / Anonymous Functions)
         "closures": re.compile(r"=>[ \t]*\{|\(\)[ \t]*=>|function\s*\([^)]*\)[ \t]*\{"),
         # 18. globals (Global / Shared State)
-        "globals": re.compile(r"\b(window\.|global\.|process\.env|document\.|navigator\.|self\.|globalThis\.)\b"),
+        "globals": re.compile(
+            # #2858 contract corollary 3: `self` and `global` are everyday
+            # identifiers (`const self = this`, assemblyscript's `let global =
+            # <Global>element` -- every crucible hit); the unambiguous handle is
+            # `globalThis.`.
+            r"\b(?:window|document|navigator|globalThis)\.(?=[\w$])|\bprocess\.env\b|\bimport\.meta\.env\b"
+        ),
         # 19. decorators (Decorators / Annotations)
         "decorators": re.compile(r"@\w+"),
         # 20. generics (Generics / Type Parameters)
@@ -245,7 +296,8 @@ DEFINITION: dict[str, Any] = {
         "comprehensions": re.compile(r"\.(?:map|filter|reduce|flatMap|some|every|find|forEach|groupBy)\s*\("),
         "scientific": re.compile(r"\b(?:import|require|from)\b.*?(?:numpy|pandas|scipy|matplotlib|opencv|cv2)\b"),
         "hardware_bridge": re.compile(
-            r"\b(?:import|require|from)\b.*?(?:serialport|usb|bluetooth|socket\.io|websocket|printer|webgl)\b"
+            # #2898: webgl removed -- a renderer, not a hardware peripheral.
+            r"\b(?:import|require|from)\b.*?(?:serialport|usb|bluetooth|socket\.io|websocket|printer)\b"
         ),
         "cryptography": re.compile(
             r"\b(?:import|require|from)\b.*?(?:crypto|bcrypt|x509|tls|ssl|jsonwebtoken|argon2)\b"
@@ -262,7 +314,9 @@ DEFINITION: dict[str, Any] = {
         "dl_frameworks": GLOBAL_DL_FRAMEWORKS,
         # 24. import (Dependency Inclusions)
         "import": re.compile(
-            r"\b(?:import|export)\b[^;]*?\bfrom\b|\brequire\s*\(|\bimport\s*\(",
+            # #2875: the lazy scan to `from` is bounded -- unbounded it is quadratic on a
+            # `from`-less payload (the contract module's detonation); no crucible change.
+            r"\b(?:import|export)\b[^;]{0,2000}?\bfrom\b|\brequire\s*\(|\bimport\s*\(",
             re.M,
         ),
         "_dependency_capture": re.compile(
@@ -290,7 +344,11 @@ DEFINITION: dict[str, Any] = {
         ),
         "_named_token_capture": re.compile(r"(?:import|export)\s+\{([^}]+)\}", re.M),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"(?:@author|Created by)\s+(.*)", re.I),
+        # #2882 contract: C1 colon-less `Created by` matched prose four times; `owner: x,` object fields are not tags
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -317,7 +375,12 @@ DEFINITION: dict[str, Any] = {
         # 35. pointers
         "pointers": None,
         # 36. memory_alloc
-        "memory_alloc": re.compile(r"\bnew\s+[A-Z]\w*"),
+        # #2898: `new <AnyCapitalized>` counted every object construction (new Error,
+        # new Promise). The registry reads memory_alloc as UNMANAGED allocation only
+        # (java/kotlin/scala/dart precedent: Arena/memScoped/ffi.Allocator, honest 0s).
+        "memory_alloc": re.compile(
+            r"\bnew\s+(?:ArrayBuffer|SharedArrayBuffer|WebAssembly\.Memory)\b|\bBuffer\.alloc(?:Unsafe(?:Slow)?)?\s*\("
+        ),
         # 37. inline_asm
         "inline_asm": None,
         # --- PHASE 5: RESOURCE MANAGEMENT & STABILITY ---
@@ -341,9 +404,13 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 45. immutability_locks (Immutability Constraints)
-        "immutability_locks": re.compile(r"\b(const|readonly|final|Object\.freeze|Object\.seal)\b"),
+        "immutability_locks": re.compile(
+            r"\bObject\.(?:freeze|seal)\b"
+        ),  # #2772 C1: `const` is the ordinary binding declaration; the runtime lock calls are the sites
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"\b(dispose|close|destroy|clearTimeout|clearInterval|removeEventListener|delete)\b"),
+        "cleanup": re.compile(
+            r"\b(?:clearTimeout|clearInterval|removeEventListener)\s*\(|\b(?<!function )(?:dispose|close|destroy)\s*\((?!\s*\)\s*(?::|\{))"
+        ),  # #2888 C1: bare tokens counted declarations and prose; C5: .delete( is state_mutation\'s (#2765)
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # JS private fields and keywords. `#` needed its own un-bounded
         # branch: \b#\b can only match when `#` is directly sandwiched
@@ -351,7 +418,11 @@ DEFINITION: dict[str, Any] = {
         # which never happens in real private-field syntax (`#foo` is
         # always preceded by `{`, whitespace, or `.` -- never a bare word
         # char) -- so the `#` alternative was completely unreachable.
-        "encapsulation": re.compile(r"\b(private|protected|internal)\b|#[a-zA-Z_$]"),
+        # #2766: js has no private/protected keywords (the old word list matched
+        # prose and, via `#`, C-preprocessor lines inside shader strings). One hit =
+        # a #field DECLARATION (assignment, bare field, or method) at class-member
+        # position -- not every usage of `this.#x`.
+        "encapsulation": re.compile(r"(?:^[ \t]*|[{;,][ \t]*)(?:static[ \t]+)?#[a-zA-Z_$]\w*[ \t]*[=;(]", re.M),
         # 48. listeners (Event Listeners / Observers)
         "listeners": re.compile(r"\b(on|addEventListener|subscribe|watch|effect)\b"),
         # 49. test_skip (Bypassed Tests / Ignored Specs)
@@ -360,12 +431,24 @@ DEFINITION: dict[str, Any] = {
         "lazy_evaluation": re.compile(r"\b(yield|yield\s*\*|function\s*\*)\b"),
         "vectorized_math": re.compile(r"\b(matmul|dot|cross|multiply)\s*\("),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (JS/TS Specifics) ---
+        # auth_middleware (#3004): passport's middleware registration, the express
+        # session login/logout and check, JWT/bcrypt credential verification, and
+        # NextAuth's server-side session gate. Call-anchored: `isAuthenticated` as
+        # a variable or a function definition never counts.
+        "auth_middleware": re.compile(
+            r"\b(?:passport\.authenticate|jwt\.verify|bcrypt\.compare(?:Sync)?|getServerSession)\("
+            r"|\breq\.(?:isAuthenticated|log(?:in|out))\("
+        ),
         "serialization_parsing": re.compile(r"\b(JSON\.parse|JSON\.stringify)\b"),
         "regex_execution": re.compile(r"\bnew\s+RegExp\b|\.(match|replace|search|split)\s*\("),
         "time_date_logic": re.compile(
             r"\b(Date\.now|new\s+Date|setTimeout|setInterval|clearTimeout|clearInterval|performance\.now)\b"
         ),
         "ipc_rpc_bridges": re.compile(r"\b(postMessage|Worker|MessageChannel|child_process|worker_threads|cluster)\b"),
+        # system_config_mutation (#3084): contract-level absence. runtime/app
+        # layer; host configuration is reachable only through child_process
+        # command text (high_risk_execution's exec boundary).
+        "system_config_mutation": None,
         # --- PHASE 4: APPSEC & AI SENSORS (Zero-Trust Pipelines) ---
         "rce_funnel": re.compile(r"child_process\.(?:spawn|exec|execSync)\s*\(\s*['\"](?:python|bash|sh|bun|node)\b"),
         "exfiltration_camouflage": re.compile(

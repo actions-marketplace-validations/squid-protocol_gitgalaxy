@@ -48,6 +48,19 @@ BLACKLISTED_IMPORTS: list[str] = [
 FIREWALL_NETWORK_WEIGHTING = False
 
 # ------------------------------------------------------------------
+# SECURITY LENS ON INERT FORMATS (#2978)
+# Whether Phase 5.5 (SecurityLens.scan_content) runs on the "inert" data
+# formats (plaintext, markdown, json, yaml, csv) that carry no code for
+# detector.py to parse. A hardcoded credential inside an ordinary
+# config.yaml/settings.json is invisible to the filename/extension-based
+# CRITICAL-LEAK shunt in aperture.py, so this is on by default. Flip off
+# for repos where the extra coverage trades for too much doc/config noise
+# (README code-fence examples, CI YAML `secrets:` blocks, high-entropy CSV
+# data) tripping the lens's other THREAT_SIGNATURES.
+# ------------------------------------------------------------------
+SECURITY_SCAN_INERT_FORMATS = True
+
+# ------------------------------------------------------------------
 # GLOBAL DENYLIST
 # String patterns for files that should NEVER exist in the repository.
 # If a file matches these patterns, scanners will instantly block the commit.
@@ -525,6 +538,18 @@ LEXICAL_FAMILY_HEURISTICS = {
         # a stateless per-line stripper is exactly what caused the bug.
         # Examples: scheme.
         "recursive_block_lisp": {"delimiters": [";", "#|", "|#"]},
+        # 2d. Recursive Block, REXX dialect (#2504)
+        # Same nested-block-peeling algorithm as recursive_block ("comments
+        # may be nested within other comments", TSO/E REXX Reference), but
+        # WITHOUT recursive_block's `//` line token: `//` is REXX's
+        # integer-remainder operator (`a // b`), so the shared family would
+        # truncate real arithmetic lines. The line token is ooRexx/Regina/
+        # NetRexx's `--` (classic z/OS REXX has no line comment at all;
+        # adjacent `--` double-negation is legal but vanishingly rare in real
+        # source, the accepted trade). prism.py also swaps the quote-masking
+        # branches for this family: REXX strings double their quote to escape,
+        # never backslash, and cannot span lines.
+        "recursive_block_rexx": {"delimiters": ["--", "/*", "*/"]},
         # 3. Line Exclusive
         # The language possesses no native multi-line block syntax. The engine ignores closing tags.
         # Examples: Python, Shell, Makefile, Ruby, Perl, Assembly.
@@ -699,6 +724,12 @@ ORCHESTRATOR_RULES = {
 # Consumed by: chronometer.py
 # ------------------------------------------------------------------------------
 CHRONOMETER_CONFIG = {
+    # #2976: force the OS-walk fallback even inside a git worktree. For
+    # determinism-sensitive harnesses (the golden-crucible pins) whose
+    # corpus git history is not part of the measured structure. The
+    # GITGALAXY_DISABLE_GIT_HISTORY=1 environment variable is the same
+    # switch for subprocess invocations.
+    "DISABLE_GIT_HISTORY": False,
     # The absolute ceiling for OS-level fallback scanning
     "FALLBACK_SCAN_LIMIT": 25000,
     # Process management

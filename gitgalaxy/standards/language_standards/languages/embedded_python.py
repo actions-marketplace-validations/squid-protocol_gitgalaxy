@@ -29,8 +29,27 @@ DEFINITION: dict[str, Any] = {
     # EXECUTION SIGNATURES: Interpreters found on Line 1 for embedded discovery and cross-compilation.
     "shebangs": ["micropython", "mpy-cross"],
     # Instantly claims any .py file utilizing embedded electronics networking or GPIO libraries
+    #
+    # #3132: the hardware-library list alone only reaches a firmware project's
+    # driver layer. Its telemetry/protocol/support modules import nothing from
+    # it, so they fell through to ecosystem gravity and locked to `python`
+    # (7 of 14 files in the crucible's meow_turtle project). Two additions,
+    # both MicroPython-exclusive, so precision is unchanged:
+    #   * the `micropython` module itself -- `micropython.const()` /
+    #     `@micropython.native` is the language's own API and has no CPython
+    #     counterpart;
+    #   * the `u`-prefixed standard library (`utime`, `ujson`, `ubinascii`,
+    #     `uasyncio`, ...), which is MicroPython's reduced-stdlib naming
+    #     convention. CPython ships none of these, so the bare `u` prefix is
+    #     safe to anchor -- but it is enumerated rather than matched as
+    #     `u\w+` so an ordinary local module (`utils`, `ui`) cannot trip it.
     "internal_discriminator": re.compile(
-        r"^[ \t]*(?:import|from)\s+(?:machine|board|microcontroller|busio|digitalio|analogio|usb_hid|neopixel|rp2|esp32|pyb|wifi|socketpool)\b",
+        r"^[ \t]*(?:import|from)\s+(?:"
+        r"machine|board|microcontroller|busio|digitalio|analogio|usb_hid|neopixel|rp2|esp32|pyb|wifi|socketpool"
+        r"|micropython"
+        r"|utime|ujson|uos|ubinascii|usocket|ussl|uselect|uasyncio|uctypes|uerrno|uhashlib|uheapq|uio|urandom"
+        r"|ure|ustruct|uzlib|ucollections|ubluetooth|ucryptolib|umqtt"
+        r")\b",
         re.M,
     ),
     # UPGRADED: Maps to Family 3 (Pure Hash)
@@ -41,7 +60,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
         # Decisions and logical jumps. EXCLUDES raise (bailout_hits).
-        "branch": re.compile(r"\b(if|elif|else|for|while|with|try|finally|match|case|and|or)\b"),
+        "branch": re.compile(r"\b(if|elif|else|for|while|match|case|and|or)\b"),
         # 2. args (Parameters / Coupling)
         # Parameter blocks of functions/lambdas. Bounded negation to prevent ReDoS.
         # #1199: the parameter list is now captured in its own group
@@ -64,7 +83,7 @@ DEFINITION: dict[str, Any] = {
         # 3. linear (Sequential Boundaries)
         # Structural boundaries. EXCLUDES: _private (encapsulation) and Final (freeze_hits).
         "structural_boundaries": re.compile(
-            r"\b(def|class|return|import|from|as|pass|continue|break|yield|await|assert|del|global|nonlocal|type)\b"
+            r"\b(def|class|return|import|from|as|with|pass|continue|break|yield|await|assert|del|global|nonlocal|type)\b"
         ),
         # 4. func_start (Executable Logic Anchors)
         # ONLY executable logic blocks. EXCLUDES classes. Steps safely over hardware decorators.
@@ -80,8 +99,9 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
         # 6. safety (Defensive Programming / Validation)
         # Hardware watchdogs and standard Python safety checks.
+        # C3 twin-parity with python (#2852 lesson). Fixes b.py: bare except x2 → 0.
         "safety": re.compile(
-            r"\b(try|except|finally|assert|machine\.WDT|isinstance|issubclass|hasattr|getattr|alloc_emergency_exception_buf)\b"
+            r"\b(try|finally|assert|machine\.WDT|isinstance|issubclass|hasattr|alloc_emergency_exception_buf)\b|\bexcept\s+(?!(?:Base)?Exception\b)[A-Za-z_]\w*"
         ),
         # 7. safety_neg (Safety Bypasses / Unchecked Types)
         # Bare excepts and blocking the event loop (detrimental in embedded async).
@@ -91,8 +111,9 @@ DEFINITION: dict[str, Any] = {
         ),
         # 8. danger (High-Risk Execution / System Calls)
         # Hardware resets and raw memory pokes. EXCLUDES TODO (debt) and print (print_hits).
+        # #2878 contract C1a: the os-level exits join (python twin parity).
         "high_risk_execution": re.compile(
-            r"\b(machine\.reset|machine\.deepsleep|machine\.bootloader|machine\.disable_irq|eval|exec|sys\.exit)\b"
+            r"\b(machine\.reset|machine\.deepsleep|machine\.bootloader|machine\.disable_irq|eval|exec|sys\.exit|os\._exit|os\.abort)\b"
         ),
         # 9. io (I/O & Network Boundaries)
         # Hardware Peripherals (I2C, SPI, UART, Pin) and Networking.
@@ -108,12 +129,35 @@ DEFINITION: dict[str, Any] = {
         # 11. flux (State Mutation)
         # State mutation including hardware value toggling.
         "state_mutation": re.compile(
-            r"\bglobal\b|\bnonlocal\b|\b(?:self|cls)\.\w+[ \t]*=|:=|(?:\.\w+)?\.(?:append|extend|update|pop|remove|insert|clear)\s*\(|\.(?:value|on|off|high|low|toggle)\s*\("
+            # #2817: count a plain assignment statement (`x = v`, `obj.attr = v`,
+            # `d[k] = v`) as a write -- see python.py for the space-before-`=` black
+            # anchor, the `==`/kwarg/default/annotated exclusions, and why re.M.
+            #
+            # Hardware-toggle arm (#2765 contract corollaries 3 & 4): a call by
+            # itself is not a write -- a read is not a write, and a token another
+            # rule owns is not a second signal.
+            #   * `.value(` is BOTH getter and setter in MicroPython/CircuitPython:
+            #     `pin.value(1)` writes, `pin.value()` reads. Require a non-empty
+            #     argument so the getter (`if pin.value() == 0`, `x = pin.value()`)
+            #     is not miscounted -- the `x = ...` case still counts once via the
+            #     assignment arm above, not twice.
+            #   * `.on()/.off()/.high()/.low()/.toggle()` are the no-arg imperative
+            #     write forms; require empty parens so a parameterised `.on(evt, cb)`
+            #     -- an event SUBSCRIPTION owned by `events`/`listeners` -- does not
+            #     read as a mutation.
+            r"(?:^|;)[ \t]*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*[ \t]+=(?![=])(?![^\n(]{0,300},[ \t]*$)"
+            r"|\bglobal\b|\bnonlocal\b|\b(?:self|cls)\.\w+[ \t]*=|:=|(?:\.\w+)?\.(?:append|extend|update|pop|remove|insert|clear)\s*\("
+            r"|\.value\s*\(\s*[^)\s]|\.(?:on|off|high|low|toggle)\s*\(\s*\)",
+            re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(r"#[ \t]*(?:def|class|import|if|for|while|try|print|machine\.Pin)\b"),
         # 13. doc (Structured Documentation)
-        "doc": re.compile(r'"""|\'\'\'|:param|:return|:raises|:type|#\s*Pin[ \t]*=|#\s*GPIO'),
+        # BUG FIX #2658: Match full docstring span as a single bounded body so
+        # """ counts as doc=1, not 2. Unterminated delimiters fail safely.
+        "doc": re.compile(
+            r'"""[\s\S]{0,15000}?"""|\'\'\'[\s\S]{0,15000}?\'\'\'|:param|:return|:raises|:type|#\s*Pin[ \t]*=|#\s*GPIO'
+        ),
         # 14. test (Testing & Assertions)
         # BUG FIX: `test_` was wrapped inside the shared `\b(...)\b` group.
         # `_` is a word character, so the trailing `\b` after `test_` demands
@@ -124,7 +168,8 @@ DEFINITION: dict[str, Any] = {
         # as `def[ \t]+test_` instead (matches python's own fix for the
         # identical trap), dropping the trailing `\b` so it fires on the
         # realistic `def test_<name>` shape.
-        "test": re.compile(r"\b(unittest|pytest|assert|setUp|tearDown|Mock)\b|def[ \t]+test_"),
+        # #2852 contract C1: the assert statement is the runtime guard -- safety's hit (#2626 applied to the twin)
+        "test": re.compile(r"\b(unittest|pytest|setUp|tearDown|Mock)\b|def[ \t]+test_"),
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
         # 15. concurrency (Asynchronous Execution)
         "concurrency": re.compile(
@@ -138,7 +183,12 @@ DEFINITION: dict[str, Any] = {
         # 17. closures (Closures / Anonymous Functions)
         "closures": re.compile(r"\blambda\b"),
         # 18. globals (Global / Shared State)
-        "globals": re.compile(r"\bglobal\b|\bglobals\(\)|\blocals\(\)|\b(sys\.path|sys\.modules|os\.environ)\b"),
+        "globals": re.compile(
+            # #2858 contract: the twin of python's rule -- `global x` anchored to the
+            # statement, `locals()` out (corollary 5), `sys.argv` in.
+            r"^[ \t]*global[ \t]+[A-Za-z_]|\bglobals\(\)|\b(?:sys\.path|sys\.modules|sys\.argv|os\.environ)\b",
+            re.M,
+        ),
         # 19. decorators (Decorators / Annotations)
         # Generic decorators. (Specific ASM/Viper optimizations moved to heat_triggers/inline_asm).
         "decorators": re.compile(
@@ -180,10 +230,18 @@ DEFINITION: dict[str, Any] = {
             r"__(?:getattr|setattr|new|call|dict|dir|import)__|@(?:staticmethod|classmethod|property)|@micropython\.(?:viper|native)\b|\b(?:getattr|setattr|hasattr)\b"
         ),
         # 24. import (Dependency Inclusions)
-        "import": re.compile(r"^[ \t]*(?:import|from)\b\s+[\w.]+", re.M),
+        # #2875 contract: twin parity with python -- the loader calls join the anchored
+        # statement form (a `from`/`import` after `;` counts, as in python).
+        "import": re.compile(
+            r"(?:^|;)[ \t]*(?:import|from)[ \t]+[\w.]+|\b__import__[ \t]*\(|\bimportlib\.import_module[ \t]*\(", re.M
+        ),
         "_dependency_capture": re.compile(r"^[ \t]*(?:import|from)\b\s+([\w.]+)", re.M),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"(?:__author__[ \t]*=|Author:|Created by:)\s*(.*)", re.I),
+        # #2882 contract: C1 python parity: __author__, `.. moduleauthor::`, `:author:` docinfo, keyed lines; `owner: T` annotations are not tags
+        "ownership": re.compile(
+            r"^[ \t]*__author__[ \t]*=[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*\.\.[ \t]+(?:module|section)author::[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:#+|:)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -251,20 +309,39 @@ DEFINITION: dict[str, Any] = {
         # 45. immutability_locks (Immutability Constraints)
         "immutability_locks": re.compile(r"\b(Final|frozenset|mappingproxy|immutable)\b"),
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"\b(close|__exit__|del|gc\.collect|cleanup)\b\s*\("),
+        "cleanup": re.compile(
+            r"\b(?<!def )(close|__exit__|del|gc\.collect|cleanup)\b\s*\("
+        ),  # #2888 C1: `def close(self):` declares (python twin)
         # 47. encapsulation (Access Modifiers / Encapsulation)
-        "encapsulation": re.compile(r"\b_[a-zA-Z_]\w*\b"),
+        # #2766: declaration-position only (python twin parity) -- the bare-word form
+        # counted every usage of a private name.
+        "encapsulation": re.compile(
+            # dunders are the public protocol surface, excluded (python twin parity).
+            r"^[ \t]*(?:async[ \t]+)?def[ \t]+(?!__\w+__[ \t]*\()_\w+"
+            r"|^[ \t]*class[ \t]+(?!__\w+__\b)_\w+"
+            r"|^(?!__\w+__[ \t]*=)_[a-zA-Z_]\w*[ \t]*=(?!=)"
+            r"|self\.(?!__\w+__[ \t]*=)_\w+[ \t]*=(?!=)",
+            re.M,
+        ),
         # 48. listeners (Event Listeners / Observers)
         # Waiting for state broadcast via hardware IRQs or event listeners.
         "listeners": re.compile(r"\.irq\(|handler=|callback="),
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"\b(pytest\.mark\.skip|unittest\.skip|mock\.|MagicMock)\b"),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Embedded Python Specifics) ---
+        # auth_middleware (#3004): contract-level absence. Single-tenant
+        # microcontroller target: no OS identity, no session, no auth framework.
+        "auth_middleware": None,
         "serialization_parsing": re.compile(r"\b(ujson\.loads?|ujson\.dumps?|ustruct\.pack|ustruct\.unpack)\b"),
         "regex_execution": re.compile(r"\b(ure\.compile|ure\.search|ure\.match|ure\.sub)\b"),
         "time_date_logic": re.compile(r"\b(utime\.sleep_ms|utime\.ticks_ms|utime\.ticks_diff|machine\.RTC)\b"),
-        "ipc_rpc_bridges": re.compile(
-            r"\b(machine\.Pin|machine\.I2C|machine\.UART|network\.WLAN|usocket\.socket|busio\.I2C)\b"
-        ),
+        # #2898: the peripheral handles (machine.Pin/I2C/UART, network.WLAN, busio.I2C)
+        # removed -- io's tokens (its rule already counts them). A socket is the one
+        # genuine process/host boundary this dialect has.
+        "ipc_rpc_bridges": re.compile(r"\busocket\.socket\b"),
+        # system_config_mutation (#3084): contract-level absence. same surface
+        # as python: stdlib winreg exists but crucible incidence is 0; host
+        # config is otherwise file I/O or subprocess (their owners').
+        "system_config_mutation": None,
     },
 }

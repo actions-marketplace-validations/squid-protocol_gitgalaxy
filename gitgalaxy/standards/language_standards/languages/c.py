@@ -55,7 +55,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
         # Decisions and jumps. EXCLUDES exit/abort (bailout_hits).
-        "branch": re.compile(r"\b(if|else|switch|case|default|for|while|do|break|continue|goto)\b|&&|\|\||\?"),
+        "branch": re.compile(r"\b(if|else|switch|case|default|for|while|do)\b|&&|\|\||\?"),
         # 2. args (Parameters / Coupling)
         # Parameter blocks. Bounded negation [^)]* to prevent ReDoS on massive param lists.
         "args": re.compile(
@@ -92,7 +92,7 @@ DEFINITION: dict[str, Any] = {
         # 3. linear (Sequential Boundaries)
         # Structural boundaries. EXCLUDES: Access modifiers (encapsulation) and const (freeze_hits).
         "structural_boundaries": re.compile(
-            r"\b(struct|union|enum|typedef|return|void|restrict|auto|bool|true|false|_BitInt|alignas|alignof)\b"
+            r"\b(struct|union|enum|typedef|return|break|continue|void|restrict|auto|bool|true|false|_BitInt|alignas|alignof)\b"
         ),
         "func_start": re.compile(
             # =====================================================================
@@ -164,10 +164,14 @@ DEFINITION: dict[str, Any] = {
         "safety_bypasses": re.compile(r"\b(strcpy|strcat|sprintf|gets|alloca)\b|\([a-zA-Z_]\w*\s*\*\)\s*[a-zA-Z_]\w*"),
         # 8. danger (High-Risk Execution / System Calls)
         # Process killers and context switches. EXCLUDES prints (Phase 5).
-        "high_risk_execution": re.compile(r"\b(system|popen|execl|execv|fork|longjmp|setjmp)\b"),
+        # #2878 contract C2: call form (the crucible's only hit was `"Load system defaults"`);
+        # C1a exit/abort join (cpp/objective-c parity); setjmp is the landing point.
+        "high_risk_execution": re.compile(
+            r"\b(?:system|popen|exec[lv][pe]?|execve|fork|abort|exit|_Exit|longjmp)\s*\("
+        ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
-            r"\b(fopen|fclose|fread|fwrite|fscanf|sscanf|socket|recv|send|open|read|write|close|stat|fseek|remove|rename)\b"
+            r"\b(?:fopen|fread|fwrite|fscanf|sscanf|socket|recv|send|open|read|write|stat|fseek|rename)\b\s*\("
         ),
         # 10. api (Public Surface Area)
         # Linker-visible global exports.
@@ -187,23 +191,71 @@ DEFINITION: dict[str, Any] = {
             # is a word character, never true for the realistic form
             # (whitespace/newline before the return type follows). Pulled
             # both out of the shared boundary group.
+            # BUG FIX #2730 (api contract): the two declaration-shaped
+            # alternatives allowed leading indentation, so every BODY-LOCAL
+            # declaration and every two-word statement counted as public
+            # surface -- `return NULL;` alone was 513 of the crucible
+            # corpus's 8675 matches, with `goto error;`, `int i;` and
+            # `PyObject *value;` behind it; 7534 of the 8675 were not
+            # file-scope declarations at all. (#2734 documented this shape
+            # from the other side, where the span form suppressed all 73
+            # orphans in `ceval.c`.) Anchored to column 0 -- C puts
+            # file-scope declarations there and indents everything inside a
+            # function -- and excluded the statement keywords that can
+            # legitimately start a line. `[ \t\n]` rather than `\s` keeps
+            # the K&R two-line form (`PyObject *\nfoo(void)`) matching, which
+            # is the reason the separator was allowed to span lines at all.
+            # #2907 (api contract, one owner per token): the column-0
+            # declaration shape also matched every file-scope VARIABLE
+            # (`int shared_region = 1;`, `PyTypeObject PyDict_Type = {`,
+            # `FILE *out;` -- 101 of the crucible's 1141 hits, both of the
+            # rosetta `globals` plants), which the contract gives to
+            # `globals` (#2858) and which is neither a function nor a type.
+            # The shape is now a FUNCTION DECLARATOR -- one to four
+            # type words, the name, then `(` -- with the paren allowed on
+            # the next line for Doom's `void\nI_Tactile\n( int on,` layout,
+            # plus the type declarations the old shape happened to cover
+            # (`typedef ...`, `struct name {`). The bare-prototype
+            # alternative this subsumes (`^type name(...);`) never excluded
+            # `static`, so `static MP_DEFINE_CONST_FUN_OBJ_0(...)` counted.
             r"\bextern\b|__declspec\(dllexport\)|"
             r'__attribute__\(\(visibility\("default"\)\)\)|'
-            r"^[ \t]*(?!static\b)[a-zA-Z_]\w*(?:\s*[*&]+\s*|\s+)[a-zA-Z_]\w*(?:\[[^\]]*\])?\s*=?|"
-            r"^[ \t]*[a-zA-Z_]\w*(?:\s*[*&]+\s*|\s+)[a-zA-Z_]\w*\s*\([^)]*\)\s*;",
+            r"^typedef\b|^(?:struct|union|enum)[ \t]+[a-zA-Z_]\w*[ \t]*\{|"
+            r"^(?!static\b)(?!(?:return|goto|else|case|break|continue|do|while|if|for|switch|sizeof|typedef)\b)"
+            r"(?:[a-zA-Z_]\w*(?:[ \t]*[*&]+[ \t\n]*|[ \t\n]+)){1,4}[a-zA-Z_]\w*[ \t\n]*\(",
             re.M,
         ),
         # 11. flux (State Mutation)
         # Mutation of state. EXCLUDES const/constexpr (freeze_hits).
-        "state_mutation": re.compile(r"(?<![=!<>])=(?![=])|\*(?!\s*const)\w+[ \t]*=|(?:\+\+|--)"),
+        "state_mutation": re.compile(
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            r"(?:^|[;{}(),])[ \t]*\**[A-Za-z_]\w*(?:(?:\.|->)[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*[ \t]*(?:[-+*/%&|^]|<<|>>)?=(?![=])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_(*]",
+            re.M,
+        ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(r"(?://|/\*)[ \t]*(?:if|for|while|struct|union|enum|void|int|return)\b"),
         # 13. doc (Structured Documentation)
-        "doc": re.compile(r"///|/\*\*|@param|@return|@brief|@details|\\param|\\return|\\brief|\\details"),
-        # 14. test (Testing & Assertions)
-        "test": re.compile(
-            r"\b(?:TEST|TEST_F|TEST_CASE|CU_ASSERT|RUN_TEST|EXPECT_[A-Z_]+|ASSERT_[A-Z_]+)\b|\bassert\s*\("
+        # BUG FIX #2672: `/**`, `///` and the Doxygen tags (`@param`,
+        # `\param`, ...) were independent alternatives, so one Doxygen
+        # comment counted doc proportional to its tag density. Block form
+        # first (bounded 0,15000 chars non-greedy span, the #2658 shape),
+        # then the line-marker form so `/// @param x` is one hit per line,
+        # not two; bare tags stay last so a tag outside any doc comment
+        # still counts. No corpus movement -- the rosetta corpus only
+        # plants one of {marker, tag} for this language.
+        "doc": re.compile(
+            r"/\*\*[\s\S]{0,15000}?\*/|///[^\n]*|@param|@return|@brief|@details|\\param|\\return|\\brief|\\details"
         ),
+        # 14. test (Testing & Assertions)
+        # #2852 contract C1: bare assert( is the C runtime guard -- safety's hit (python precedent #2626)
+        "test": re.compile(r"\b(?:TEST|TEST_F|TEST_CASE|CU_ASSERT|RUN_TEST|EXPECT_[A-Z_]+|ASSERT_[A-Z_]+)\b"),
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
         # 15. concurrency (Asynchronous Execution)
         "concurrency": re.compile(
@@ -222,7 +274,18 @@ DEFINITION: dict[str, Any] = {
             # Same strict O(1) alternation fix applied here as in the `api` rule
             # to prevent exponential space/asterisk evaluation.
             # =====================================================================
-            r"^[ \t]*(?:static\s+|extern[ \t]+)?[a-zA-Z_]\w*(?:\s*[*&]+\s*|\s+)[a-zA-Z_]\w*(?:\[[^\]]*\])?\s*=(?![ \t]*==)",
+            # #2858 contract: a global is a binding with program lifetime -- a
+            # file-scope declaration (column 0: C's file scope is unindented, the
+            # #2651 dart/zig anchor) or a `static` inside a body (a local whose
+            # storage outlives the call). A function-local declaration with an
+            # initializer (`PyThreadState *tstate = _PyThreadState_GET();`, 2,771
+            # crucible hits under the old any-indentation form) is not a global
+            # (corollary 1); a prototype (`static void f(void);`) is linkage, not
+            # state (corollary 4).
+            r"^(?![ \t])(?:(?:static|extern|const|volatile|_Thread_local|register|_Atomic)[ \t]+)*"
+            r"(?:(?:struct|union|enum)[ \t]+)?[a-zA-Z_]\w*(?:[ \t]*[*&]+[ \t]*|[ \t]+)(?:const[ \t]+)?"
+            r"[a-zA-Z_]\w*(?:\[[^\]\n]{0,100}\])*[ \t]*(?:=(?![=])|[;,])"
+            r"|^[ \t]+(?:static|_Thread_local)[ \t]+(?!assert\b)(?![^;=\n(]{0,200}\()[^;\n]{0,200}[;=]",
             re.M,
         ),
         # 19. decorators (Decorators / Annotations)
@@ -249,7 +312,11 @@ DEFINITION: dict[str, Any] = {
         "import": re.compile(r'^[ \t]*#[ \t]*(?:include|embed)\s*[<"][^>"]+[>"]', re.M),
         "_dependency_capture": re.compile(r'^[ \t]*#[ \t\n]*(?:include|embed)[ \t\n]*[<"]([^>"]+)[>"]', re.M),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"(?:@author|\\author|Author:|Created by:|Copyright)\s+(.*)", re.I),
+        # #2882 contract: C2 the copyright notice and the license's own prose out (51 -> 0 on the crucible); \author, keyed lines, Xcode's dated `Created by` in
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|\\author[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*//+[ \t]*Created[ \t]+by[ \t]+(\S[^\n]*?)[ \t]+on[ \t]+\d[^\n]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -278,7 +345,9 @@ DEFINITION: dict[str, Any] = {
             r"->|\b(?:uintptr_t|intptr_t|ptrdiff_t|size_t)\b|(?<=[=\s,(])&\w+|(?<=[=\s,(])\*(?:\s*const\s*)?\w+"
         ),
         # 36. memory_alloc (Manual Memory Management)
-        "memory_alloc": re.compile(r"\b(malloc|calloc|realloc|free|aligned_alloc|mmap|alloca)\b"),
+        # #2899: anchored to the call form -- bare names matched `"malloc failed"`
+        # inside strings and `free` as an ordinary identifier (freefunc free).
+        "memory_alloc": re.compile(r"\b(malloc|calloc|realloc|free|aligned_alloc|mmap|alloca)\s*\("),
         # 37. inline_asm (The Bare Metal)
         "inline_asm": re.compile(
             r"\b(?:__asm__|asm|__asm)\b(?:\s+(?:volatile|__volatile__))?\s*\(|\b(?:__asm__|asm|__asm)\b[ \t]*\{"
@@ -309,7 +378,9 @@ DEFINITION: dict[str, Any] = {
         # 45. immutability_locks (Immutability Constraints)
         "immutability_locks": re.compile(r"\b(const|constexpr|alignas|restrict)\b"),
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"\b(free|fclose|close|munmap|destroy|shutdown)\b\s*\("),
+        "cleanup": re.compile(
+            r"\b(free|fclose|close|munmap|destroy|shutdown|remove)\b\s*\("
+        ),  # #2888/#2843: remove() destroys external state, the sqlite DROP TABLE precedent
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # Physical Reality: Static functions/variables are internal/private to the translation unit.
         "encapsulation": re.compile(r"^[ \t]*static\b", re.M),
@@ -322,9 +393,29 @@ DEFINITION: dict[str, Any] = {
         # char after `(` is `)`, not a word char.
         "test_skip": re.compile(r"\b(?:IGNORE_TEST|test\.skip)\b|mock\(|fake\("),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (C Specifics) ---
+        # auth_middleware (#3004): PAM's verification conversation, the POSIX
+        # identity switches, and the Win32 logon/token queries. Call-anchored so
+        # a comment-stripped mention or an identifier never counts.
+        "auth_middleware": re.compile(
+            r"\b(?:pam_authenticate|pam_acct_mgmt|pam_open_session"
+            r"|set(?:e|res)?uid|set(?:e|res)?gid"
+            r"|LogonUser[AW]?|CheckTokenMembership)[ \t]*\("
+        ),
         "serialization_parsing": re.compile(r"\b(cJSON_Parse|json_loads|xmlReadMemory|xmlParseFile|jansson)\b"),
         "regex_execution": re.compile(r"\b(regcomp|regexec|regfree)\b"),
         "time_date_logic": re.compile(r"\b(time_t|clock_gettime|gettimeofday|localtime_r?|strftime)\b"),
         "ipc_rpc_bridges": re.compile(r"\b(fork|pipe|shmget|shmat|mmap|socket|bind|listen|accept)\b"),
+        # system_config_mutation (#3084): contract-level absence. no dedicated
+        # config-mutation form -- a sysfs/registry/conf-file write is ordinary
+        # file I/O (io's), indistinguishable from a data write at the language
+        # layer.
+        "system_config_mutation": None,
+        # #3072: state_mutation is the file-level most expensive C rule and
+        # every arm requires `=`, `++`, or `--` on the match's own line --
+        # sweep only the lines that contain one (the #3063 var-decl gate,
+        # generalized). Eligibility is re-proven from the pattern at cache
+        # build (rule_prefilter.build_line_gate); an edit that breaks
+        # line-locality demotes the rule to whole-segment, never miscounts.
+        "_line_gates": ("state_mutation",),
     },
 }

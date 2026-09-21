@@ -64,23 +64,27 @@ _KOTLIN_SIMPLE_CASES = [
     # (signature, positive snippet, text expected to NOT match / None to skip)
     ("branch", "when (x) {", "val whenTime = 5"),
     ("branch", "} else {", "val ifBlock = IfBlock()"),
-    ("branch", "val name = user?.name ?: \"Unknown\"", "val effort = 5"),
+    ("branch", 'val name = user?.name ?: "Unknown"', "val effort = 5"),
     ("branch", "if (a && b || c) {", "val tryBlock = 1"),
-    ("branch", "try { doWork() } catch (e: Exception) {", "val branch = \"test\""),
+    ("branch", "do { work() } while (x)", "try { doWork() } catch (e: Exception) {"),  # 2822 corollary 1
     ("branch", "do { x++ } while (x < 10)", "fun differentiate()"),
     ("args", "fun foo(x: (Int) -> String) {", "val func = foo(x, y)"),
     ("args", "fun <T : Comparable<T>> sort(list: List<T>) {", "class Foo(val x: Int)"),
     ("args", "constructor(name: String, age: Int) {", "if (a < b && c > d)"),
     ("args", "fun com.example.MyClass.extension(x: Int) {", "{ println(it) }"),
     ("args", "fun `weird name with spaces`(x: Int) {", "val args = arrayOf()"),
-    ("args", "{ x: Int, y: Int ->", "map.get(\"x\")"),
+    ("args", "{ x: Int, y: Int ->", 'map.get("x")'),
     ("args", "fun foo(a: List<Map<String, Int>>) {", "funCall()"),
     ("args", "val f = fun(x: Int) { }", "val x = y"),
-    ("func_start", "@JvmStatic\n@JvmOverloads\npublic final suspend inline fun <T> `my func`() {", "val function = { }"),
+    (
+        "func_start",
+        "@JvmStatic\n@JvmOverloads\npublic final suspend inline fun <T> `my func`() {",
+        "val function = { }",
+    ),
     ("func_start", "context(Logger, Env)\nfun doWork() {", "funCall()"),
-    ("func_start", "override fun toString(): String = \"\"", "class funTime {"),
+    ("func_start", 'override fun toString(): String = ""', "class funTime {"),
     ("func_start", "init {", "val x = y"),
-    ("func_start", "constructor() : this(0)", "map.get(\"x\")"),
+    ("func_start", "constructor() : this(0)", 'map.get("x")'),
     ("func_start", "fun <T, U : List<T>> genericFunc() {", "val foo = 1"),
     ("func_start", "internal expect fun platformSpecific(): Int", "val y = 2"),
     ("func_start", "@OptIn(ExperimentalCoroutinesApi::class)\nsuspend fun fetch() {", "val z = 3"),
@@ -97,7 +101,7 @@ _KOTLIN_SIMPLE_CASES = [
     ("structural_boundaries", "return", "val packageId = 5"),
     ("structural_boundaries", "class Foo", "val returnCode = 0"),
     ("structural_boundaries", "interface Bar", "val classType = 1"),
-    ("structural_boundaries", "object Baz", "val importPath = \"\""),
+    ("structural_boundaries", "object Baz", 'val importPath = ""'),
     ("structural_boundaries", "fun doWork()", "funCall()"),
     ("structural_boundaries", "typealias Name = String", "val x = 1"),
     ("safety", "val x = require(x > 0)", "val isValid = true"),
@@ -105,7 +109,7 @@ _KOTLIN_SIMPLE_CASES = [
     ("high_risk_execution", "exitProcess(1)", "Runtime.version()"),
     ("io", "val f = File(path)", "val hash = FileUtils.hash(path)"),
     ("api", "public fun foo() {}", "private fun foo() {}"),
-    ("state_mutation", "var count = 0", "val count = 0"),
+    ("state_mutation", "count = 1", "var count = 0"),  # #2765: a declaration is not a write
     ("dead_code", "// fun foo() {}", "// this is deprecated, remove later"),
     ("doc", "/** A doc comment */", "/* internal note, not exported */"),
     ("test", "assertEquals(a, b)", "computeTotal(a, b)"),
@@ -136,7 +140,7 @@ _KOTLIN_SIMPLE_CASES = [
     ("thread_sleeps", "delay(1000)", "Thread.currentThread().name"),
     ("bitwise_ops", "a xor b", "val valid = a && b"),
     ("sync_locks", "val mutex = Mutex()", "val lockPosition = getDoorState()"),
-    ("immutability_locks", "val x = 5", "var x = 5"),
+    ("immutability_locks", "const val X = 5", "val x = 5"),  # #2772 C1: `val` is the ordinary binding
     ("cleanup", "conn.close()", "conn.closeQuietly()"),
     ("encapsulation", "private val x = 5", "public val x = 5"),
     ("listeners", "button.setOnClickListener { doThing() }", "button.performClick()"),
@@ -279,3 +283,120 @@ def test_kotlin_redos_immunity_sweep():
     assert_redos_immune(KOTLIN_RULES["func_start"], "fun foo<" + "<" * 100000, timeout_sec=3.0)
     assert_redos_immune(KOTLIN_RULES["class_start"], "@a(" + "a" * 100000, timeout_sec=3.0)
     assert_redos_immune(KOTLIN_RULES["decorators"], "@a" + ".a" * 50000, timeout_sec=3.0)
+
+
+def test_kotlin_return_not_counted_as_branch_regression():
+    """#2545: `return` must not phantom-count as a branch -- java, kotlin's own JVM
+    sibling, doesn't count it either, and every early-return function was inflating
+    branch mass with no real decision point. Still tracked under
+    structural_boundaries (unaffected by this change)."""
+    branch = KOTLIN_RULES["branch"]
+    structural = KOTLIN_RULES["structural_boundaries"]
+
+    assert not branch.search("return x"), "bare return must not count as branch"
+    assert not branch.search("fun f(): Int { return 1 }"), "return in a real function must not count as branch"
+    assert branch.search("if (x) return 1"), "the real if must still count as branch"
+    assert len(branch.findall("if (x) return 1")) == 1, "only the if should match, not the return"
+    assert structural.search("return x"), "return must still be tracked via structural_boundaries"
+
+
+# ==============================================================================
+# GLOBALS: `const val` vs bare `val` DISCRIMINATION (#2673)
+# ==============================================================================
+def test_kotlin_globals_const_val_vs_local_val_regression():
+    """#2673: the single indented `val` alternative couldn't tell a
+    `companion object { const val LIMIT = 5 }` (a real global) from a
+    function-local `val TIMEOUT = 3000` (a false positive). `const val` is
+    only legal at top level or on an object/companion object member -- a
+    compile error inside a function body or on a regular class property --
+    so `const val` is a global at any indentation, while a bare `val` is a
+    global only at true column-0.
+
+    Covers all six rows of the issue's verification table.
+    """
+    globals_rule = KOTLIN_RULES["globals"]
+
+    # 1. top-level `const val` -- counts.
+    assert len(globals_rule.findall("const val MAX = 10")) == 1
+
+    # 2. top-level bare `val` (SCREAMING_CASE) -- counts.
+    assert len(globals_rule.findall("val REGISTRY = mutableMapOf<String,Int>()")) == 1
+
+    # 3. `const val` inside a nested `companion object` -- still counts (2
+    #    hits total: the `companion object` keyword plus the const val).
+    nested_companion = "class Foo {\n    companion object {\n        const val LIMIT = 5\n    }\n}"
+    assert len(globals_rule.findall(nested_companion)) == 2
+
+    # 4. `const val` inside a nested `object` -- 2 hits (the `object`
+    #    keyword plus the const val).
+    nested_object = "object Cfg {\n    const val TIMEOUT = 30\n}"
+    assert len(globals_rule.findall(nested_object)) == 2
+
+    # 5. function-local bare `val` -- was 1, now 0.
+    assert len(globals_rule.findall("fun f() {\n    val TIMEOUT = 3000\n}")) == 0
+
+    # 6. regular class property bare `val` -- was 1, now 0.
+    assert len(globals_rule.findall("class Foo {\n    val TIMEOUT = 3000\n}")) == 0
+
+
+def test_kotlin_globals_const_val_redos_immunity():
+    """ReDoS probe on the new quantified `const val` alternative: a 100k-char
+    identifier following `const val` (with no terminating `=`, forcing the
+    engine to scan the whole run without a match) must resolve quickly."""
+    assert_redos_immune(KOTLIN_RULES["globals"], "const val " + "a" * 100000, timeout_sec=3.0)
+
+
+def test_kotlin_doc_block_counts_once_regression():
+    """
+    #2672: `/\\*\\*` and its tags (`@param`, `@return`, ...) were independent
+    alternatives, so one KDoc block counted doc=2 -- the #2658 shape. Pair
+    the block into a single bounded (0,15000 chars) non-greedy span so it
+    counts once, regardless of how many tags it carries.
+    """
+    doc = KOTLIN_RULES["doc"]
+
+    block = "/**\n * @param argv probe input\n */\n"
+    assert len(doc.findall(block)) == 1, "a single KDoc block must count once, not once per tag"
+
+    two_blocks = "/**\n * @param argv probe input\n */\nfun f() {}\n/**\n * @since again\n */\n"
+    assert len(doc.findall(two_blocks)) == 2, "two separate KDoc blocks must still count as 2"
+
+
+def test_kotlin_doc_bare_tag_outside_block_still_counts_regression():
+    """#2672: a tag outside any KDoc block must still count."""
+    doc = KOTLIN_RULES["doc"]
+    assert doc.search("@since 1.0 outside any doc block")
+    assert doc.search("@constructor outside any doc block")
+
+
+def test_kotlin_doc_block_redos_immune_regression():
+    """#2672 ReDoS probe: an unterminated `/**` must fail closed quickly, not hang."""
+    assert_redos_immune(KOTLIN_RULES["doc"], "/**" + "x" * 200000, timeout_sec=3.0)
+
+
+def test_kotlin_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    A bare `internal` matched the package segment of
+    `import okhttp3.internal.<name>` -- a reference to another module's
+    internals, the exact opposite of a public declaration.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = KOTLIN_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search("public override fun clone(): Call"), "public override fun"
+    assert api.search("internal val lock = Any()"), "internal val"
+
+    # Not declarations -- must not match.
+    assert not api.search("import okhttp3.internal.CONST_VERSION"), "`internal` inside an import path"
+
+    # ReDoS detonation on a modifier run that never reaches a declaration.
+    assert_redos_immune(api, "public " + "open " * 20000 + "@", timeout_sec=3.0)

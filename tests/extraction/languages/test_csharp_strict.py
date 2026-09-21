@@ -20,7 +20,7 @@ _LANGUAGES_DIR = str(Path(__file__).resolve().parent)
 if _LANGUAGES_DIR not in sys.path:
     sys.path.insert(0, _LANGUAGES_DIR)
 
-from _strict_harness import _best_of_timing, assert_redos_immune  # noqa: E402 # type: ignore
+from _strict_harness import assert_redos_immune  # noqa: E402 # type: ignore
 
 
 # ==============================================================================
@@ -220,13 +220,16 @@ _CSHARP_SIMPLE_CASES = _CSHARP_SIMPLE_CASES[:-1] + [
     ("branch", "x is not null", "not_a_branch"),
     ("branch", "yield\nreturn 1;", "yields"),
     ("branch", "if(true)", "iffy"),
-    ("branch", "catch   (Exception)", "catcher"),
-    ("branch", "goto MyLabel;", "gotcha"),
+    ("branch", "foreach (var x in xs) {", "catch   (Exception)"),  # 2822 corollary 1
+    ("branch", "yield return x;", "goto MyLabel;"),  # 2822 corollary 3
     ("branch", "switch\n(", "switcher"),
     ("branch", "x ? y : z", "public int? Foo"),
-
     # args:
-    ("args", "public static async Task<Dictionary<string, List<Tuple<int, string>>>>\n    BrokenMethod(int a, string b)", "BrokenMethod(a, b);"),
+    (
+        "args",
+        "public static async Task<Dictionary<string, List<Tuple<int, string>>>>\n    BrokenMethod(int a, string b)",
+        "BrokenMethod(a, b);",
+    ),
     ("args", "public void Foo(ref int x, out string y, params int[] z)", "Foo(ref x, out y);"),
     ("args", "protected internal static readonly int[,,] Foo(int x)", "Foo(x);"),
     ("args", "[Attribute1, Attribute2(1, 2)]\npublic void Foo(int x)", "Foo(x);"),
@@ -237,7 +240,6 @@ _CSHARP_SIMPLE_CASES = _CSHARP_SIMPLE_CASES[:-1] + [
     ("args", "record Person(string Name, int Age);", "new Person();"),
     ("args", "public static Complex operator +(Complex a, Complex b)", "a + b;"),
     ("args", "public static implicit operator int(MyClass x)", "int x = 1;"),
-
     # func_start:
     ("func_start", "public async Task<List<string>> FetchData() {", "int x = 1;"),
     ("func_start", "[Obsolete]\n[return: MaybeNull]\npublic void Foo()", "int x = 1;"),
@@ -247,14 +249,12 @@ _CSHARP_SIMPLE_CASES = _CSHARP_SIMPLE_CASES[:-1] + [
     ("func_start", "static readonly ref readonly int Foo()", "int x = 1;"),
     ("func_start", "public static implicit operator int(MyClass x) {", "int x = 1;"),
     ("func_start", "public static Complex operator +(Complex a, Complex b) {", "public delegate void MyDelegate();"),
-
     # class_start:
     ("class_start", "public abstract partial class MyClass<T, U> : Base<T>, IMyInterface", "new MyClass();"),
     ("class_start", "internal file record struct MyRecord(int X, int Y) : IPoint;", "new MyRecord();"),
     ("class_start", "[Serializable]\npublic class Foo {", "Foo x;"),
     ("class_start", "class Foo<T> : Base<T> {", "Foo<int> x;"),
     ("class_start", "record struct Foo<T>(T Value) : Base<T>;", "Foo<int> x;"),
-
     # structural_boundaries:
     ("structural_boundaries", "namespace My.Name.Space;", "My.Name.Space x;"),
     ("structural_boundaries", "public enum Color", "Color.Red;"),
@@ -566,18 +566,15 @@ def test_csharp_spec_exposure_redos_regression():
     tcl, matlab, scheme, typescript, rust, c, and cpp earlier in this epic
     (the 10th hit).
     """
-    old_pattern = re.compile(r"\[(?:\s*SPEC\s*-\s*\d+|spec|audit)[^\]]*\]", re.I)
-    # Scale-relative sanity check (not an absolute wall-clock threshold,
-    # which is flaky across CI hardware of varying speed): a payload-size
-    # doubling should cost ~4x on the quadratic OLD pattern, vs ~2x for
-    # linear.
-    small_duration = _best_of_timing(old_pattern, "[SPEC-" + "1" * 8000 + " " * 8000)
-    large_duration = _best_of_timing(old_pattern, "[SPEC-" + "1" * 16000 + " " * 16000)
-    ratio = large_duration / small_duration if small_duration > 0 else 0
-    assert ratio > 2.2, (
-        f"sanity check: old pattern was expected to show quadratic (~4x) scaling on a payload "
-        f"doubling, but only scaled {ratio:.2f}x ({small_duration:.4f}s -> {large_duration:.4f}s)"
-    )
+    # #2901: a scale-relative check on the PRE-FIX pattern
+    #     r"\[(?:\s*SPEC\s*-\s*\d+|spec|audit)[^\]]*\]", re.I
+    # used to run here, asserting it scaled ~quadratically (ratio > 2.2)
+    # over a payload doubling. Removed: it timed a regex this repo no
+    # longer ships, and the ratio between two sub-100ms samples is inside
+    # the scheduling noise of a shared CI runner -- this family of asserts
+    # went red on macOS for PRs that touched none of it. The shipped
+    # pattern's immunity is asserted below as an ABSOLUTE bound inside an
+    # isolated process, which is deterministic.
 
     spec_exposure = CSHARP_RULES["spec_exposure"]
     assert_redos_immune(spec_exposure, "[SPEC-" + " " * 100000, timeout_sec=3.0)
@@ -607,28 +604,103 @@ def test_csharp_redos_immunity_sweep():
     assert CSHARP_RULES["class_start"].search("class Foo {")
     assert CSHARP_RULES["args"].search("x => x + 1")
 
+
 def test_csharp_args_issue_2051_mechanisms():
     """
     Ensures C# args regex handles tuples and generic method signatures.
     References Issue #2051.
     """
     args_regex = CSHARP_RULES["args"]
-    
+
     # Mechanism 1: tuple return types
-    m1 = args_regex.search("internal (bool IsCandidate, bool IsTaskLike) HasEntryPointSignature(MethodSymbol method, BindingDiagnosticBag bag)\n{\n")
+    m1 = args_regex.search(
+        "internal (bool IsCandidate, bool IsTaskLike) HasEntryPointSignature(MethodSymbol method, BindingDiagnosticBag bag)\n{\n"
+    )
     assert m1 is not None, "Failed to match tuple return type"
     assert m1.group(2) == "(MethodSymbol method, BindingDiagnosticBag bag)"
-    
-    m1_generic = args_regex.search("public ValueTask<(bool updated, Solution newSolution)> SetCurrentSolutionAsync(Solution oldSolution)\n{\n")
+
+    m1_generic = args_regex.search(
+        "public ValueTask<(bool updated, Solution newSolution)> SetCurrentSolutionAsync(Solution oldSolution)\n{\n"
+    )
     assert m1_generic is not None, "Failed to match generic-wrapped tuple return type"
     assert m1_generic.group(2) == "(Solution oldSolution)"
-    
+
     # Mechanism 2: tuple-typed parameters
-    m2 = args_regex.search("public bool Equals((ImmutableArray<byte> ContentHash, int Position) x, (ImmutableArray<byte> ContentHash, int Position) y)\n{\n")
+    m2 = args_regex.search(
+        "public bool Equals((ImmutableArray<byte> ContentHash, int Position) x, (ImmutableArray<byte> ContentHash, int Position) y)\n{\n"
+    )
     assert m2 is not None, "Failed to match tuple-typed parameters"
-    assert m2.group(2) == "((ImmutableArray<byte> ContentHash, int Position) x, (ImmutableArray<byte> ContentHash, int Position) y)"
-    
+    assert (
+        m2.group(2)
+        == "((ImmutableArray<byte> ContentHash, int Position) x, (ImmutableArray<byte> ContentHash, int Position) y)"
+    )
+
     # Mechanism 3: generic type parameters on methods
-    m3 = args_regex.search("private void OnAnyDocumentTextChanged<TArg>(\n    DocumentId documentId,\n    int something\n)\n{\n")
+    m3 = args_regex.search(
+        "private void OnAnyDocumentTextChanged<TArg>(\n    DocumentId documentId,\n    int something\n)\n{\n"
+    )
     assert m3 is not None, "Failed to match generic method definition"
     assert m3.group(2) == "(\n    DocumentId documentId,\n    int something\n)"
+
+
+def test_csharp_doc_line_marker_swallows_line_regression():
+    """
+    #2672: family-wide `///` -> `///[^\n]*` line-marker fix (the #2658
+    shape). csharp's other alternatives (`///\\s*<summary>`, etc.) already
+    require the `///` prefix, so this was never a double-count vector here
+    -- confirm no corpus/behavior change: a single `///` doc-comment line
+    still counts once, and a run of consecutive `///` lines still counts
+    once per line (explicit non-goal, unchanged).
+    """
+    doc = CSHARP_RULES["doc"]
+
+    one_line = "/// <summary>does a thing</summary>\n"
+    assert len(doc.findall(one_line)) == 1, "a single `///` doc-comment line must count once"
+
+    # The count alone doesn't distinguish pre/post-fix here (csharp's more
+    # specific alternatives already required the `///` prefix, so it never
+    # double-counted) -- the observable change is that the match now spans
+    # the whole line instead of stopping at the bare 3-char `///` marker.
+    m = doc.search(one_line)
+    assert m is not None
+    assert m.group() == "/// <summary>does a thing</summary>", (
+        f"expected the match to swallow the whole line, got {m.group()!r}"
+    )
+
+    three_lines = "/// <summary>\n/// does a thing\n/// </summary>\n"
+    assert len(doc.findall(three_lines)) == 3, "three `///` lines still count once per line (explicit non-goal)"
+
+
+def test_csharp_doc_line_marker_redos_immune_regression():
+    """#2672 ReDoS probe: a very long unterminated `///` line must fail closed quickly, not hang."""
+    assert_redos_immune(CSHARP_RULES["doc"], "///" + "x" * 200000, timeout_sec=3.0)
+
+
+def test_csharp_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    A bare `public`/`internal` counted the modifier anywhere in the code
+    stream, including inside a string literal and a `switch` case.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = CSHARP_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search("public static SyntaxTree ParseText("), "public static method"
+    assert api.search("public sealed partial class CSharpCompilation : Compilation"), "public class"
+    assert api.search("internal (bool ok, int n)? TryGet(SimpleNameSyntax x)"), "tuple return type"
+    assert api.search("internal TNode ParseWithStackGuard<TNode>(Func<int> f)"), "generic method name"
+
+    # Not declarations -- must not match.
+    assert not api.search('case "public":'), "keyword in a switch case"
+    assert not api.search('return "public";'), "keyword in a string literal"
+
+    # ReDoS detonation on a modifier run that never reaches a declaration.
+    assert_redos_immune(api, "public " + "static " * 20000 + "@", timeout_sec=3.0)

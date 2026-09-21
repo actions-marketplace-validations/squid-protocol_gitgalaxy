@@ -116,36 +116,37 @@ _PHP_DEEP_CASES = [
     ("branch", "$x = $y ?? $z;", "Foo::if();"),
     ("branch", "$x = $y ? $z : $w;", "$while = 2;"),
     ("branch", "match ($x) {", "$match = 1;"),
-
+    # #2541: PHP's own tag syntax must not count as a branch -- the bare
+    # ternary `\?` alternation used to match the `?` in `<?php`, `<?=`,
+    # bare `<?`, and `?>`.
+    ("branch", "$x = $y ?: $w;", "<?php"),
+    ("branch", "$x ??= $y;", "?>"),
+    ("branch", "<?= $a ?? $b ?>", "<?= $name ?>"),
     # args
     ("args", 'function foo($a = ")\\"") {', "foo($a = array(1,2));"),
     ("args", "function foo($a = array(1,2)) {", "$function();"),
     ("args", "fn  &  ( $x )  => $x", "$obj->fn();"),
     ("args", "function ( $x ) use ($y)", "$foo->function();"),
     ("args", "function foo(array $x = [1, 2]) {", "$bar::function();"),
-
     # structural_boundaries
     ("structural_boundaries", "namespace App\\Http;", "$namespace = 'App';"),
     ("structural_boundaries", "$obj = new class {};", "$class = 'Foo';"),
     ("structural_boundaries", "use App\\Foo;", "$new = 1;"),
     ("structural_boundaries", "yield $x;", "$obj->yield();"),
     ("structural_boundaries", "return $x;", "Foo::return();"),
-
     # func_start
     ("func_start", '#[Route("/")] public function foo() {', "$function();"),
     ("func_start", '#[Route(\n"/")]\nfunction foo()', "->function foo()"),
     ("func_start", '#[Route(path: "/")] function foo()', "public function()"),
     ("func_start", "final public static function foo()", "Foo::function()"),
     ("func_start", "public function use()", "class Foo {"),
-
     # class_start
     ("class_start", "final readonly class Foo", "class_exists('Foo')"),
     ("class_start", "#[AllowDynamicProperties] class Foo", "$class = 'Foo';"),
     ("class_start", "class\nFoo\nextends\nBar", "Foo::class"),
-    ("class_start", "enum Foo", "class extends Foo"), # negative for anonymous class on its own line
+    ("class_start", "enum Foo", "class extends Foo"),  # negative for anonymous class on its own line
     ("class_start", "abstract class Foo", "class implements Foo"),
 ]
-
 
 
 @pytest.mark.parametrize("signature,positive,negative", _PHP_SIMPLE_CASES)
@@ -158,6 +159,7 @@ def test_php_signature_positive_and_negative(signature, positive, negative):
             f"php {signature!r} incorrectly matched an excluded/negative case: {negative!r}"
         )
 
+
 @pytest.mark.parametrize("signature,positive,negative", _PHP_DEEP_CASES)
 def test_php_signature_deep_cases(signature, positive, negative):
     pattern = PHP_RULES[signature]
@@ -169,9 +171,7 @@ def test_php_signature_deep_cases(signature, positive, negative):
 
     # Using re.search on the negative cases
     if negative is not None:
-        assert not pattern.search(negative), (
-            f"php {signature!r} incorrectly matched a deep negative case: {negative!r}"
-        )
+        assert not pattern.search(negative), f"php {signature!r} incorrectly matched a deep negative case: {negative!r}"
 
 
 def test_php_globals_superglobals_leading_boundary_regression():
@@ -187,6 +187,35 @@ def test_php_globals_superglobals_leading_boundary_regression():
     assert pattern.search('$_SESSION["user"]')
     assert pattern.search('$_ENV["PATH"]')
     assert pattern.search('$GLOBALS["x"]')
+
+
+def test_php_branch_open_close_tags_not_counted_regression():
+    """
+    Regression test (#2541): every PHP file recorded branch >= 1 from its own
+    `<?php` open tag -- the branch rule's bare ternary `\\?` alternation
+    matched the `?` in the tag. Also affected `?>` close tags and `<?=`
+    short-echo tags. A tag-only, straight-line file must count branch 0,
+    while real ternary `?` and null-coalescing `??` still count.
+    """
+    pattern = PHP_RULES["branch"]
+
+    # A plain <?php file with only straight-line code: branch must be 0.
+    straight_line = "<?php\n$a = 1;\n$b = $a + 2;\necho $b;\n"
+    assert len(pattern.findall(straight_line)) == 0, "open tag alone still counts as a branch"
+
+    # Close tag at the end of a ternary-free file must also count 0.
+    assert len(pattern.findall("<?php\n$x = 1;\n?>")) == 0, "close tag still counts as a branch"
+
+    # Short-echo tag: the tag itself must not count...
+    assert len(pattern.findall("<?= $name ?>")) == 0, "short-echo tag still counts as a branch"
+    # ...but a real ?? inside one still counts exactly once.
+    assert len(pattern.findall("<?= $a ?? $b ?>")) == 1
+
+    # Real operators are unaffected, each counted exactly once.
+    assert len(pattern.findall("$x = $y ? $z : $w;")) == 1  # ternary
+    assert len(pattern.findall("$x = $y ?: $w;")) == 1  # Elvis
+    assert len(pattern.findall("$x = $y ?? $z;")) == 1  # null coalescing
+    assert len(pattern.findall("$x ??= $y;")) == 1  # null-coalescing assignment
 
 
 def test_php_safety_bypasses_at_operator_on_variable_regression():
@@ -360,3 +389,60 @@ def test_php_explicit_casts_and_pointers_no_false_collision():
     assert not casts.search('FFI::cast("int", $x);'), "explicit_casts incorrectly matched an FFI cast"
     assert pointers.search('FFI::cast("int", $x);')
     assert not pointers.search("(int) $x;"), "pointers incorrectly matched an explicit cast"
+
+
+def test_php_doc_block_counts_once_regression():
+    """
+    #2672: `/\\*\\*` and its tags (`@param`, `@return`, ...) were independent
+    alternatives, so one PHPDoc block counted doc=2 -- the #2658 shape. Pair
+    the block into a single bounded (0,15000 chars) non-greedy span so it
+    counts once, regardless of how many tags it carries.
+    """
+    doc = PHP_RULES["doc"]
+
+    block = "/**\n * @param $argv probe input\n */\n"
+    assert len(doc.findall(block)) == 1, "a single PHPDoc block must count once, not once per tag"
+
+    two_blocks = "/**\n * @param $argv probe input\n */\nfunction f() {}\n/**\n * @return again\n */\n"
+    assert len(doc.findall(two_blocks)) == 2, "two separate PHPDoc blocks must still count as 2"
+
+
+def test_php_doc_bare_tag_outside_block_still_counts_regression():
+    """#2672: a tag outside any PHPDoc block must still count."""
+    doc = PHP_RULES["doc"]
+    assert doc.search("@method foo() outside any doc block")
+    assert doc.search("@property $x outside any doc block")
+
+
+def test_php_doc_block_redos_immune_regression():
+    """#2672 ReDoS probe: an unterminated `/**` must fail closed quickly, not hang."""
+    assert_redos_immune(PHP_RULES["doc"], "/**" + "x" * 200000, timeout_sec=3.0)
+
+
+def test_php_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    A bare `public` matched a `$public` variable and the word inside a
+    string key.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = PHP_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search('public function __construct('), 'public method'
+    assert api.search('public readonly int $x;'), 'typed readonly property'
+    assert api.search('public const FOO = 1;'), 'public constant'
+
+    # Not declarations -- must not match.
+    assert not api.search("$public = (bool) get_option('blog_public');"), 'variable named $public'
+    assert not api.search("$this->instance('path.public', $path);"), 'keyword inside a string key'
+
+    # ReDoS detonation on a modifier run that never reaches a declaration.
+    assert_redos_immune(api, "public " + "static " * 20000 + "@", timeout_sec=3.0)

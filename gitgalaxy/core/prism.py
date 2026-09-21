@@ -11,7 +11,7 @@ import logging
 import re
 from typing import Any, Optional, TypedDict
 
-from gitgalaxy.standards.language_standards import LENS_CONFIG, PRISM_CONFIG
+from gitgalaxy.standards.language_standards import COMPILED_HANDSHAKE_REGISTRY, LENS_CONFIG, PRISM_CONFIG
 
 # ==============================================================================
 # GitGalaxy Phase 2: Payload & Surface Splitter (The Prism)
@@ -197,16 +197,17 @@ class Prism:
         self.SINGLE_LINE_DELIMITER_PATTERNS: dict[str, re.Pattern] = self._compile_single_line_delimiter_patterns()
 
         # Phase 6.1 Handshake Registry (Synchronized securely via Language Standards)
-        self.EMBEDDED_TRIGGERS = []
-        for trigger_config in LENS_CONFIG.get("HANDSHAKE_REGISTRY", []):
-            self.EMBEDDED_TRIGGERS.append(
-                {
-                    "trigger": re.compile(trigger_config["trigger"], re.I),
-                    "end": re.compile(trigger_config["end"], re.I),
-                    "target": trigger_config["target"],
-                    "pair": trigger_config["pair"],
-                }
-            )
+        # #2848: this used to compile LENS_CONFIG's patterns here with `re.I`
+        # alone, while detector.py's copy used `re.I | re.M`. Every trigger is
+        # `^`-anchored, so without re.M this partitioner only fired on a file
+        # whose very FIRST byte opened the block -- a mid-file `<script>` (the
+        # normal case) never formed an embedded segment, and html's `<!-- -->`
+        # comment rules ran over the JavaScript body. Both copies now share the
+        # one compiled registry that lives beside the patterns.
+        # #2549's `open_delimiter` (host-syntax opening tag; None for a
+        # paired-bracket handshake, whose bracket _find_balanced_end must keep
+        # inside the embedded segment) rides along on the shared entries.
+        self.EMBEDDED_TRIGGERS = COMPILED_HANDSHAKE_REGISTRY
 
         # Performance Constants
         self.EMBEDDED_LOOKAHEAD_LIMIT = LENS_CONFIG.get("THRESHOLDS", {}).get("HANDSHAKE_LOOKAHEAD_LIMIT", 50000)
@@ -338,6 +339,455 @@ class Prism:
             )
             raise PrismError(f"Prism failure: {e}") from e
 
+    def split_positional_comment_stream(self, content: str, primary_lang: str) -> str:
+        """#2908 Phase 2: a line-number-aligned comment surface.
+
+        `split_streams` above builds `comment_stream` by joining every
+        segment's stripped comments into one blob (`"\\n".join(comment_parts)`
+        at its own return) -- correct for the counting rules
+        (`comment_analysis`) that only ever need a total, but useless for a
+        POSITIONAL test: which line does a `doc`-rule match end on, in the
+        original file? docs/risk_documentation_contract.md D3's
+        `is_documented` needs exactly that.
+
+        This mirrors `split_streams`'s own construction of `code_stream`
+        (comments blanked to newlines-only, so code keeps its original line
+        numbers) with the roles swapped: CODE is blanked (newlines
+        preserved, so line numbers still match the original file) and
+        COMMENTS are kept verbatim at their original position. detector.py's
+        `splice()` then runs the language's own `doc` pattern's `finditer`
+        over this stream and anchors each match's END line against a unit's
+        header window.
+
+        Only the families exercised by #2908 Phase 2's own contract tests
+        are positionally supported today: the generic REGEX_MATRIX families
+        (standard_block and siblings), `line_exclusive`, and
+        `positional_anchored`/`positional_abap`. Every other family
+        (recursive_block's three variants, jcl) contributes a blank,
+        newline-preserving stretch -- safe by construction: it reads as "no
+        positional doc match on this language" rather than raising, and
+        those languages fall through to whatever `is_documented` fallback
+        applies to them (none, today, outside the docstring-position
+        family). Python/embedded_python/ruby's own docstring-stripping
+        pre-pass (`_strip_python_docstrings`, run by `split_streams` BEFORE
+        family routing) is deliberately NOT mirrored here: a real docstring
+        is a string literal in `code_stream`, not a comment, so it can never
+        appear in a comment-positional stream either way -- see D3's
+        decided fallback in detector.py's `_has_below_position_doc_text`.
+        """
+        if not content:
+            return ""
+        if primary_lang in ("undeterminable", "unknown", "markdown", "plaintext", "xml"):
+            return ""
+
+        try:
+            header, body = self._guard_metadata_signal(content)
+            out_parts = [self._blank_preserve_newlines(header)]
+
+            segments = self._partition_embedded_languages(body, primary_lang)
+            for lang_id, segment_text in segments:
+                family = self.languages.get(lang_id, {}).get("lexical_family", "standard_block")
+                out_parts.append(self._positional_comment_segment(segment_text, lang_id, family))
+
+            return "".join(out_parts)
+        except Exception as e:
+            self.logger.error(f"Positional comment stream failure: {e}", exc_info=True)
+            return self._blank_preserve_newlines(content)
+
+    @staticmethod
+    def _blank_preserve_newlines(text: str) -> str:
+        """Collapses every run of non-newline characters to nothing, keeping
+        every `\\n` exactly where it was -- so the result has the identical
+        line count (and identical byte offset of each newline) as `text`,
+        with none of its non-newline content. Used to blank CODE out of the
+        positional comment stream while keeping line numbers aligned."""
+        return re.sub(r"[^\n]+", "", text)
+
+    def _positional_comment_segment(self, text: str, lang_id: str, family: str) -> str:
+        """Per-segment dispatcher for `split_positional_comment_stream`, the
+        positional-and-role-swapped sibling of `_strip_segment_comments`."""
+        if family in ("positional_anchored", "positional_abap"):
+            # `_strip_positional_comments` already returns one entry per
+            # input line (blank for a code-only line, comment text --
+            # possibly the whole line -- for a comment one), joined with
+            # "\n": already exactly the positional shape this needs, with
+            # zero new code required. Existing method, called read-only.
+            _, positional_comments = self._strip_positional_comments(
+                text,
+                abap_mode=(family == "positional_abap"),
+                cobol_mode=(lang_id == "cobol"),
+                # #2503: hlasm is the same syntax bms's mode was built for
+                # (bms IS HLASM macro source) -- '*'/'.*' column-1 comments,
+                # no column-7 check, no inline split.
+                bms_mode=(lang_id in ("bms", "hlasm")),
+            )
+            return positional_comments
+
+        if family in ("recursive_block", "recursive_block_haskell", "recursive_block_lisp", "recursive_block_rexx"):
+            # #2908 Phase 2 follow-up: rust/scala/swift (recursive_block),
+            # haskell (recursive_block_haskell), scheme
+            # (recursive_block_lisp) and rexx (recursive_block_rexx, #2504)
+            # -- see _positional_nested_comments.
+            return self._positional_nested_comments(text, family)
+
+        if lang_id == "perl":
+            # perl is nominally "line_exclusive" (`#` line comments), but its
+            # own doc convention is POD (`=pod`/`=head1`/... to `=cut`), which
+            # line_exclusive's stripper has never covered at all (see
+            # perl.py's own "Known remaining gap, not fixed here" note) --
+            # see _positional_perl_comments.
+            return self._positional_perl_comments(text)
+
+        if lang_id == "jcl":
+            # Not positionally supported -- but moot, not a gap: jcl declares
+            # no `doc` rule at all (grep language_standards/languages/jcl.py),
+            # so no positional stream could ever produce a match here anyway.
+            # A blank, newline-preserving stretch reads as "no positional doc
+            # match" rather than raising.
+            return self._blank_preserve_newlines(text)
+
+        if family == "line_exclusive":
+            return self._strip_single_line_comments_positional(text, lang_id)
+
+        # Generic REGEX_MATRIX families (standard_block and siblings) --
+        # same pattern selection `_strip_segment_comments` uses for its own
+        # generic branch.
+        pattern = self.REGEX_MATRIX.get(family)
+        if lang_id == "cpp" and family == "standard_block":
+            pattern = self.CPP_REGEX_MATRIX.get(family) or pattern
+        if not pattern:
+            return self._blank_preserve_newlines(text)
+        return self._positional_generic_strip(text, pattern)
+
+    def _positional_generic_strip(self, text: str, pattern: "re.Pattern") -> str:
+        """Positional sibling of `_strip_segment_comments`'s generic
+        REGEX_MATRIX branch. That branch's `strip_callback` blanks a
+        matched comment (group 2) to newlines-only and passes a matched
+        literal shield (group 1) through unharmed, building `code_stream`.
+        This builds the inverse: every character of `text` is accounted for
+        exactly once, either blanked-preserving-newlines (real code, and
+        literal-shield spans, which are code/strings, not comments) or kept
+        verbatim (a real comment match) -- so the result has the identical
+        newline count and position as `text`, and line N here corresponds to
+        line N of the original segment.
+        """
+        out = []
+        pos = 0
+        for m in pattern.finditer(text):
+            out.append(self._blank_preserve_newlines(text[pos : m.start()]))
+            if m.group(2) is not None:
+                out.append(m.group(0))
+            else:
+                out.append(self._blank_preserve_newlines(m.group(0)))
+            pos = m.end()
+        out.append(self._blank_preserve_newlines(text[pos:]))
+        return "".join(out)
+
+    def _strip_single_line_comments_positional(self, text: str, lang_id: str) -> str:
+        """Positional sibling of `_strip_single_line_comments`: same
+        per-line masking and carry-quote discipline, but returns ONE entry
+        per input line (blank for a line with no comment) instead of
+        compacting to just the lines that had one -- `_strip_single_line_
+        comments`'s own `comments` list only grows `if comment_part is not
+        None`, so its `"\\n".join(comments)` has no line correspondence at
+        all, exactly the problem `split_positional_comment_stream` exists to
+        avoid.
+
+        #2908 Phase 2 follow-up: perl's `#`-comment detection now carries the
+        same bare-regex/quote-like-operator masking `_mask_perl_line` (a
+        closure private to `_strip_single_line_comments`) applies -- a
+        duplicated, positional-safe copy of that same logic, gated the same
+        way (`lang_id == "perl"`). Without it, a `/`- or `{...}`-delimited
+        regex/quote-like operator (`m/foo#bar/`, `s{foo#bar}{baz}`, a bare
+        `/pattern#here/` match) whose OWN literal text happens to contain a
+        `#` would have that embedded `#` misread as opening a real comment,
+        truncating the line early. `#`-DELIMITED forms (`m#pattern#`) are
+        NOT covered -- `perl_candidate_pattern` below only recognises `/`/`{`
+        as opening delimiters, matching the original `_mask_perl_line`'s own
+        scope exactly; not a new gap this method introduces. POD
+        (`=pod`/`=cut`) is NOT this method's job either -- see
+        `_positional_perl_comments`, which calls this method for the
+        `#`-only pass after carving POD lines out.
+        """
+        pattern = self.SINGLE_LINE_DELIMITER_PATTERNS.get(lang_id) or re.compile(r"(?!)")
+        carry_aware = lang_id in ("python", "micropython", "embedded_python", "ruby", "shell")
+        out: list[str] = []
+        carry_quote: Optional[str] = None
+
+        # Compiled unconditionally (not just `if lang_id == "perl"`): cheap,
+        # and it lets `_mask_perl_line_positional` close over plain
+        # `re.Pattern` values instead of an `Optional` pair that would need
+        # a runtime None-check on every call.
+        perl_bare_regex_preceding = re.compile(
+            r"(?:(?:=~|!~|\(|,|;|\{|&&|\|\|)[ \t]*$)|(?:\b(?:if|unless|while|split|grep|map|return)[ \t]+$)"
+        )
+        perl_candidate_pattern = re.compile(r"\b(?:qw|qq|qx|qr|tr|q|m|s|y)[ \t]*[\{/]|/")
+
+        def _mask_perl_line_positional(line: str, masked_literals: list[str]) -> str:
+            pos = 0
+            parts = []
+            while pos < len(line):
+                match = perl_candidate_pattern.search(line, pos)
+                if not match:
+                    parts.append(line[pos:])
+                    break
+                start = match.start()
+                parts.append(line[pos:start])
+                matched_str = match.group(0)
+                is_brace_op = matched_str.endswith("{")
+                is_slash_op = matched_str.endswith("/") and len(matched_str) > 1
+                is_bare_slash = matched_str == "/"
+                if is_bare_slash and not perl_bare_regex_preceding.search(line[:start]):
+                    parts.append("/")
+                    pos = start + 1
+                    continue
+                op_start_idx = start
+                if is_brace_op:
+                    depth = 1
+                    idx = match.end()
+                    while idx < len(line):
+                        ch = line[idx]
+                        if ch == "\\":
+                            idx += 2
+                            continue
+                        if ch == "{":
+                            depth += 1
+                        elif ch == "}":
+                            depth -= 1
+                            if depth == 0:
+                                break
+                        idx += 1
+                    op_keyword = matched_str[:-1].strip()
+                    end_idx = min(idx + 1, len(line))
+                    if op_keyword in ("s", "tr", "y") and end_idx < len(line):
+                        ws_match = re.match(r"[ \t]*", line[end_idx:])
+                        ws_len = len(ws_match.group(0)) if ws_match else 0
+                        second_start = end_idx + ws_len
+                        if second_start < len(line) and line[second_start] == "{":
+                            depth = 1
+                            idx2 = second_start + 1
+                            while idx2 < len(line):
+                                ch = line[idx2]
+                                if ch == "\\":
+                                    idx2 += 2
+                                    continue
+                                if ch == "{":
+                                    depth += 1
+                                elif ch == "}":
+                                    depth -= 1
+                                    if depth == 0:
+                                        break
+                                idx2 += 1
+                            end_idx = min(idx2 + 1, len(line))
+                    span_text = line[op_start_idx:end_idx]
+                    masked_literals.append(span_text)
+                    parts.append(f"__MASK_{len(masked_literals) - 1}__")
+                    pos = end_idx
+                else:
+                    idx = match.end()
+                    while idx < len(line):
+                        ch = line[idx]
+                        if ch == "\\":
+                            idx += 2
+                            continue
+                        if ch == "/":
+                            break
+                        idx += 1
+                    end_idx = min(idx + 1, len(line))
+                    op_keyword = matched_str[:-1].strip() if is_slash_op else ""
+                    if op_keyword in ("s", "tr", "y") and end_idx < len(line):
+                        idx2 = end_idx
+                        while idx2 < len(line):
+                            ch = line[idx2]
+                            if ch == "\\":
+                                idx2 += 2
+                                continue
+                            if ch == "/":
+                                break
+                            idx2 += 1
+                        end_idx = min(idx2 + 1, len(line))
+                    span_text = line[op_start_idx:end_idx]
+                    masked_literals.append(span_text)
+                    parts.append(f"__MASK_{len(masked_literals) - 1}__")
+                    pos = end_idx
+            return "".join(parts)
+
+        normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
+        for line in normalized_text.split("\n"):
+            if carry_quote is not None:
+                close_pattern = self.CARRY_QUOTE_CLOSE_PATTERNS[carry_quote]
+                m = close_pattern.match(line)
+                if not m:
+                    # Still inside the carried-over literal for its entire
+                    # length -- not code, and not a comment either.
+                    out.append("")
+                    continue
+                line = line[m.end() :]
+                carry_quote = None
+
+            masked_line, masked_literals = self._mask_line_literals(line)
+
+            if lang_id == "perl":
+                masked_line = _mask_perl_line_positional(masked_line, masked_literals)
+
+            if pattern.search(masked_line):
+                parts = pattern.split(masked_line, 1)
+                code_part = parts[0]
+                comment_part = parts[1] + (parts[2] if len(parts) > 2 else "")
+            else:
+                code_part = masked_line
+                comment_part = None
+
+            if carry_aware:
+                tail_match = self.UNTERMINATED_QUOTE_TAIL_PATTERN.search(code_part)
+                if tail_match:
+                    carry_quote = tail_match.group(0)
+
+            out.append(self._restore_masked_literals(comment_part, masked_literals) if comment_part is not None else "")
+
+        return "\n".join(out)
+
+    # #2908 Phase 2 follow-up: perl's `doc` rule (language_standards/
+    # languages/perl.py) matches a POD block -- `^=pod`/`=head1..6`/`=item`/
+    # `=over`/`=back`/`=begin`/`=end`/`=encoding`/`=for`, paired to its
+    # closing `^=cut`, or the bare opener alone if unpaired. Mirrored here
+    # verbatim (not imported -- prism.py doesn't otherwise depend on any
+    # per-language rules dict) so _positional_perl_comments makes exactly the
+    # text the doc rule will itself re-match visible, at the right lines.
+    _PERL_POD_SPAN = re.compile(
+        r"^=(?:pod|head[1-6]|item|over|back|begin|end|encoding|for)\b[\s\S]{0,15000}?^=cut\b"
+        r"|^=(?:pod|head[1-6]|item|over|back|begin|end|encoding|for)\b",
+        re.M,
+    )
+
+    def _positional_perl_comments(self, text: str) -> str:
+        """Positional comment surface for perl: POD blocks (kept verbatim at
+        their real lines) plus ordinary `#` comments elsewhere (via
+        `_strip_single_line_comments_positional`, perl's masked variant).
+
+        POD is perl's real doc convention and, per perl.py's own "Known
+        remaining gap, not fixed here" note, was NEVER stripped into
+        `comment_stream` by the production pipeline -- `comment_analysis`'s
+        `doc` count has always read 0 for a POD-documented perl file. That
+        gap is untouched here (comment_stream, comment_analysis and every
+        existing count stay exactly as they are); this only makes POD text
+        visible to the NEW positional pass, so #2908's `is_documented` can
+        see what the counting pass structurally cannot.
+
+        POD-span lines are blanked (not run through the `#`-scan) before
+        that scan runs, so `#`/quote characters inside POD prose can't
+        perturb its per-line masking or carry-quote state; the real POD text
+        is spliced back in afterward, line-for-line.
+        """
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        lines = normalized.split("\n")
+
+        pod_line_set: set[int] = set()
+        for m in self._PERL_POD_SPAN.finditer(normalized):
+            start_line = normalized.count("\n", 0, m.start())
+            end_line = normalized.count("\n", 0, m.end())
+            pod_line_set.update(range(start_line, end_line + 1))
+
+        working_lines = ["" if i in pod_line_set else ln for i, ln in enumerate(lines)]
+        hash_positional = self._strip_single_line_comments_positional("\n".join(working_lines), "perl")
+        hash_lines = hash_positional.split("\n")
+
+        out_lines = [lines[i] if i in pod_line_set else hash_lines[i] for i in range(len(lines))]
+        return "\n".join(out_lines)
+
+    def _positional_nested_comments(self, text: str, family: str) -> str:
+        """Positional sibling of `_strip_nested_comments`: rust/scala/swift
+        (recursive_block), haskell (recursive_block_haskell) and scheme
+        (recursive_block_lisp) all nest block comments, so finding their real
+        boundaries needs the same "peel the innermost pair, repeat" approach
+        `_strip_nested_comments` uses -- reimplemented here rather than
+        reused because that method's own string/char-literal masking
+        replaces a matched literal with a variable-length `__GALAXY_STR_
+        MASK_N__` placeholder token (fine for its own purpose -- only LINE
+        correspondence, not byte offset, matters to its caller) and this
+        method needs the search view to stay byte-for-byte aligned with
+        `text` throughout, so a found delimiter's offset can be sliced
+        directly out of the pristine original.
+
+        Same discipline as `_strip_nested_comments`: string/char/backtick
+        literals AND single-line comments are masked/found in one atomic
+        combined-pattern pass first (so a delimiter-shaped character inside
+        a string, or a `;`/`--`/`//` that starts a real line comment, can't
+        be mistaken for a block-comment marker), then block comments are
+        peeled from the innermost pair outward. Literal spans are neutralized
+        (same length, newlines kept) rather than deleted; line-comment and
+        block-comment spans are recorded and spliced back in verbatim from
+        `text` at the end, everything else blanked.
+        """
+        delims = self.lexical_families.get(family, {}).get("delimiters", ["//", "/*", "*/"])
+        if len(delims) < 3:
+            return self._blank_preserve_newlines(text)
+        s_line, b_start, b_end = delims[0], delims[1], delims[2]
+
+        # Same construction as _strip_nested_comments -- see that method's
+        # own comment for why each alternative exists, why lisp's char
+        # literal must be tried first, and why rexx swaps the quote branches.
+        lisp_char_literal = r"#\\(?:[a-zA-Z0-9][a-zA-Z0-9-]{0,31}|[^\s])|" if family == "recursive_block_lisp" else ""
+        if family == "recursive_block_rexx":
+            combined_pattern = re.compile(
+                r'"(?:""|[^"\n]){0,500}"'
+                r"|'(?:''|[^'\n]){0,500}'" + rf"|{re.escape(s_line)}[^\n]*",
+                re.S | re.M,
+            )
+        else:
+            combined_pattern = re.compile(
+                lisp_char_literal
+                + r'(?<!\\)"(?:\\.|[^"\\])*"'
+                + r"|(?<!\\)'(?![a-zA-Z_]\w*[=<>(),&|\]\s])(?:\\.|[^'\\]){0,10}'"
+                + r"|(?<!\\)`(?:\\.|[^`\\]){0,200}`"
+                + rf"|{re.escape(s_line)}[^\n]*",
+                re.S | re.M,
+            )
+
+        def _neutralize(s: str) -> str:
+            return "".join(ch if ch == "\n" else "\x00" for ch in s)
+
+        keep_spans: list[tuple[int, int]] = []
+
+        def _combined_replacer(m: "re.Match[str]") -> str:
+            if m.group(0).startswith(s_line):
+                keep_spans.append((m.start(), m.end()))
+            return _neutralize(m.group(0))
+
+        search_view = combined_pattern.sub(_combined_replacer, text)
+
+        safety = 0
+        while b_start in search_view and safety < self.NESTED_PEEL_LIMIT:
+            end_match = re.search(re.escape(b_end), search_view)
+            if not end_match:
+                break
+            start_idx = search_view.rfind(b_start, 0, end_match.start())
+            if start_idx == -1:
+                break
+            keep_spans.append((start_idx, end_match.end()))
+            search_view = (
+                search_view[:start_idx]
+                + _neutralize(search_view[start_idx : end_match.end()])
+                + search_view[end_match.end() :]
+            )
+            safety += 1
+
+        keep_spans.sort()
+        out = []
+        pos = 0
+        for a, b in keep_spans:
+            if a < pos:
+                # An inner span the first pass already recorded (e.g. a
+                # line-comment-shaped token that turned out to sit inside a
+                # block comment later peeled around it) -- already covered
+                # by the enclosing span just emitted.
+                continue
+            out.append(self._blank_preserve_newlines(text[pos:a]))
+            out.append(text[a:b])
+            pos = b
+        out.append(self._blank_preserve_newlines(text[pos:]))
+        return "".join(out)
+
     def _strip_segment_comments(self, text: str, lang_id: str, family: str) -> tuple[str, str]:
         """Surgically strips documentation using an ordered, additive pipeline."""
         lits = []
@@ -366,7 +816,7 @@ class Prism:
         # line_exclusive/recursive_block/positional_anchored/block_exclusive/
         # non_lexical), so none of these branches, nor the generic REGEX_MATRIX
         # stripper below, ever actually ran for any language.
-        if family in ("recursive_block", "recursive_block_haskell", "recursive_block_lisp"):
+        if family in ("recursive_block", "recursive_block_haskell", "recursive_block_lisp", "recursive_block_rexx"):
             # #621: recursive_block_haskell added because Haskell's {- -}
             # blocks genuinely nest (unlike the standard_block family's flat
             # delimiters) but use -- for line comments and {- -} rather than
@@ -384,7 +834,13 @@ class Prism:
 
         if family in ("positional_anchored", "positional_abap"):
             code, pos_lits = self._strip_positional_comments(
-                text, abap_mode=(family == "positional_abap"), cobol_mode=(lang_id == "cobol")
+                text,
+                abap_mode=(family == "positional_abap"),
+                cobol_mode=(lang_id == "cobol"),
+                # #2503: hlasm shares bms's mode -- bms IS HLASM macro
+                # source, and full HLASM has the identical comment syntax
+                # ('*'/'.*' in column 1, no inline marker).
+                bms_mode=(lang_id in ("bms", "hlasm")),
             )
             if pos_lits:
                 lits.extend(pos_lits.splitlines())
@@ -837,6 +1293,25 @@ class Prism:
 
         return self._LUA_LONG_BRACKET_RE.sub(_repl, text)
 
+    def _embedded_payload_start(self, content: str, trigger: dict[str, Any], end_idx: int) -> int:
+        """#2549: where the embedded language's own text begins.
+
+        The trigger's opening delimiter belongs to whichever language wrote it.
+        For the markup handshakes that is the host document (`<script defer>` is
+        html; only what follows the `>` is JavaScript), so the segment boundary
+        moves to the end of the open tag. Everything else -- and any tag this
+        cannot resolve (unterminated, or longer than the lookahead limit) --
+        keeps the pre-#2549 boundary at the trigger's own start.
+        """
+        open_delimiter = trigger.get("open_delimiter")
+        if open_delimiter is None:
+            return trigger["start"]
+        limit = min(trigger["trigger_end"] + self.EMBEDDED_LOOKAHEAD_LIMIT, len(content))
+        m = open_delimiter.match(content, trigger["trigger_end"], limit)
+        if m is None or m.end() > end_idx:
+            return trigger["start"]
+        return m.end()
+
     def _partition_embedded_languages(self, content: str, primary_id: str) -> list[tuple[str, str]]:
         """Splits content into language segments based on embedded language triggers."""
         segments = []
@@ -878,6 +1353,7 @@ class Prism:
                     "end_pattern": t_config["end"],
                     "target": t_config["target"],
                     "pair": t_config["pair"],
+                    "open_delimiter": t_config.get("open_delimiter"),
                     "trigger_end": m.end(),
                 }
                 for m in t_config["trigger"].finditer(scan_view)
@@ -893,9 +1369,6 @@ class Prism:
                 f"Embedded Trigger: Embedded Language Block '{t['target']}' discovered at offset {t['start']}."
             )
 
-            if t["start"] > last_idx:
-                segments.append((primary_id, content[last_idx : t["start"]]))
-
             if t["pair"]:
                 open_char, close_char = t["pair"]
                 end_idx = self._find_balanced_end(content, t["start"], open_char, close_char)
@@ -906,7 +1379,16 @@ class Prism:
                 if not end_match and end_idx == search_limit:
                     self.logger.warning("Scanner Scope Guard: Failed to find closure within limit. Forcing clip.")
 
-            segments.append((t["target"], content[t["start"] : end_idx]))
+            # #2549: the opening `<script ...>` / `<style ...>` tag is host
+            # markup, not payload -- it stays in the primary segment so the host
+            # language's own rules can still see it, and the embedded segment
+            # starts at the tag's `>`.
+            payload_start = self._embedded_payload_start(content, t, end_idx)
+
+            if payload_start > last_idx:
+                segments.append((primary_id, content[last_idx:payload_start]))
+
+            segments.append((t["target"], content[payload_start:end_idx]))
             last_idx = end_idx
 
         if last_idx < len(content):
@@ -1011,13 +1493,39 @@ class Prism:
         # match start -- claims the entire line before the scanner ever reaches an
         # apostrophe/backtick inside it, regardless of how far away an unrelated
         # real quote/backtick happens to sit.
-        combined_pattern = re.compile(
-            r'(?<!\\)"(?:\\.|[^"\\])*"'
-            r"|(?<!\\)'(?![a-zA-Z_]\w*[=<>(),&|\]\s])(?:\\.|[^'\\]){0,10}'"
-            r"|(?<!\\)`(?:\\.|[^`\\]){0,200}`"
-            rf"|{re.escape(s_line)}[^\n]*",
-            re.S | re.M,
-        )
+        # #2674: Scheme's char literals are `#\x` -- and `#\;` / `#\"` / `#\(` are
+        # all legal (cpnanopass.ss: `(write-char #\; p)`). With `;` as the family's
+        # line-comment token, the comment branch below claimed `#\;` and ate the rest
+        # of the line INCLUDING its closing parens, so every paren-balanced scan
+        # downstream (the Mode-B function slicer, the #2674 scope filter) was one
+        # level deep for the rest of the file. Claim the literal atomically first;
+        # it goes through the same mask/unmask path as a string so the code stream
+        # keeps it verbatim. Bounded exactly like detector.py's _LISP_SCOPE_TOKEN.
+        lisp_char_literal = r"#\\(?:[a-zA-Z0-9][a-zA-Z0-9-]{0,31}|[^\s])|" if family == "recursive_block_lisp" else ""
+        # #2504: REXX strings double their quote to escape (`'don''t'`), never
+        # backslash, and cannot span lines -- the default single-quote branch
+        # here is char-literal-shaped (its lookahead guard rejects any real
+        # REXX string like 'ISPEXEC ...'), which would leave a `/*` inside a
+        # string un-masked and let the peel loop tear the line apart. Both
+        # quote branches are swapped for REXX's own morphology, line-bounded
+        # so an English apostrophe inside a comment can cascade at most to its
+        # own line's end (the #1302 discipline); the backtick branch is
+        # dropped (no backtick syntax in REXX).
+        if family == "recursive_block_rexx":
+            combined_pattern = re.compile(
+                r'"(?:""|[^"\n]){0,500}"'
+                r"|'(?:''|[^'\n]){0,500}'" + rf"|{re.escape(s_line)}[^\n]*",
+                re.S | re.M,
+            )
+        else:
+            combined_pattern = re.compile(
+                lisp_char_literal
+                + r'(?<!\\)"(?:\\.|[^"\\])*"'
+                + r"|(?<!\\)'(?![a-zA-Z_]\w*[=<>(),&|\]\s])(?:\\.|[^'\\]){0,10}'"
+                + r"|(?<!\\)`(?:\\.|[^`\\]){0,200}`"
+                + rf"|{re.escape(s_line)}[^\n]*",
+                re.S | re.M,
+            )
         string_cache: dict[str, str] = {}
 
         def _combined_replacer(m: re.Match) -> str:
@@ -1101,9 +1609,9 @@ class Prism:
         return "\n".join(code), lits
 
     def _strip_positional_comments(
-        self, text: str, abap_mode: bool = False, cobol_mode: bool = False
+        self, text: str, abap_mode: bool = False, cobol_mode: bool = False, bms_mode: bool = False
     ) -> tuple[str, str]:
-        """Column-anchored and Inline stripping for legacy languages (COBOL/Fortran/ABAP)."""
+        """Column-anchored and Inline stripping for legacy languages (COBOL/Fortran/ABAP/BMS)."""
         code, lits = [], []
 
         # #1898: ABAP is free-form except for its OWN column-1 `*` full-line-comment
@@ -1115,7 +1623,36 @@ class Prism:
         # anchor set silently erased every real class declaration as a bogus
         # comment before class_start ever ran. ABAP gets its own anchor set (just
         # `*`) and skips the column-7 check entirely.
-        anchors = {"*"} if abap_mode else self.POSITIONAL_ANCHORS
+        # The shared POSITIONAL_ANCHORS ({'*','/','C','c','!'}) is a UNION of
+        # Fortran's column-1 comment markers ('C'/'c'/'!'/'*') and COBOL's
+        # fixed-form indicators. COBOL's ONLY column-7 comment indicators are
+        # '*' (comment) and '/' (page-eject); 'C'/'c'/'!' are Fortran-specific.
+        # Feeding the full set to COBOL's column checks erased any paragraph or
+        # statement whose first token began with C/c (CLEAR-*, CLOSE, COMPUTE,
+        # CALL, ...) or '!' when it sat at the anchor column -- e.g. fps.cob's
+        # CLEAR-ENTITIES / CLEAR-WORLD / CLEAR-FRAMEBUF paragraphs, written in
+        # 6-space Area A so 'C' lands in column 7. COBOL therefore gets the
+        # narrow indicator set at both column 1 and column 7; Fortran keeps the
+        # full column-1 set (and no column-7 check); ABAP keeps its lone '*'.
+        # #2505: BMS (HLASM macro source) is the same shape as ABAP's case: its
+        # ONLY full-line comment markers are `*` in column 1 (ordinary comment)
+        # and `.*` in column 1 (macro comment). The shared set's 'C'/'c'/'/'/'!'
+        # would erase any real macro statement whose column-1 name field starts
+        # with one of them (`CUSTMAP DFHMDI ...` -- the #1898 ABAP class-header
+        # bug, verbatim), and HLASM has no inline comment marker at all
+        # (trailing remarks are positional, not delimited), so bms skips the
+        # inline-split step below entirely.
+        if bms_mode:
+            col1_anchors: set[str] = {"*"}
+            col7_anchors: Optional[set[str]] = None
+        elif abap_mode:
+            col1_anchors = {"*"}
+            col7_anchors = None
+        elif cobol_mode:
+            col1_anchors = col7_anchors = {"*", "/"}
+        else:
+            col1_anchors = self.POSITIONAL_ANCHORS
+            col7_anchors = None
 
         for line in text.split("\n"):
             # 1. Legacy Column-1 (Fortran/COBOL) or Column-7 (COBOL only) anchors
@@ -1129,9 +1666,21 @@ class Prism:
             # of FUNCTION at column 7, wiping the whole declaration line as a
             # bogus comment before func_start ever saw it (wrf/module_configure.F:353
             # `in_use_for_config`, wrf/module_domain.F:1693 `first_loc_integer`).
-            if (len(line) >= 1 and line[0] in anchors) or (cobol_mode and len(line) >= 7 and line[6] in anchors):
+            if (
+                (len(line) >= 1 and line[0] in col1_anchors)
+                or (col7_anchors is not None and len(line) >= 7 and line[6] in col7_anchors)
+                or (bms_mode and line.startswith(".*"))
+            ):
                 code.append("")
                 lits.append(line)
+                continue
+
+            # #2505: HLASM has no inline comment marker -- `!`, `*>` and `"`
+            # are ordinary characters inside a BMS operand or INITIAL literal,
+            # so the inline-split step below must never run for bms.
+            if bms_mode:
+                code.append(line)
+                lits.append("")
                 continue
 
             # 2. Modern Inline Fortran (!), COBOL (*>), and ABAP (") comments.

@@ -335,9 +335,10 @@ line into the comment stream before `detector.py` ever sees it. Isolated repro:
 ```python
 from gitgalaxy.core.prism import Prism
 from gitgalaxy.standards.language_standards import LENS_CONFIG, LANGUAGE_DEFINITIONS
+
 p = Prism(LENS_CONFIG.get("COMMENT_DEFINITIONS", {}), LANGUAGE_DEFINITIONS)
 result = p.split_streams("CLASS zcl_foo DEFINITION\n  PUBLIC\n  CREATE PUBLIC .\nENDCLASS.\n", "abap")
-print(result["code_stream"])     # '\n  PUBLIC\n  CREATE PUBLIC .\nENDCLASS.\n' -- header line GONE
+print(result["code_stream"])  # '\n  PUBLIC\n  CREATE PUBLIC .\nENDCLASS.\n' -- header line GONE
 print(result["comment_stream"])  # 'CLASS zcl_foo DEFINITION' -- misclassified as a comment
 ```
 
@@ -476,3 +477,57 @@ zero-dependency modes) and required regenerating both golden master fixtures; #1
 entirely in the SQLite recorder's named-class-list path, which those fixtures don't exercise at
 all — `crucible_check.py` passed with zero drift both before and after those two, confirmed via
 the tri-comparison gatherer and a direct `--db-only` scan instead.
+
+---
+
+## 10. Rosetta cross-language consistency (control-corpus capstone)
+
+This section is the [keyword-rosetta](https://github.com/squid-protocol/keyword-rosetta)
+counterpart of §9: where §9 asks "is ABAP extraction *accurate* on real code?", the rosetta control
+corpus asks "does GitGalaxy measure *identical planted intent* the same in ABAP as in the other 45
+languages?" Every deviation from the 46-language median is measured bias, tracked in
+[#2561](https://github.com/squid-protocol/gitgalaxy/issues/2561) (epic
+[#2560](https://github.com/squid-protocol/gitgalaxy/issues/2560)) and validated in the corpus's
+[deviation ledger](https://github.com/squid-protocol/keyword-rosetta/blob/main/deviation_ledger.json).
+
+**Summary (2026-09-03).** ABAP opened at **3🔴 / 3🟡** and reached **zero out-of-band metrics
+across all 57 comparable columns then measured** — briefly the only language in the corpus with no
+deviation of any kind — which closed
+[#2561](https://github.com/squid-protocol/gitgalaxy/issues/2561) under Batch E.4 of
+[#2669](https://github.com/squid-protocol/gitgalaxy/issues/2669).
+
+**That did not survive the next measurement, and the reason is worth recording.** The bias report
+was scoring `risk_*` metrics whose inputs it never measured; adding those four columns took it to 59
+(then 61) comparable metrics, and ABAP now shows **one amber cell** — `raw_state_slop_orphans` 3.25
+against a 2.5 median (+30%), a single orphaned function's worth. #2561 was reopened rather than left
+closed against a criterion it no longer meets. Nothing about ABAP changed; the corpus simply started
+looking at a column it had never looked at, and "clean" is only ever a statement about what is
+currently measured.
+
+ABAP's deviations were retired by corpus and engine work that was never ABAP-specific:
+
+1. **Corpus authoring, not morphology** — ABAP's original decoy carried the retired shared sentence
+   (`'IF TRUNCATE FAILS TRY SELECT AGAIN'`), whose `SELECT` is a live `io` keyword in this language,
+   so the decoy inflated the very signal it was meant to be inert against. Re-authored in Batch A.3
+   of #2669 (keyword-rosetta [#32](https://github.com/squid-protocol/keyword-rosetta/pull/32))
+   against the per-language template in keyword-rosetta#17, which screens a candidate keyword
+   against the seven non-planted signals that feed a `risk_*` formula before it is planted.
+2. **Median inflation by other languages' bugs** — the remainder was never ABAP's: the residual
+   `branch`/`state_mutation` standing moved when the return-counts-as-branch family
+   ([#2545](https://github.com/squid-protocol/gitgalaxy/issues/2545)) and the ×3 flux weighting
+   ([#2546](https://github.com/squid-protocol/gitgalaxy/issues/2546)) stopped skewing the
+   cross-language median.
+
+**Remaining out-of-band: one amber**, `raw_state_slop_orphans`, untriaged. It is not ABAP-specific:
+that column is out of band in 16 of 46 languages the first time it was ever measured, which is its
+own finding and needs a pass of its own rather than a hasty per-language ledger entry.
+
+ABAP remains the corpus's closest thing to a control case for what "clean" looks like — worth
+reading alongside a language with many ledgered deviations, because it shows the bands are
+achievable rather than aspirational.
+
+**Reading the close criterion correctly.** `tools/language_deviations.py abap` exiting 0 means every
+out-of-band cell is *accounted for*, not that none exists — for ABAP those happen to be the same
+thing, but for its neighbours they are not (see groovy §10). The distinction is enforced by the
+verdict machinery added in Batch E.1 (keyword-rosetta
+[#40](https://github.com/squid-protocol/keyword-rosetta/pull/40)).

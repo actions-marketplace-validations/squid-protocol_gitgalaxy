@@ -21,6 +21,14 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Optional
 
+from gitgalaxy.tools.cobol_to_cobol.cobol_graveyard_finder import unit_header
+
+_OPEN_MODES = frozenset({"INPUT", "OUTPUT", "I-O", "EXTEND"})
+# #3222: anchor only. The operand run used to be `[^.]*\.` inside the pattern,
+# which rescans to the next period from every OPEN -- the #3205 shape. The run
+# is now sliced with str.find, which visits each character once.
+_OPEN_ANCHOR = re.compile(r"\bOPEN\s+(?=(?:INPUT|OUTPUT|I-O|EXTEND)\b)")
+
 
 def extract_lineage(filepath: Path, dead_paras: Optional[set] = None) -> Optional[dict]:
     """
@@ -66,12 +74,14 @@ def extract_lineage(filepath: Path, dead_paras: Optional[set] = None) -> Optiona
 
         active_proc_lines = []
         current_paragraph = "MAIN-ENTRY"
-        para_pattern = re.compile(r"^[ \t]{0,7}([A-Z0-9\-]+)\.[ \t]*$")
 
-        for line in proc_div.split("\n"):
-            para_match = para_pattern.match(line)
-            if para_match:
-                current_paragraph = para_match.group(1)
+        # Each line belongs to the most recent paragraph or section header, found
+        # exactly as the graveyard finds the units it marks dead. Line 0 is the rest
+        # of the PROCEDURE DIVISION header, never a unit.
+        for i, line in enumerate(proc_div.split("\n")):
+            header = unit_header(line) if i else None
+            if header:
+                current_paragraph = header
 
             # If the paragraph is dead, we replace its characters with spaces
             if current_paragraph in dead_paras:
@@ -85,13 +95,25 @@ def extract_lineage(filepath: Path, dead_paras: Optional[set] = None) -> Optiona
 
     # 3. Extract exact Functional Intent (OPEN INPUT vs OPEN OUTPUT)
     # We run this on the safe_content where unreachable logic is invisible.
-    for match in re.finditer(r"OPEN\s+(INPUT|OUTPUT|I-O|EXTEND)\s+([^.]+)\.", safe_content):
-        mode = match.group(1)
-        # Handle multiple files opened on the same line
-        files_raw = re.sub(r"\s+", " ", match.group(2)).replace(",", " ").split()
-
-        for internal_file in files_raw:
-            if internal_file in file_map:
+    # One OPEN can carry several modes (`OPEN INPUT A B OUTPUT C D.`), so the
+    # operand list is walked and the mode switches at each mode keyword (#3204).
+    consumed = 0
+    for match in _OPEN_ANCHOR.finditer(safe_content):
+        # Keep the old pattern's non-overlapping scan: an anchor inside the
+        # operand run of a statement we already read is not a second OPEN.
+        if match.start() < consumed:
+            continue
+        stop = safe_content.find(".", match.end())
+        if stop == -1:
+            # `[^.]*\.` required the terminator, so an unterminated tail matched
+            # nothing. Unchanged here.
+            continue
+        consumed = stop + 1
+        mode = None
+        for internal_file in safe_content[match.end() : stop].replace(",", " ").split():
+            if internal_file in _OPEN_MODES:
+                mode = internal_file
+            elif internal_file in file_map:
                 physical_file = file_map[internal_file]
                 # I-O and EXTEND require the file to exist (Input) but also mutate it (Output)
                 if mode in ("INPUT", "I-O", "EXTEND"):
@@ -113,7 +135,7 @@ def extract_lineage(filepath: Path, dead_paras: Optional[set] = None) -> Optiona
         "program_id": program_id,
         "inputs": inputs,
         "outputs": outputs,
-        "unresolved_calls": list(dynamic_calls),
+        "unresolved_calls": sorted(dynamic_calls),  # a set: sorted so the IR is hash-seed independent (#3212)
     }
 
 

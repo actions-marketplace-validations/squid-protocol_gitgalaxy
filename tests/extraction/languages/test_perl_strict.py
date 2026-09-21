@@ -96,7 +96,8 @@ _PERL_SIMPLE_CASES = [
     ("events", "$bus->emit('event');", "$bus->publish('event');"),
     ("dependency_injection", "my $c = container();", "my $c = factory();"),
     ("macros", "BEGIN { }", "INIT { }"),
-    ("pointers", "$ref->[0];", "$ref->method();"),
+    # pointers is None since #2898 -- perl's derefs are GC-managed references,
+    # not raw memory addresses (c/cpp/zig read the sentence).
     ("memory_alloc", "undef $x;", "delete $h{$x};"),
     ("inline_asm", "use Inline 'C';", "use Inline::Python;"),
     ("telemetry", "$logger->info('msg');", "$logger->format('msg');"),
@@ -108,7 +109,7 @@ _PERL_SIMPLE_CASES = [
     ("sync_locks", "lock($var);", "unlock($var);"),
     ("immutability_locks", "use Readonly;", "use constant PI => 3.14;"),
     ("cleanup", "close($fh);", "$closed_handles++;"),
-    ("encapsulation", "state $x;", "our $x;"),
+    # encapsulation is None since #2766 -- my/state/local are lexical scope, not visibility.
     ("listeners", "$bus->on('event', sub {});", "$bus->off('event');"),
     ("test_skip", "skip('reason', 1);", "todo('reason', 1);"),
     ("serialization_parsing", "JSON::decode_json($json);", "JSON::encode_json($data);"),
@@ -184,7 +185,7 @@ def test_perl_args_findall_sum_multi_statement_arity():
     extractor = StructuralExtractor("perl", LANGUAGE_DEFINITIONS)
     payload = "sub check {\n  my $class = shift;\n  my ($param, $field) = @_;\n  return 1;\n}\n"
     segments = extractor._partition_segments(payload, "perl")
-    functions, _ = extractor._function_slice(segments, [{} for _ in segments], {}, {}, None)
+    functions, _ = extractor._function_slice(segments, [{} for _ in segments], {}, None)
     check_fn = next(f for f in functions if f["name"] == "check")
     assert check_fn["args"] == 3, f"expected 3 (1 shift + 2-tuple), got {check_fn['args']}"
 
@@ -220,13 +221,13 @@ def test_perl_args_prototype_falls_through_to_body_idiom_scan():
     extractor = StructuralExtractor("perl", LANGUAGE_DEFINITIONS)
     payload = "sub Options($$;@)\n{\n  my $self = shift;\n  my $param = shift;\n  my $newVal = shift;\n}\n"
     segments = extractor._partition_segments(payload, "perl")
-    functions, _ = extractor._function_slice(segments, [{} for _ in segments], {}, {}, None)
+    functions, _ = extractor._function_slice(segments, [{} for _ in segments], {}, None)
     fn = next(f for f in functions if f["name"] == "Options")
     assert fn["args"] == 3, f"expected 3 (three sequential shifts), got {fn['args']}"
 
     zero_arg_payload = "sub Get8u($$) { return DoUnpackStd('C', @_); }\n"
     segments2 = extractor._partition_segments(zero_arg_payload, "perl")
-    functions2, _ = extractor._function_slice(segments2, [{} for _ in segments2], {}, {}, None)
+    functions2, _ = extractor._function_slice(segments2, [{} for _ in segments2], {}, None)
     fn2 = next(f for f in functions2 if f["name"] == "Get8u")
     assert fn2["args"] == 0, f"expected 0 (no shift/my-unpack in body), got {fn2['args']}"
 
@@ -234,7 +235,7 @@ def test_perl_args_prototype_falls_through_to_body_idiom_scan():
     # #1199 comma-count heuristic, unaffected by the prototype fallthrough.
     real_sig_payload = "sub add($a, $b) {\n  return $a + $b;\n}\n"
     segments3 = extractor._partition_segments(real_sig_payload, "perl")
-    functions3, _ = extractor._function_slice(segments3, [{} for _ in segments3], {}, {}, None)
+    functions3, _ = extractor._function_slice(segments3, [{} for _ in segments3], {}, None)
     fn3 = next(f for f in functions3 if f["name"] == "add")
     assert fn3["args"] == 2, f"expected 2 (real named signature), got {fn3['args']}"
 
@@ -266,7 +267,7 @@ def test_perl_brace_safe_stream_escaped_brace_in_regex_does_not_desync():
         "}\n"
     )
     segments = extractor._partition_segments(payload, "perl")
-    functions, _ = extractor._function_slice(segments, [{} for _ in segments], {}, {}, None)
+    functions, _ = extractor._function_slice(segments, [{} for _ in segments], {}, None)
     names = [f["name"] for f in functions]
     assert "After" in names, f"escaped brace in regex swallowed the following sub; found {names}"
     detect_fn = next(f for f in functions if f["name"] == "Detect")
@@ -291,7 +292,7 @@ def test_perl_brace_safe_stream_slash_delimited_quote_op_stray_quote_does_not_de
         'sub clean {\n  my $name = shift;\n  $name =~ y/"//d;\n  return $name;\n}\n\nsub After {\n  return 1;\n}\n'
     )
     segments = extractor._partition_segments(payload, "perl")
-    functions, _ = extractor._function_slice(segments, [{} for _ in segments], {}, {}, None)
+    functions, _ = extractor._function_slice(segments, [{} for _ in segments], {}, None)
     names = [f["name"] for f in functions]
     assert "After" in names, f'stray quote inside y/"//d desynced the shield; found {names}'
 
@@ -321,7 +322,7 @@ def test_perl_pod_contraction_apostrophe_does_not_swallow_following_sub():
         "}\n"
     )
     segments = extractor._partition_segments(payload, "perl")
-    functions, _ = extractor._function_slice(segments, [{} for _ in segments], {}, {}, None)
+    functions, _ = extractor._function_slice(segments, [{} for _ in segments], {}, None)
     names = [f["name"] for f in functions]
     assert "parse_body" in names, f"POD contraction apostrophe swallowed the following sub; found {names}"
 
@@ -563,3 +564,59 @@ def test_perl_structural_boundaries_sub_and_method():
     assert pattern.search("class Point {")
     assert pattern.search("role Throwable {")
     assert not pattern.search("my_sub()"), "should not match substrings"
+
+
+def test_perl_doc_pod_block_counts_once_regression():
+    """
+    #2672/#2670: the POD opener (`=pod`, `=head1`, ...) and `=cut` were
+    independent alternatives, so one `=pod ... =cut` block counted doc=2 --
+    the #2658 shape. Pair the opener to its closing `^=cut` into a single
+    bounded (0,15000 chars) non-greedy span so a full POD block counts once.
+    """
+    doc = PERL_RULES["doc"]
+
+    block = "=pod\n\nSome documentation here.\n\n=cut\n"
+    assert len(doc.findall(block)) == 1, "a single =pod...=cut block must count once, not twice"
+
+    two_blocks = "=pod\n\nfirst\n\n=cut\n\n=head1 NAME\n\nsecond\n\n=cut\n"
+    assert len(doc.findall(two_blocks)) == 2, "two separate POD blocks must still count as 2"
+
+
+def test_perl_doc_unterminated_opener_still_counts_regression():
+    """
+    #2672: an opener with no `=cut` yet (or malformed input) must still
+    count once via the fallback bare-opener alternative, not fail to match
+    at all.
+    """
+    doc = PERL_RULES["doc"]
+    assert doc.search("=head1 NAME\n\nSome text without a closing cut.\n")
+
+
+def test_perl_doc_pod_block_redos_immune_regression():
+    """#2672 ReDoS probe: an unterminated `=pod` must fail closed quickly, not hang."""
+    assert_redos_immune(PERL_RULES["doc"], "=pod\n" + "x" * 200000, timeout_sec=3.0)
+
+
+def test_perl_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    Every alternative was a module-level export list that also lands on a
+    rule which already owns it, so `api` could only move by moving another
+    planted count. A Perl `sub` is package-public by default.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = PERL_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search("sub probe_globals {"), "package-public sub"
+    assert api.search("@EXPORT_OK = qw(foo);"), "export list (kept)"
+
+    # Not declarations -- must not match.
+    assert not api.search("sub _private_helper {"), "underscore-private sub"

@@ -48,9 +48,7 @@ DEFINITION: dict[str, Any] = {
         # 1. branch (Control Flow / Branching)
         # Includes modern switch expressions (yield) and pattern guards (when).
         # EXCLUDES: Exceptions (throw) - moved to bailout_hits.
-        "branch": re.compile(
-            r"\b(if|else|switch|case|default|for|while|do|catch|finally|continue|break|yield|try|when)\b|\?|:"
-        ),
+        "branch": re.compile(r"\b(if|else|switch|case|default|for|while|do|yield|when)\b|\?|(?<!:):(?!:)"),
         # 2. args (Parameters / Coupling)
         # Captures method/constructor params and lambdas. Bounded to prevent ReDoS.
         "args": re.compile(
@@ -116,7 +114,7 @@ DEFINITION: dict[str, Any] = {
         # 3. linear (Sequential Boundaries)
         # Structural boundaries. EXCLUDES: Access modifiers (encapsulation) and final (freeze_hits).
         "structural_boundaries": re.compile(
-            r"\b(void|return|import|package|class|interface|enum|record|extends|implements|var|sealed|non-sealed|permits|new|throws|module|requires|exports|opens|provides|uses)\b"
+            r"\b(void|return|break|continue|import|package|class|interface|enum|record|extends|implements|var|sealed|non-sealed|permits|new|throws|module|requires|exports|opens|provides|uses)\b"
         ),
         # 4. func_start (Executable Logic Anchors)
         # ONLY executable logic blocks. EXCLUDES classes/interfaces. Steps over annotations.
@@ -182,8 +180,9 @@ DEFINITION: dict[str, Any] = {
         ),
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
         # 6. safety (Defensive Programming / Validation)
+        # C1: Optional is a type name; @Immutable/@Transactional are not runtime validation.
         "safety": re.compile(
-            r"\b(try|catch|finally|assert|Optional|Objects\.requireNonNull|instanceof)\b|@(Valid|Validated|NotNull|NonNull|NotBlank|Immutable|Transactional)\b"
+            r"\b(try|catch|finally|assert|Objects\.requireNonNull|instanceof)\b|@(Valid|Validated|NotNull|NonNull|NotBlank)\b"
         ),
         # 7. safety_neg (Safety Bypasses / Unchecked Types)
         "safety_bypasses": re.compile(
@@ -191,16 +190,37 @@ DEFINITION: dict[str, Any] = {
         ),
         # 8. danger (High-Risk Execution / System Calls)
         # Process killers and raw memory/execution risks. EXCLUDES prints (Phase 5).
+        # #2878 contract C2: `ProcessBuilder builder;` declares a variable; `new ProcessBuilder(`
+        # is the site.
         "high_risk_execution": re.compile(
-            r"\b(Runtime\.getRuntime\(\)\.exec|ProcessBuilder|System\.exit|Thread\.stop|Unsafe)\b"
+            r"\b(?:Runtime\.getRuntime\(\)\.(?:exec|halt)|System\.exit|Thread\.stop|Unsafe)\b|\bnew\s+ProcessBuilder\b"
         ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
             r"\b(File|InputStream|OutputStream|Reader|Writer|Scanner|Files\.|Path|Socket|RestTemplate|WebClient|RestClient|HttpClient|Connection|ResultSet|Statement|EntityManager|DataSource|Repository)\b"
         ),
         # 10. api (Public Surface Area)
+        # BUG FIX #2730 (api contract): a bare `\bpublic|protected\b` counted the
+        # access modifier ANYWHERE in the code stream -- inside a string
+        # literal, a `switch` case, a dotted name -- not only where it
+        # declares something. The alternatives below anchor it to the
+        # declaration it modifies, per docs/api_rule_contract.md ("a
+        # declaration that makes a named function or type visible outside
+        # this file"). Every quantifier is bounded (Rule 5) and the modifier
+        # stepper is `{0,5}`, not `*`, so the `[ \t\n]+`-separated
+        # alternation cannot nest unboundedly (the ReDoS shape swift's `open`
+        # alternative was already written against).
+        # Measured on the language-crucible corpus: 220 matches before, 220
+        # after -- real Java writes `public` almost only in front of a
+        # declaration, so this is a precision guard, not a recount.
         "api": re.compile(
-            r"\b(public|protected)\b|@(RestController|Controller|Service|Component|Bean|Produces|Consumes|RequestMapping|GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|Endpoint|WebFilter)\b"
+            r"\b(?:public|protected)[ \t\n]+"
+            r"(?:(?:static|final|abstract|synchronized|native|strictfp|default|sealed|non-sealed|transient|volatile|@[\w.]+(?:\([^)\n]{0,200}\))?)[ \t\n]+){0,5}"
+            r"(?:<(?:[^<>]|<[^<>]*>){0,200}>[ \t\n]*)?"
+            r"(?:class|interface|enum|record|@interface|void\b"
+            r"|[A-Za-z_$][\w$.]*(?:[ \t\n]*<(?:[^<>]|<[^<>]*>){0,200}>)?(?:\[[ \t\n]*\])*[ \t\n]+[A-Za-z_$][\w$]*[ \t\n]*[({=;,]"
+            r"|[A-Za-z_$][\w$]*[ \t\n]*\()"
+            r"|@(RestController|Controller|Service|Component|Bean|Produces|Consumes|RequestMapping|GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|Endpoint|WebFilter)\b"
         ),
         # 11. flux (State Mutation)
         # Mutation of state. EXCLUDES final (freeze_hits).
@@ -215,18 +235,46 @@ DEFINITION: dict[str, Any] = {
         # `\w{0,100}`, matching the fix shape used throughout this
         # sweep.
         "state_mutation": re.compile(
-            r"\b(volatile|Atomic\w+)\b|^[ \t]*(?:this\.)?\w+[ \t]*=|@(?:Setter|Data)\b"
-            r"|(?:\w{0,100}\.)?(?:set[A-Z]\w+|add|put|remove|clear|addAll|replace|computeIfAbsent)\s*\("
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `volatile` / `Atomic*` name mutable state and `@Setter`/`@Data` generate
+            # accessors (corollary 2); the write is `x = v`, `x++`, `.set(`/`.add(`... A
+            # mutator needs its receiver's dot so a setter DECLARATION (`void setX(`) is
+            # not counted as a call.
+            r"(?:^|[;{}])[ \t]*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%&|^]|<<|>>>?)?=(?![=>])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_(*]"
+            r"|\.(?:set[A-Z]\w*|add|addAll|put|putAll|remove|clear|replace|computeIfAbsent|merge|offer|poll|push|pop"
+            r"|compareAndSet|getAndSet|incrementAndGet|decrementAndGet|addAndGet|getAndIncrement|getAndDecrement)\s*\(",
+            re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(r"//[ \t]*(?:public|private|protected|class|void|if|for|while|return|import)\b"),
         # 13. doc (Structured Documentation)
+        # BUG FIX #2672: `/\*\*` and its tags (`@param`, `@return`, ...) were
+        # independent alternatives, so one javadoc block counted doc=2 (one
+        # for the opener, one for each tag inside it). Match the whole block
+        # as a single bounded (0,15000 chars) non-greedy span first, same
+        # shape as #2658's docstring fix, so a block counts once. Bare tags
+        # stay last so a tag outside any javadoc block (e.g. a real
+        # `@Operation`/`@Schema` annotation) still counts.
         "doc": re.compile(
-            r"/\*\*|@param|@return|@throws|@deprecated|@see|@since|@apiNote|@implSpec|@Operation|@Schema"
+            r"/\*\*[\s\S]{0,15000}?\*/|@param|@return|@throws|@deprecated|@see|@since|@apiNote|@implSpec|@Operation|@Schema"
         ),
         # 14. test (Testing & Assertions)
+        # #2853 contract C1: `assert[...]{1,40}\(` (was `*`) requires >=1 char after
+        # `assert`, so a JUnit `assertEquals(`/`assertThat(` matches but the JLS
+        # runtime `assert(cond)` statement -- a production guard, safety's -- does
+        # not (the runtime `assert cond;` form was never matched here anyway). The
+        # count is bounded (a real assertion name is short) so a long run of word
+        # chars with no `(` can't catastrophically backtrack the `\w+\s*\(` tail.
         "test": re.compile(
-            r"@(?:Test|ParameterizedTest|Before|After|BeforeEach|AfterEach|Mock|InjectMocks)|assert[A-Za-z0-9_]*\s*\(|\b(?:verify|expect|given|when)\s*\("
+            r"@(?:Test|ParameterizedTest|Before|After|BeforeEach|AfterEach|Mock|InjectMocks)|assert[A-Za-z0-9_]{1,40}\s*\(|\b(?:verify|expect|given|when)\s*\("
         ),
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
         # 15. concurrency (Asynchronous Execution)
@@ -251,9 +299,14 @@ DEFINITION: dict[str, Any] = {
         # whatever follows the `=` in a real declaration (a space, then
         # the value) is never a word character. This extremely common
         # Java constant-declaration idiom never matched at all.
+        # #2859 (contract C1: scope, not visibility or mutability): any class-static
+        # FIELD is a program-lifetime binding, not just the `public … SCREAMING_CASE`
+        # constant the #2858 rule saw. `private static final Logger LOG`,
+        # `static int counter;` count; the `[=;]` terminator excludes `static`
+        # methods (a `(` follows) and `static {}` initializer blocks (no name).
         "globals": re.compile(
             r"\b(?:System\.getProperty|System\.getenv|ThreadLocal|ScopedValue)\b"
-            r"|public\s+static\s+(?:final[ \t]+)?\w+\s+[A-Z_0-9]+[ \t]*="
+            r"|\b(?:private|protected|public)?[ \t]*static[ \t]+(?:final[ \t]+)?[\w<>\[\].]+[ \t]+\w+[ \t]*[=;]"
             r"|@(?:Value|ConfigurationProperties)"
         ),
         # 19. decorators (Decorators / Annotations)
@@ -277,7 +330,11 @@ DEFINITION: dict[str, Any] = {
         "import": re.compile(r"^[ \t]*import\s+(?:static[ \t]+)?[\w.]+;", re.M),
         "_dependency_capture": re.compile(r"^[ \t]*import[ \t\n]+(?:static[ \t\n]+)?([\w.*]+)[ \t\n]*;", re.M),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"@author\s+(.*)", re.I),
+        # #2882 contract: C1 keyed lines join @author
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -353,9 +410,14 @@ DEFINITION: dict[str, Any] = {
         # 45. immutability_locks (Immutability Constraints)
         "immutability_locks": re.compile(r"\b(final|immutable|unmodifiable[A-Z]\w*|Object\.freeze)\b"),
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"\b(close|dispose|shutdown|free|release|cleaner\.register)\b\s*\("),
+        "cleanup": re.compile(
+            r"\b(?<!void )(close|dispose|shutdown|free|release|cleaner\.register)\b\s*\("
+        ),  # #2888 C1: `void close(ApplicationContext c) {` declares
         # 47. encapsulation (Access Modifiers / Encapsulation)
-        "encapsulation": re.compile(r"\b(private|protected|internal)\b"),
+        # #2766: `internal` removed -- not a java keyword (matched prose/identifiers).
+        # protected counts under the public-surface comparator: a protected member is
+        # not public API even though it widens java's package default.
+        "encapsulation": re.compile(r"\b(private|protected)\b"),
         # 48. listeners (Event Listeners / Observers)
         # BUG FIX: `@KafkaListener`/`@RabbitListener` start with `@` --
         # same leading-\b bug as dependency_injection above.
@@ -363,6 +425,17 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"@(?:Ignore|Disabled)|test\.skip\(|mock\(|spy\(|verifyZeroInteractions"),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Java Specifics) ---
+        # auth_middleware (#3004): Spring Security's method-security annotations
+        # and route authorization, JSR-250's @RolesAllowed, JAAS's LoginContext,
+        # and the SecurityManager/Shiro permission check. The SpEL inside a
+        # @PreAuthorize string (hasRole(...)) is NOT separately counted -- the
+        # annotation is the one hit.
+        "auth_middleware": re.compile(
+            r"@(?:PreAuthorize|PostAuthorize|Secured|RolesAllowed)\("
+            r"|\.authorizeHttpRequests\("
+            r"|\bnew[ \t]+LoginContext\("
+            r"|\.checkPermission\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(ObjectMapper|readValue|readTree|fromJson|ObjectInputStream|DocumentBuilder|SAXParser)\b"
         ),
@@ -371,5 +444,9 @@ DEFINITION: dict[str, Any] = {
             r"\b(LocalDate(?:Time)?|ZonedDateTime|Instant|Duration|System\.currentTimeMillis|Calendar\.getInstance)\b"
         ),
         "ipc_rpc_bridges": re.compile(r"\b(ProcessBuilder|KafkaTemplate|RabbitTemplate|JmsTemplate|java\.rmi)\b"),
+        # system_config_mutation (#3084): contract-level absence. no host-config
+        # primitive; java.util.prefs writes the app's own preference tree
+        # (state_mutation's territory, not shared infrastructure).
+        "system_config_mutation": None,
     },
 }

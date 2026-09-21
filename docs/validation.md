@@ -168,11 +168,35 @@ intent is identical by construction.
 
 Current results
 ([bias report](https://github.com/squid-protocol/keyword-rosetta/blob/main/docs/bias_report.md)):
-across 33 comparable metrics, on average **75% of languages land within ±25% of
-the cross-language median** — but under the strict gate (no language beyond ±50%
-of the median), only **3 of 33 metrics pass** cross-language validation today.
-The weakest metrics are named, not hidden: `risk_cognitive_load` holds only 15%
-of languages in the ±25% band, `risk_api_exposure` 43%, `state_mutation` 46%. Every known
+across 59 gated metrics, on average **94% of languages land within ±25% of the
+cross-language median** (54 of 56 chartable metrics hold at least 80% of
+languages in band), and under the cause-based gate **the open-defect share is
+0.0% — 0 of 2,632 comparable cells** are open engine defects; every remaining
+out-of-band cell is a ledger-validated variation (a strictness stratum, a
+construct the language cannot express, an echo, or a scoring choice). The
+weakest metrics are named, not hidden: `cog_raw` holds 76% of languages in the
+±25% band, `raw_arch_api` 78%, `reflection_metaprogramming` and
+`risk_state_flux` 82%, `avg_func_args` 83%.
+
+The consistency claim also survives expansion on demand. When the corpus
+planted its first **security-lens probe** — one identical comment-form
+hardcoded secret in every language's shell — `risk_secrets_risk` went from
+inert to a scored metric reading a **uniform value across all 44 languages
+the lens covers**, in one screened change. The two languages reading 0
+(markdown, yaml) were not misses: the engine deliberately skipped its
+security lens on inert data formats, a boundary ledgered and filed as a
+design question ([#2978](https://github.com/squid-protocol/gitgalaxy/issues/2978))
+and since closed — the lens now runs on all five inert formats
+(plaintext/markdown/json/yaml/csv), opt-out via `SECURITY_SCAN_INERT_FORMATS`.
+The same regeneration *measured* the formula's length dependence (Spearman
+ρ = −0.91 against file length with inputs held equal) and filed it as
+score-contract work ([#2979](https://github.com/squid-protocol/gitgalaxy/issues/2979))
+— the instrument finding its next finding on the day it was extended. The
+commit-age context group reads measured git history as well, since the
+chronometer resolves history for subdirectory scans
+([#2976](https://github.com/squid-protocol/gitgalaxy/issues/2976)).
+
+Every known
 deviation is recorded in a validated
 [deviation ledger](https://github.com/squid-protocol/keyword-rosetta/blob/main/deviation_ledger.json),
 and the defect classes found this way are filed as GitGalaxy issues — see the
@@ -315,11 +339,11 @@ GitGalaxy is moving through a sequence of increasingly difficult questions:
 
 ↓
 
-> **Do those structural measurements correspond to meaningful risk exposure?**
+> **Do those structural measurements correspond to defect risk?** *(Answered — no: the temporal-crucible program ([#2982](https://github.com/squid-protocol/gitgalaxy/issues/2982)) found the structural vectors reduce to file size and do not predict defects. They were renamed from "risk exposure" to the **Structural Surface Profile** ([#2991](https://github.com/squid-protocol/gitgalaxy/issues/2991)); they measure surface area and activity. History metrics — recidivism, change entropy — are the predictive layer. See [`vectors.md`](vectors.md).)*
 
 ↓
 
-> **Does measured exposure behave correctly as real software evolves?**
+> **Does the measured surface profile behave correctly as real software evolves?** *(Yes — per-vector deltas track real code events: guard code added, threading introduced, debt markers diluted, cleanly across a security-fix → fix → control → revert gradient.)*
 
 The Tree-sitter/Ctags validation is currently about halfway complete. The
 immediate priority is to finish that audit before turning preliminary

@@ -18,6 +18,11 @@
 # Services) based on the strict COBOL structural extraction. It delegates ONLY
 # the internal business logic to the AI agent, ensuring architectural integrity
 # and guaranteed compilability out-of-the-box.
+#
+# ENGINE IR (#3120): when the staging directory came from `cobol-refractor
+# --galaxy-db/--scan`, each IR dump also carries `metadata.ir_source`,
+# `analysis.copy_dependencies` and `analysis.engine_units` from the engine's
+# master DB. Nothing here needs to change to pass them through.
 # ==============================================================================
 
 # galaxyscope:ignore sec_io
@@ -44,13 +49,21 @@ from gitgalaxy.tools.cobol_to_java.cobol_to_java_build_forge import (
 from gitgalaxy.tools.cobol_to_java.cobol_to_java_decoder_forge import (
     generate_decoder_util,
 )
+from gitgalaxy.tools.cobol_to_java.cobol_to_java_names import (
+    java_class_base,
+    output_key,
+)
 from gitgalaxy.tools.cobol_to_java.cobol_to_java_service_forge import (
     generate_service_skeleton,
 )
 
 # Current Imports
 from gitgalaxy.tools.cobol_to_java.cobol_to_java_spring_forge import (
+    dto_class_name,
+    entity_class_name,
+    generate_java_dto,
     generate_java_entity,
+    is_transient_record,
 )
 
 
@@ -65,6 +78,7 @@ def build_spring_boot_scaffold(output_dir: Path, package_name: str) -> dict:
         "base_pkg": base_dir,
         "resources": resources_dir,
         "entity": base_dir / "entity",
+        "dto": base_dir / "dto",
         "controller": base_dir / "controller",
         "service": base_dir / "service",
         "repository": base_dir / "repository",
@@ -160,7 +174,7 @@ def main():
 
     # 1. Build the Folder Structure & Scaffolding
     java_dirs = build_spring_boot_scaffold(java_out_dir, args.pkg)
-    stats = {"entities": 0, "controllers": 0, "agent_jobs": 0, "config_files": 0}
+    stats = {"entities": 0, "dtos": 0, "controllers": 0, "agent_jobs": 0, "config_files": 0}
 
     # Generate pom.xml
     pom_content = generate_pom_xml(group_id=args.pkg, artifact_id=artifact_id)
@@ -192,42 +206,44 @@ def main():
     # 2. Generate JPA Entities from Schemas
     schema_dir = clean_room_path / "02_cloud_schemas"
     if schema_dir.exists():
-        for schema_file in schema_dir.glob("*_schema.json"):
+        for schema_file in sorted(schema_dir.glob("*_schema.json"), key=lambda p: p.name):
             try:
                 schema = json.loads(schema_file.read_text(encoding="utf-8"))
-                java_code = generate_java_entity(schema, args.pkg)
+                unit_key = output_key(schema_file, "_schema")
+                # #3233: a DFHCOMMAREA is a CICS communication area, not persistent
+                # state. Every CICS program declares one, so mapping each to an
+                # @Entity produced N classes on one @Table(name="DFHCOMMAREA") that
+                # Hibernate refuses to start. Such a record becomes a plain DTO.
+                if is_transient_record(schema):
+                    java_code = generate_java_dto(schema, args.pkg, unit_key=unit_key)
+                    class_name = dto_class_name(schema, unit_key)
+                    out_dir, stat_key, label = java_dirs["dto"], "dtos", "DTO   "
+                else:
+                    java_code = generate_java_entity(schema, args.pkg, unit_key=unit_key)
+                    # #3221: named from the schema's own clean-room key, so two
+                    # programs that both declare a DFHCOMMAREA get two classes.
+                    class_name = entity_class_name(schema, unit_key)
+                    out_dir, stat_key, label = java_dirs["entity"], "entities", "Entity"
+
                 if java_header:
                     java_code = java_header + java_code
-                class_name = "".join(word.capitalize() for word in schema.get("title", "Entity").split("_"))
-
-                # Apply the exact same reserved word sanitization to the file name
-                reserved_classes = {
-                    "Entity",
-                    "Class",
-                    "System",
-                    "Object",
-                    "String",
-                    "Enum",
-                    "Record",
-                    "Thread",
-                }
-                if class_name in reserved_classes:
-                    class_name = "Legacy" + class_name
-
-                out_path = java_dirs["entity"] / f"{class_name}.java"
-                out_path.write_text(java_code, encoding="utf-8")
-                stats["entities"] += 1
-                print(f"  [+] Generated Entity: {class_name}.java")
-            except Exception as e:
+                (out_dir / f"{class_name}.java").write_text(java_code, encoding="utf-8")
+                stats[stat_key] += 1
+                print(f"  [+] Generated {label}: {class_name}.java")
+            except Exception as e:  # noqa: PERF203 -- per-iteration isolation: skip a malformed file, keep generating the rest of the batch
                 print(f"  [!] Failed to generate entity from {schema_file.name}: {e}")
 
     # 3. Generate REST Controllers & Service Layers from IR State Files
     ir_dir = clean_room_path / "04_ir_state_dumps"
     if ir_dir.exists():
-        for ir_file in ir_dir.glob("*_ir.json"):
+        for ir_file in sorted(ir_dir.glob("*_ir.json"), key=lambda p: p.name):
             try:
                 ir_state = json.loads(ir_file.read_text(encoding="utf-8"))
-                raw_prog_id = ir_state.get("metadata", {}).get("file_name", "Unknown").split(".")[0]
+                # #3221: the clean room already disambiguated same-stemmed programs
+                # into COBOL__SAM2 / multiroot__sam__SAM2 (#3218). Name the Java
+                # from that key, not from metadata.file_name, which is SAM2.cbl for
+                # both and made the later one overwrite the earlier.
+                raw_prog_id = output_key(ir_file, "_ir")
 
                 # 🛡️ Prevent collision with Spring Boot's @Service annotation AND handle empty names
                 if not raw_prog_id or raw_prog_id.strip() == "":
@@ -235,14 +251,10 @@ def main():
                 elif raw_prog_id.lower() == "service":
                     raw_prog_id = "legacy-service"
 
-                # ⚠️ CRITICAL: Inject the safe raw name back into IR State so the generators process it correctly
-                ir_state.setdefault("metadata", {})["file_name"] = raw_prog_id + ".cbl"
-
-                # Ensure file names are perfectly camel-cased with no hyphens for this controller
-                safe_file_name = "".join(word.capitalize() for word in raw_prog_id.split("-"))
+                safe_file_name = java_class_base(raw_prog_id)
 
                 # 3A. Generate the @Service Skeleton
-                service_code = generate_service_skeleton(ir_state, args.pkg)
+                service_code = generate_service_skeleton(ir_state, args.pkg, unit_key=raw_prog_id)
                 if java_header:
                     service_code = java_header + service_code
                 out_path_svc = java_dirs["service"] / f"{safe_file_name}Service.java"
@@ -252,7 +264,7 @@ def main():
                 # 3B. Generate the @RestController
                 lineage = ir_state.get("analysis", {}).get("lineage", {})
                 if lineage and (lineage.get("inputs") or lineage.get("outputs") or lineage.get("unresolved_calls")):
-                    java_code = generate_rest_controller(ir_state, args.pkg)
+                    java_code = generate_rest_controller(ir_state, args.pkg, unit_key=raw_prog_id)
                     if java_header:
                         java_code = java_header + java_code
                     out_path_ctrl = java_dirs["controller"] / f"{safe_file_name}Controller.java"
@@ -267,7 +279,7 @@ def main():
                     if not sub or not sub.strip():
                         continue
 
-                    safe_sub_name = "".join(word.capitalize() for word in sub.replace("-", "_").split("_"))
+                    safe_sub_name = java_class_base(sub, prefix="")
 
                     # If it stripped down to nothing, skip it to prevent writing "Service.java"
                     if not safe_sub_name:
@@ -288,10 +300,12 @@ def main():
     # 4. Generate Autonomous AI Agent Tickets
     slice_dir = clean_room_path / "05_microservice_slices"
     if slice_dir.exists():
-        for slice_file in slice_dir.glob("*_slice.json"):
+        for slice_file in sorted(slice_dir.glob("*_slice.json"), key=lambda p: p.name):
             try:
                 slice_data = json.loads(slice_file.read_text(encoding="utf-8"))
-                prog_id = slice_file.name.split("_")[0]
+                # #3221: `name.split("_")[0]` returned COBOL for COBOL__SAM2_slice.json,
+                # so the IR never resolved and two programs shared one job file.
+                prog_id = output_key(slice_file, "_slice")
                 ir_file = ir_dir / f"{prog_id}_ir.json"
                 ir_state = json.loads(ir_file.read_text(encoding="utf-8")) if ir_file.exists() else None
 
@@ -300,7 +314,7 @@ def main():
                 out_path.write_text(json.dumps(ticket_json, indent=2), encoding="utf-8")
                 stats["agent_jobs"] += 1
                 print(f"  [+] Generated Agent Job: {out_path.name}")
-            except Exception as e:
+            except Exception as e:  # noqa: PERF203 -- per-iteration isolation: skip a malformed file, keep generating the rest of the batch
                 print(f"  [!] Failed to generate job from {slice_file.name}: {e}")
 
     # 5. Generate Master CI/CD Audit Report
@@ -318,6 +332,7 @@ def main():
         f.write("----------------------------------------------------------\n")
         f.write(f"  • Build & Config Files Scaffolded : {stats['config_files']}\n")
         f.write(f"  • JPA Entities Generated          : {stats['entities']}\n")
+        f.write(f"  • Transient DTOs Generated        : {stats['dtos']}\n")
         f.write(f"  • REST Controllers Generated      : {stats['controllers']}\n")
         f.write(f"  • AI Agent Tickets Generated      : {stats['agent_jobs']}\n\n")
         f.write("==========================================================\n")
@@ -328,6 +343,7 @@ def main():
     print("----------------------------------------------------------------------")
     print(f"  • Build & Config Files Scaffolded : {stats['config_files']}")
     print(f"  • JPA Entities Generated          : {stats['entities']}")
+    print(f"  • Transient DTOs Generated        : {stats['dtos']}")
     print(f"  • REST Controllers Generated      : {stats['controllers']}")
     print(f"  • AI Agent Tickets Generated      : {stats['agent_jobs']}")
     print("======================================================================\n")

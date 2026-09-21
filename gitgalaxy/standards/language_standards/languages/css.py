@@ -51,19 +51,60 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 2. args (Parameters / Coupling)
-        # Signatures defining input coupling. Bounded to prevent ReDoS on massive calculations.
-        # BUG FIX (Rule 11): `[^)]*` is a flat negated class -- can't
-        # represent even one level of nesting. Modern CSS math functions
-        # nest constantly (`calc(var(--x) + 1px)`, `min(sin(45deg), .5)`)
-        # -- confirmed the old pattern truncated at the first inner `)`,
-        # matching only `calc(var(--x)` instead of the full call.
-        # Upgraded to the one-level-nesting bounded form (the two
-        # alternatives never match overlapping text, so it stays linear).
-        "args": re.compile(
-            r"\b(?:calc|clamp|min|max|var|env|url|rgba?|hsla?|lch|oklch|color-mix|light-dark)"
-            r"\s*\((?:[^()]|\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))*\)",
-            re.I,
-        ),
+        # =====================================================================
+        # A STATED ABSENCE (#2893). The `args` contract is "the parameters a
+        # callable declares". CSS declares no callable, so it declares no
+        # parameter surface: every parenthesis in a stylesheet is a CALL into a
+        # builtin. Count contract corollary 3 -- a language that cannot express
+        # the construct records "a contract-level absence (`None` rule + a
+        # ledgered `intended-morphology` entry) rather than a manufactured
+        # construct. The two answers cannot coexist inside one signal." Same
+        # answer solidity's `io: None` records (docs/io_rule_contract.md C3).
+        #
+        # HISTORICAL CONTEXT FOR FUTURE LLMS: this matched CSS value-function
+        # calls -- calc|clamp|min|max|var|env|url|rgba?|hsla?|lch|oklch|
+        # color-mix|light-dark. docs/args_rule_contract.md called that "the one
+        # place in this document where the contract is deliberately not met",
+        # kept because "the honest alternatives are this approximation or 0
+        # forever, and 0 says a stylesheet full of computed values has no
+        # coupling at all". Both halves of that were wrong by 2026-09-08:
+        #   1. The third alternative is None, not 0, and None is not scored.
+        #   2. A stylesheet's coupling IS measured, by the rules that own it.
+        #      Of the 3855 hits this rule made on the crucible's 38 css files
+        #      (code stream, the text detector.py actually hands the rule):
+        #      2521 `var(` reads, 931 colour literals (rgba/rgb/oklch -- never
+        #      coupling), 321 `calc(` (226 of them already containing a
+        #      `var()`), 77 `url(` and 5 `clamp(`/`min(`. Meanwhile `api` counts
+        #      3597 `--custom-property:` DECLARATIONS (the definitions those
+        #      `var()`s read, a larger surface than the reads), `safety` counts
+        #      512 guarded `var(x, fallback)` reads plus `clamp()`, `io` counts
+        #      the 14 real url() fetches (#2752) and `reflection_metaprogramming`
+        #      the 24 nested `calc(`.
+        # It was also wrong twice per file: css gets no `args_search_text`, so
+        # `_calculate_block_metrics` searched the whole block BODY and took the
+        # first match -- 6 at-rules carried 13 phantom parameters borrowed from
+        # their own bodies (preflight.css:291's `@supports` read arity 3 off a
+        # `color-mix()` on line 294). tree-sitter reads 0 for all 25; this takes
+        # `args_exact_match` from 19/25 to 25/25.
+        #
+        # THE NAMED RESIDUAL: the UNGUARDED `var(--x)` read (2521 - 512 = 2009
+        # crucible occurrences) is now unmeasured. Deliberate -- no stated
+        # contract owns "reads a document-lifetime binding by name" (the globals
+        # contract's C2 excludes an ordinary read), and inventing one to keep the
+        # number is the failure this change exists to end. It earns its own
+        # signal or it stays unmeasured.
+        #
+        # REOPEN CONDITION: `extensions` above claims .scss/.sass/.less/.styl/
+        # .pcss, and Sass/Less DO declare parameters -- `@mixin b($size, $color)`,
+        # `@function f($a, $b)`, Less `.mixin(@a; @b)`. Those are real declared
+        # parameter surfaces and this absence does NOT cover them. It stands only
+        # because there are zero .scss/.sass/.less files in the language-crucible
+        # and zero in keyword-rosetta, so such a rule would be unmeasurable on
+        # either corpus. If a preprocessor dialect enters the crucible, write the
+        # declaration-form rule and retire this absence.
+        # Corpus: keyword-rosetta `args-no-parameter-surface-morphology`.
+        # =====================================================================
+        "args": None,
         # 3. linear (Sequential Boundaries)
         # Structural boundaries. EXCLUDES: Access modifiers (none in CSS) and !important (freeze_hits).
         # BUG FIX: all 8 at-rule alternatives are `@`-prefixed -- same
@@ -74,8 +115,19 @@ DEFINITION: dict[str, Any] = {
         ),
         # 4. func_start (Executable Logic Anchors)
         # ONLY executable logic blocks (Selectors). EXCLUDES classes/IDs to avoid False Positives.
+        # #2866 contract: `@keyframes` is the one at-rule that declares a NAMED
+        # unit the language reaches by that name (`animation-name: slide` /
+        # `animation: slide 2s`), so its custom-ident is captured as the unit
+        # name and the block joins the orphan census -- tailwind's theme.css
+        # carries 4 keyframes nothing in the file animates, and that is a true
+        # unreferenced-by-name reading. The other at-rules stay group-1 keyword
+        # buckets, excluded by derivation (#2728). Same two-group shape as
+        # yaml's #2767 rule: group 1 a bare literal alternation for
+        # `_closed_literal_capture`, group 2 the open name capture; a
+        # `@keyframes` with no ident (invalid CSS) simply stops matching.
         "func_start": re.compile(
-            r"^[ \t]*(@(?:media|supports|container|layer|keyframes|-webkit-keyframes)\b)(?=[^{]*\{)",
+            r"^[ \t]*(?:(@(?:media|supports|container|layer)\b)"
+            r"|@(?:-webkit-)?keyframes[ \t]+([A-Za-z_-][\w-]*))(?=[^{]*\{)",
             re.M | re.I,
         ),
         # 5. class_start (Object / Entity Declarations)
@@ -96,17 +148,62 @@ DEFINITION: dict[str, Any] = {
         "safety_bypasses": re.compile(r"^[ \t]*\*|^[ \t]*#[\w-]+\s*(?:[:.[>+~][^{;]*)?\{", re.M | re.I),
         # 8. danger (High-Risk Execution / System Calls)
         # Extreme tech debt and legacy engine thrashing.
-        "high_risk_execution": re.compile(r"\b(?:expression|behavior|-ms-filter)\b"),
+        # #2878 contract C2: the IE forms -- `expression(` as a value, `behavior:`/`-ms-filter:` as
+        # the property; `scroll-behavior:`/`overscroll-behavior:` are ordinary properties.
+        "high_risk_execution": re.compile(r"\bexpression\s*\(|(?<![-\w])(?:behavior|-ms-filter)\s*:"),
         # 9. io (I/O & Network Boundaries)
         # =====================================================================
-        # THE FIX: Prevent False I/O Latency Flags.
-        # HISTORICAL CONTEXT FOR FUTURE LLMS: CSS is a declarative language.
-        # Using `url()` or `@import` fetches a visual asset during browser paint;
-        # it does NOT block a computational thread to read from a database or
-        # write to a file system. If given a regex, the engine will hallucinate
-        # severe I/O bottlenecks on standard stylesheets. Must remain `None`.
+        # A DECLARATION WHOSE VALUE FETCHES AN EXTERNAL RESOURCE (#2752).
+        # HISTORICAL CONTEXT FOR FUTURE LLMS: this was `None` under the
+        # rationale that a `url()`/`@import` fetch "happens during browser
+        # paint and does not block a computational thread". That is true and
+        # is NOT the deciding factor: html's own `io` rule counts `src=` /
+        # `href=` / `<img>` / `<iframe>`, which are the same non-blocking,
+        # paint-time loads, and counts them as I/O. A resource boundary is
+        # what `io` measures; blocking-ness is not.
+        #
+        # Three exclusions carry the rest of the old caution, and each is
+        # load-bearing (all three were measured against a quote-aware
+        # oracle over 136 real stylesheets, 185 fetches, zero disagreement):
+        #
+        #  1. `@import` is NOT counted. The rule is anchored on a
+        #     declaration's `:` (with `(?<=[-\w])` for the property name it
+        #     terminates), and an at-rule prelude has no colon, so
+        #     `@import url("a.css")` keeps exactly the two hits it has today
+        #     (`import` + `_dependency_capture`) instead of a third. `@` is
+        #     excluded from the value span so no earlier declaration's colon
+        #     can bridge into an at-rule either. (keyword-rosetta ledger
+        #     `css-import-url-io-triple-overlap`.)
+        #  2. `url(data:...)` is NOT counted. A data URI is an inline
+        #     payload, not a boundary -- nothing is fetched. This is the
+        #     majority construct in the wild: 59 of language-crucible's 117
+        #     `url(` tokens are data URIs, and only 18 are real fetches.
+        #  3. `url(#fragment)` is NOT counted -- `clip-path: url(#mask)`
+        #     references an element in the same document.
+        #
+        # `%` and `<>` are excluded from the value span for exclusion 2's
+        # sake: a `data:image/svg+xml` payload is a whole SVG document
+        # inlined as text, and it contains its own `url(#...)` references
+        # plus `xmlns='http:`-shaped colons. Without that guard the scan
+        # walks INTO the payload and hallucinates a fetch per embedded icon
+        # (measured: 70 hits instead of 14 on the crucible corpus). Both the
+        # percent-escaped (`%3Csvg`) and raw (`<svg`) inlining styles are
+        # covered. Cost: a value that writes a percentage before its url
+        # (`background: 50% 50% url(x.png)`) is missed -- zero occurrences
+        # in the 136-file sample.
+        #
+        # Rule 14: the property name is a fixed-width LOOKBEHIND, not a
+        # match. Spelling it `[-a-zA-Z_][-\w]*[ \t]*:` puts an unbounded
+        # `[-\w]*` adjacent to a required `:`, and every identifier char in
+        # the file becomes a start position that backtracks the whole run --
+        # measured quadratic (1.3s / 5.5s / 13.5s / 54s over 10k-80k chars
+        # of `background:aaaa...`). The lookbehind form is linear on the
+        # same inputs (0.5 / 0.8 / 1.7 / 3.2 ms).
         # =====================================================================
-        "io": None,
+        "io": re.compile(
+            r"(?<=[-\w])[ \t]*:[^;{}@%<>]{0,200}?\burl\s*\((?!\s*['\"]?\s*(?:data:|#))",
+            re.I,
+        ),
         # 10. api (Public Surface Area)
         # Design Tokens and global properties exposed for script/component consumption.
         "api": re.compile(r":root\b|@property\b|--[a-zA-Z0-9_-]+\s*:|::part\s*\([^)]*\)", re.I),
@@ -128,8 +225,9 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 13. doc (Structured Documentation)
+        # #2882 contract C4: doc counts the block, not the author tag -- `/* @author` is ownership's alone.
         "doc": re.compile(
-            r"/\*\*\s*|/\*\s*@(?:param|return|author|example|prop|define|theme)",
+            r"/\*\*\s*|/\*\s*@(?:param|return|example|prop|define|theme)",
             re.I,
         ),
         # 14. test (Testing & Assertions)
@@ -174,9 +272,10 @@ DEFINITION: dict[str, Any] = {
             re.I | re.M,
         ),
         # 25. ownership (Authorship Metadata)
+        # #2882 contract: C2 `Copyright` out; @author is ownership's (doc released it, C4); the `*/` is stripped from the value (C3)
         "ownership": re.compile(
-            r"/\*\s*(?:@author|Author:|Created by|Maintainer|Copyright):?\s+([^*]*)\*/",
-            re.I | re.S,
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
@@ -248,7 +347,10 @@ DEFINITION: dict[str, Any] = {
         "cleanup": None,
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # Scoping and part boundaries.
-        "encapsulation": re.compile(r"@scope\b|::part|::slotted", re.I),
+        # #2766: contract-level absence. @scope/::part/::slotted are DOM/style
+        # isolation boundaries, not markers excluding a NAME from a public surface;
+        # css has no name-visibility construct.
+        "encapsulation": None,
         # 48. listeners (Event Listeners / Observers)
         # Subscribing to external timelines.
         "listeners": re.compile(r"animation-timeline|@scroll-timeline", re.I),

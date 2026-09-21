@@ -92,9 +92,41 @@ ALLOWLIST = {
     # if the model dictionary forgets them" per signal_processor.py's own
     # comment -- absence is the designed case, not a bug.
     "cluster_names": "optional ML archetype-model field, has an explicit fallback (signal_processor.py)",
+    # file/repo archetype brain keys (archetype_classifier.py): read in Python but
+    # WRITTEN in the JSON brains (standards/archetype_brains/*.json) the static walker
+    # doesn't parse -- so every key reads as write-less. Not a mismatch.
+    "stoich_archetypes": "file-archetype-brain key (JSON-written, archetype_classifier.py)",
+    "stoich_weight": "file-archetype-brain key (JSON-written, archetype_classifier.py)",
+    "aux_features": "file-archetype-brain key (JSON-written, archetype_classifier.py)",
+    "aux_quantiles": "file/repo-archetype-brain key (JSON-written, archetype_classifier.py)",
+    "noncode_languages": "file-archetype-brain key (JSON-written, archetype_classifier.py)",
+    "min_coding_loc": "file-archetype-brain key (JSON-written, archetype_classifier.py)",
+    "noncode_bucket": "file-archetype-brain key (JSON-written, archetype_classifier.py)",
+    "comp_archetypes": "repo-archetype-brain key (JSON-written, archetype_classifier.py)",
+    "comp_weight": "repo-archetype-brain key (JSON-written, archetype_classifier.py)",
+    "min_files": "repo-archetype-brain key (JSON-written, archetype_classifier.py)",
+    "micro_bucket": "repo-archetype-brain key (JSON-written, archetype_classifier.py)",
+    "log_file_count": "repo-archetype-brain aux-quantile key (JSON-written, archetype_classifier.py)",
+    "log_total_loc": "repo-archetype-brain aux-quantile key (JSON-written, archetype_classifier.py)",
+    "pagerank_gini": "repo-archetype-brain aux-quantile key (JSON-written, archetype_classifier.py)",
+    "z_score_params": "archetype-brain key: per-cluster distance stats (JSON-written, archetype_classifier.py)",
+    "mean": "archetype-brain z_score_params sub-key (JSON-written, archetype_classifier.py._fit_z)",
+    "std": "archetype-brain z_score_params sub-key (JSON-written, archetype_classifier.py._fit_z)",
+    # archetype-brain provenance block (#3124/#3125): baked into the JSON brains by
+    # gitgalaxy-population-analyses/freeze_archetype_brains.py + backfill_provenance.py
+    # (a DIFFERENT repo the walker can't see), read here by archetype_parity.check_brain
+    # and llm_recorder's forensic-traceability section. Write-less by construction.
+    "provenance": "archetype-brain provenance block (cross-repo JSON-written, archetype_parity.py)",
+    "feature_contract_sha": "archetype-brain provenance key (cross-repo JSON-written, archetype_parity.py)",
+    "corpus_sha256": "archetype-brain provenance key (cross-repo JSON-written, llm_recorder.py)",
+    "engine_commit": "archetype-brain provenance key (cross-repo JSON-written, llm_recorder.py)",
+    "trained_at": "archetype-brain provenance key (cross-repo JSON-written, llm_recorder.py)",
+    "trainer_commit": "archetype-brain provenance key (cross-repo JSON-written, llm_recorder.py)",
     # --- External YAML/env config ---
     "galaxyscope": "top-level section name in a user's .galaxyscope.yml project config file",
     "GITGALAXY_LICENSE_KEY": "environment variable (os.environ.get), not a repo-produced dict",
+    "GITGALAXY_DISABLE_GIT_HISTORY": "environment variable (os.environ.get), not a repo-produced dict (#2976)",
+    "GALAXYSCOPE_MAX_WORKERS": "environment variable (os.environ.get), not a repo-produced dict (#2988)",
     "vulnerability_density_min": "optional risk_tuning YAML key (signal_processor.py risk-equation-style tuning)",
     "asymptotic_dampener": "optional risk_tuning YAML key (signal_processor.py)",
     "quarantine": "STATIC_ARCHETYPES app-config constant, read with a graceful string fallback",
@@ -139,6 +171,28 @@ ALLOWLIST = {
     # dict this walker can trace a producer for.
     "comment": "regex named-capture-group (?P<comment>...), not a dict key (detector.py, #1184)",
     "heredoc": "regex named-capture-group (?P<heredoc>...) in _apply_literal_shield, not a dict key (detector.py, #2405)",
+    # --- Delta rehydrate: sqlite Row COLUMN reads (#3220) ---
+    # state_rehydrator.load_state reconstructs functions/classes from function_data /
+    # class_data via literal sqlite3.Row subscripts (r["func_name"], r["func_archetype"],
+    # r["parent_class_id"], r["complexity"], c["_cid"] AS-alias). These are DB columns the
+    # recorder wrote, not dicts this repo produces then drops -- the walker can't trace a
+    # producer for a Row column, same class as the manifest/model-file keys above.
+    "func_name": "function_data column read in state_rehydrator (delta rehydrate, #3220)",
+    "func_archetype": "function_data column read in state_rehydrator (delta rehydrate, #3220)",
+    "parent_class_id": "function_data column read in state_rehydrator (delta rehydrate, #3220)",
+    "complexity": "function_data column read (aliased to func['branch']) in state_rehydrator (#3220)",
+    "_cid": "class_data 'cd.id AS _cid' alias read in state_rehydrator (delta rehydrate, #3220)",
+    "_fp": "'fd.file_path AS _fp' join alias read in state_rehydrator (delta rehydrate, #3220)",
+    "class_name": "class_data column read in state_rehydrator (delta rehydrate, #3220)",
+    "_group": "'td.group_name AS _group' alias read in state_rehydrator (transaction rehydrate, #3211-followup)",
+    # --- CSD attribute dict, written by a paren-balanced tokenizer (#3211-followup) ---
+    # mainframe_boundary._csd_attributes builds attrs[key] = value where `key` is
+    # the regex-captured KEYWORD, so PROGRAM/GROUP/PROFILE/TRANSID ARE written --
+    # just never as a literal the static walker can trace to a producer.
+    "PROGRAM": "CSD attribute, written via _csd_attributes' dynamic setdefault (mainframe_boundary.py, #3211-followup)",
+    "GROUP": "CSD attribute, written via _csd_attributes' dynamic setdefault (mainframe_boundary.py, #3211-followup)",
+    "PROFILE": "CSD attribute, written via _csd_attributes' dynamic setdefault (mainframe_boundary.py, #3211-followup)",
+    "TRANSID": "CSD attribute, written via _csd_attributes' dynamic setdefault (mainframe_boundary.py, #3211-followup)",
 }
 
 

@@ -19,13 +19,16 @@ See CLAUDE.md's "Using GitGalaxy's self-scan output for orientation" section for
 * **Standalone Regex Re-test:** Isolate the target regex (e.g., `func_start`) against the failing corpus file manually to ensure false positives and negatives are resolved without affecting real matches.
 * **See what the engine actually extracted before re-deriving it from source:** `galaxyscope <path> --db-only --debug --output <scratch-dir>` and grep the log for `[WORKER-TRACE] extracted functions for` -- one line per file with the exact satellite/function names produced. Much cheaper than tracing `_slice_by_keywords`/`_slice_by_terminator`/etc. cold when the question is "what did the engine actually name/count here." See CLAUDE.md's "Debugging what detector.py actually extracted from a specific file" for the full recipe (DB cross-reference, etc.) -- not repeated here.
 * **Extraction Gauntlet & Strict Tests:** Run `pytest tests/extraction/languages/test_<lang>.py` and `test_<lang>_strict.py` for the language you modified.
+* **Parametrized ReDoS payloads need short `ids=`.** pytest exports every node id as the `PYTEST_CURRENT_TEST` environment variable, and Windows caps one variable at 32,767 characters -- a 50,000-character payload inside a parametrize id passes on Linux/macOS and ERRORs at setup on every Windows leg of the matrix (`ValueError: the environment variable is longer than 32767 characters`, #2903). Build the payload inside the test or pass `ids=`; `pytest --collect-only -q` shows the ids.
 
 ## 2. Static Analysis & Linting (~15s)
+* **Order matters:** `ruff format` the whole changed set (`git diff --name-only`, never a bare `ruff format .`) FIRST, then `audit_check.py --regenerate`. Formatting shifts line numbers, so a baseline regenerated before it lands in CI as a "new finding" that is really the same finding two lines down.
 * **Ruff Formatting & Linting:** `python tests/ruff_audit.py --ci`
 * **Mypy Type Checking:** `python tests/mypy_audit.py --ci`
 
 ## 3. Global Golden Master Verification (~2-5 min, first run of a fresh venv adds ~30-60s)
 * **Run the Crucible Check (Mandatory):** Execute `python tests/tools/crucible_check.py` against the full ~80-repo corpus.
+* **Before blessing anything, prove the change reaches a REAL SCAN.** A green unit test is not that proof: tests and both probes (`rule_probe.py`, `census_probe.py`) build the extractor straight from `LANGUAGE_DEFINITIONS`, while a real scan goes through `language_lens.py`, which compiles every *string* value inside a registry's `rules` into a regex, and through `galaxyscope.py`'s config assembly. #2806 declared a string helper in `rules`, passed every test, and blessed a golden master in which nothing had changed. One file, one scan, one query -- `galaxyscope <dir> --output /tmp/x --db-only` then `sqlite3 /tmp/x/*_master.db "select file_path, <column> from file_data;"` -- costs ~20 seconds and is the only thing that catches this class.
 * **Re-Bless Golden Masters:** If `crucible_check.py` shows expected, accurately traced diffs resulting from your fix, bless the new state:
   `python tests/tools/crucible_check.py --update --yes`
   * Always go through `crucible_check.py --update`, never `python tests/tools/update_golden_master.py`

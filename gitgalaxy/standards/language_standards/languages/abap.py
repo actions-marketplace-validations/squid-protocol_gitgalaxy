@@ -37,7 +37,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch: decisions that split flow. Includes modern COND/SWITCH expressions.
         "branch": re.compile(
-            r"^[ \t]*(IF|ELSE|ELSEIF|CASE|WHEN|WHILE|DO|LOOP\s+AT|TRY|CATCH|CLEANUP|CHECK|EXIT|CONTINUE|RETURN|COND|SWITCH)\b",
+            r"^[ \t]*(IF|ELSE|ELSEIF|CASE|WHEN|WHILE|DO|LOOP\s+AT|CHECK|EXIT|CONTINUE|COND|SWITCH)\b",
             re.I | re.M,
         ),
         # 2. args: Parameters / Coupling. Captures explicit parameter binding keywords.
@@ -61,9 +61,19 @@ DEFINITION: dict[str, Any] = {
             r"(?:VALUE\s*\([^)]*\)|!?[a-zA-Z_][a-zA-Z0-9_-]*)",
             re.I,
         ),
+        # #2824 contract corollary 1 (docs/args_rule_contract.md): a call is not a
+        # declaration. ABAP passes actuals with the SAME six keywords the
+        # declarations use (`CALL FUNCTION ... EXPORTING/EXCEPTIONS`,
+        # `PERFORM ... CHANGING`, `RAISE EXCEPTION ... EXPORTING`), so the raw
+        # rule cannot tell a parameter surface from a consumer of one. The filter
+        # keeps only clauses whose owning statement (ABAP statements end at an
+        # unquoted `.`) opens with a declaration keyword --
+        # METHODS/CLASS-METHODS/FORM/FUNCTION/MODULE. See detector.py's
+        # `_abap_declaration_statement_spans`.
+        "_scope_filters": {"args": "abap_declaration_statement"},
         # 3. linear: Sequential I/O & Network Boundaries. Structural boundaries. EXCLUDES access modifiers and constants.
         "structural_boundaries": re.compile(
-            r"^[ \t]*(DATA|TYPES|FIELD-SYMBOLS|CLASS|INTERFACE|METHOD|FORM|FUNCTION|MODULE|REPORT|PROGRAM|IMPORT|EXPORT)(?![(-])\b",
+            r"^[ \t]*(DATA|TYPES|FIELD-SYMBOLS|CLASS|INTERFACE|METHOD|FORM|FUNCTION|MODULE|REPORT|PROGRAM|IMPORT|EXPORT|RETURN)(?![(-])\b",
             re.I | re.M,
         ),
         # 4. func_start: Executable Logic Anchors. Anchors executable logic. EXCLUDES structural headers.
@@ -96,13 +106,15 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 8. danger: High-Risk Execution. Raw SQL/Kernel bypasses and mass deletion.
+        # #2878 contract C4: DELETE FROM is a row/table deletion (cleanup's family, #2843);
+        # TRUNCATE empties the whole store and stays.
         "high_risk_execution": re.compile(
-            r"\b(SYSTEM-CALL|EXEC\s+SQL|DELETE\s+FROM|TRUNCATE|GENERATE\s+SUBROUTINE\s+POOL)\b",
+            r"\b(SYSTEM-CALL|EXEC\s+SQL|TRUNCATE|GENERATE\s+SUBROUTINE\s+POOL)\b",
             re.I,
         ),
         # 9. io: I/O & Network Boundaries. Database interaction and File datasets.
         "io": re.compile(
-            r"^[ \t]*(SELECT|INSERT\s+(?:INTO\b)?|UPDATE\b|MODIFY\b|OPEN\s+DATASET|TRANSFER|READ\s+DATASET|CLOSE\s+DATASET|CL_HTTP_CLIENT|CL_WEB_HTTP_CLIENT)\b",
+            r"^[ \t]*(SELECT|INSERT\s+(?:INTO\b)?|UPDATE\b|MODIFY\b|OPEN\s+DATASET|TRANSFER|READ\s+DATASET|CL_HTTP_CLIENT|CL_WEB_HTTP_CLIENT)\b",
             re.I | re.M,
         ),
         # 10. api: Public Surface Area. Exposed RFCs, OData publishing, and Public sections.
@@ -110,13 +122,33 @@ DEFINITION: dict[str, Any] = {
         # leading \b could only fire when a word char immediately
         # preceded the `@`, never true for how this annotation is
         # actually written. Never matched at all.
+        # BUG FIX #2730 (api contract): every alternative above needs a
+        # CLASS, RFC metadata or a CDS definition, so a classic ABAP report
+        # -- whose public surface is its `FORM` subroutines (callable from
+        # any program via `PERFORM ... IN PROGRAM`) and its function-module
+        # `FUNCTION` blocks -- measured 0. Both are public by default, which
+        # puts ABAP in the same family as python/lua/scala: the declaration
+        # itself IS the visibility marker. Anchored to the start of a line so
+        # `CALL FUNCTION 'RFC_PING'` (a call site, not a declaration) cannot
+        # match. Needs re.M for that anchor (Rule 13).
         "api": re.compile(
-            r"\b(?:REMOTE\s+FUNCTION|DEFINE\s+VIEW|DEFINE\s+SERVICE|EXPOSED|PUBLIC\s+SECTION)\b|@OData\.publish",
-            re.I,
+            r"\b(?:REMOTE\s+FUNCTION|DEFINE\s+VIEW|DEFINE\s+SERVICE|EXPOSED|PUBLIC\s+SECTION)\b|@OData\.publish|"
+            r"^[ \t]*(?:FORM|FUNCTION)[ \t]+[A-Za-z_]",
+            re.M | re.I,
         ),
         # 11. flux: State Mutation. State mutation (The core of ABAP data manipulation).
         "state_mutation": re.compile(
-            r"^[ \t]*(MOVE|MOVE-CORRESPONDING|APPEND|MODIFY\s+TABLE|DELETE\s+TABLE)\b|^[ \t]*INSERT\s+[^\n;]+\s+INTO\s+TABLE",
+            # #2765 contract: the statement that writes -- the MOVE/APPEND/MODIFY verbs and
+            # the `=` assignment statement (modern ABAP's primary write form). `DATA(x) =`
+            # and `FIELD-SYMBOL(<f>) =` are inline declarations (corollary 1) and the `(`
+            # breaks the match; `IF a = b` is a comparison whose first token is the
+            # keyword, so its `=` is never at statement start. A named parameter inside a
+            # multi-line call (`iv_path = lv_path` on its own line, or `ii_log = ii_log ).`
+            # closing one) is not a statement: the assignment must end its line with the
+            # statement period, and a line that closes a `)` it never opened is a call.
+            r"^[ \t]*(MOVE|MOVE-CORRESPONDING|APPEND|MODIFY\s+TABLE|DELETE\s+TABLE)\b|^[ \t]*INSERT\s+[^\n;]+\s+INTO\s+TABLE"
+            r"|^[ \t]*[a-z_<][\w>\-]*(?:(?:->|=>)[a-z_]\w*)*(?:\[[^\]\n]{0,80}\])?[ \t]*(?:\+|-|\*|/|&&|\*\*)?=[ \t]"
+            r"(?=[^\n]{0,300}\.[ \t]*$)(?![^\n(]{0,300}\)[ \t]*\.?[ \t]*$)",
             re.I | re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails) Commented out structural logic (supports * and ").
@@ -125,13 +157,16 @@ DEFINITION: dict[str, Any] = {
             re.I | re.M,
         ),
         # 13. doc: Structured Documentation. ABAP Doc annotations and metadata headers.
+        # BUG FIX (#2650): The doc rule matched AUTHOR: which is owned by the ownership
+        # rule, causing double counting. AUTHOR removed from doc's bare alternative;
+        # DESCRIPTION/PURPOSE/REMARKS remain as they do not collide.
         # BUG FIX: the trailing `\b` sat right after a literal `:` (Rule 9,
         # mirror case). Real headers are written as "AUTHOR: Jane Doe" --
         # the space after `:` means both sides of that position are
         # non-word, so `\b` never fired and the realistic form never
         # matched. `:` is already self-delimiting; `\b` dropped.
         "doc": re.compile(
-            r'^"!\s*@(?:parameter|raising|return)|\b(?:AUTHOR|DESCRIPTION|PURPOSE|REMARKS):',
+            r'^"!\s*@(?:parameter|raising|return)|\b(?:DESCRIPTION|PURPOSE|REMARKS):',
             re.I | re.M,
         ),
         # 14. test: Testing & Assertions. ABAP Unit markers and test-injection.
@@ -184,11 +219,16 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 24. import: Dependency Inclusions. Includes and type pools.
-        "import": re.compile(r"\b(INCLUDE|TYPE-POOLS)\b", re.I),
+        # #2875 contract C5: statement position (the word inside a template string is
+        # prose); C3: `INCLUDE TYPE|STRUCTURE` binds a type's components, not a unit.
+        "import": re.compile(
+            r"^[ \t]*(?:INCLUDE(?![ \t]+(?:TYPE|STRUCTURE)\b)|TYPE-POOLS)[ \t]+[A-Za-z0-9_/<]", re.I | re.M
+        ),
         "_dependency_capture": re.compile(r"^[ \t]*(?:INCLUDE|TYPE-POOLS)[ \t\n]+([A-Za-z0-9_/]+)", re.I | re.M),
         # 25. ownership: Authorship indicators.
+        # #2882 contract: C1 the tag anchored to the `*`/`"` comment line; a person's name (`Tim Berners-Lee`) is not a rule
         "ownership": re.compile(
-            r"(?:AUTHOR|CREATED\s+BY|MAINTAINER|Tim Berners-Lee):\s+([^\n]+)",
+            r"^[ \t]*(?:\*+|\x22+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -247,9 +287,13 @@ DEFINITION: dict[str, Any] = {
         # with more word characters (ENQUEUE_FOO).
         "sync_locks": re.compile(r"\b(?:ENQUEUE_|DEQUEUE_)", re.I),
         # 45. immutability_locks (Immutability Constraints) Immutability (constants).
-        "immutability_locks": re.compile(r"\b(CONSTANTS|FINAL|READ-ONLY)\b", re.I),
+        "immutability_locks": re.compile(
+            r"\b(CONSTANTS|READ-ONLY)\b", re.I
+        ),  # #2772 C2: FINAL locks a class against subclassing, not data against mutation
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"^[ \t]*(FREE|CLEAR|CLOSE\s+DATASET)\b", re.I | re.M),
+        "cleanup": re.compile(
+            r"^[ \t]*(FREE|CLEAR|CLOSE\s+DATASET)\b(?![ \t]+FOR\b)", re.I | re.M
+        ),  # #2888 C1: `clear FOR zif~clear` on an ALIASES continuation line declares an alias
         # 47. encapsulation (Encapsulation / Access Modifiers)
         "encapsulation": re.compile(r"\b(PRIVATE\s+SECTION|PROTECTED\s+SECTION)\b", re.I),
         # 48. listeners (Event Listeners / Observers)

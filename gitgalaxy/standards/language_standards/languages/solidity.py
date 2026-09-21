@@ -40,7 +40,13 @@ DEFINITION: dict[str, Any] = {
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch: Decisions that split flow. Includes Solidity 0.6+ try/catch.
-        "branch": re.compile(r"\b(if|else|for|while|do|break|continue|return|try|catch)\b|\?"),
+        # #2545: `return` removed -- was phantom-counting every early-return function as a
+        # branch with no real decision point. No checked sibling language counts bare
+        # `return` as branch. Moved to `structural_boundaries` below instead, matching the
+        # java/c/rust/go/csharp/kotlin/apex/powershell/zig convention -- not just deleted,
+        # since solidity had no other rule tracking it. Corpus impact: solidity branch 19
+        # (planted 3, +280%) -> exact.
+        "branch": re.compile(r"\b(if|else|for|while|do)\b|\?"),
         # 2. args: Parameters / Coupling. Captures parameters for functions, errors, events, and modifiers.
         # Bounded `{0,50}` to prevent ReDoS on massive tuple returns or complex signatures.
         # #1209: parameter-list span wrapped in its own capture group in
@@ -55,8 +61,11 @@ DEFINITION: dict[str, Any] = {
             r"\b(?:function|modifier|error|event)\s+([a-zA-Z_]\w*\s*)?(\([^)]{0,500}\))|\b(?:constructor|fallback|receive)\s*(\([^)]{0,500}\))"
         ),
         # 3. linear: Sequential I/O & Network Boundaries. Structural boundaries defining scope and data definitions.
+        # #2545: `return` added here (moved out of `branch` above) -- matches the
+        # java/c/rust/go/csharp/kotlin/apex/powershell/zig convention of tracking `return`
+        # as a structural boundary, not a branch.
         "structural_boundaries": re.compile(
-            r"\b(pragma|import|contract|interface|library|struct|enum|type|mapping|address|uint\d*|int\d*|bytes\d*|bool|string)\b"
+            r"\b(pragma|import|contract|interface|library|struct|enum|type|mapping|address|uint\d*|int\d*|bytes\d*|bool|string|return|break|continue|try|catch)\b"
         ),
         # 4. func_start: Executable Logic Anchors. Anchors executable logic (Functions, Modifiers, Custom Errors, Events).
         # LOOKAHEAD MANDATE APPLIED: Stops exactly at the identifier name before the parenthesis.
@@ -75,17 +84,38 @@ DEFINITION: dict[str, Any] = {
         # 7. safety_neg: Safety Bypasses. Bypassing overflow checks (0.8+) or dangerous delegation.
         "safety_bypasses": re.compile(r"\b(unchecked|assembly|delegatecall)\b"),
         # 8. danger: High-Risk Execution. Contract destruction and absolute value termination.
-        "high_risk_execution": re.compile(r"\b(selfdestruct|suicide)\b"),
+        # #2878 contract C1c: delegatecall runs foreign code in this contract's storage.
+        "high_risk_execution": re.compile(r"\b(selfdestruct|suicide|delegatecall)\b"),
         # 9. io: I/O & Network Boundaries. EVM blockchains are closed systems. (Cross-contract calls are mapped as API/Generics).
         "io": None,
         # 10. api: Public Surface Area. Exposed boundaries to external wallets or contracts.
         "api": re.compile(r"\b(external|public)\b"),
         # 11. flux: State Mutation. State mutation. Captures array mutators, payable states, and explicit assignment.
-        "state_mutation": re.compile(r"\b(payable|push|pop)\b|(?<![=<>!])=(?![=])|\+\+|--|\+=|-=|\*=|/="),
+        "state_mutation": re.compile(
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `payable(x)` is a cast (corollary 3); `.push(`/`.pop(` write a storage array.
+            r"(?:^|[;{}(),])[ \t]*\**[A-Za-z_]\w*(?:(?:\.|->)[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*[ \t]*(?:[-+*/%&|^]|<<|>>)?=(?![=])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_(*]"
+            r"|\.(?:push|pop)\s*\(",
+            re.M,
+        ),
         # 12. dead_code (Commented Logic / Deprecated Trails) Commented out execution flow or structural definitions.
         "dead_code": re.compile(r"//[ \t]*(?:function|contract|if|require|uint|address)\b"),
         # 13. doc: Structured Documentation. NatSpec (Ethereum Natural Specification Format).
-        "doc": re.compile(r"///|/\*\*|@(?:param|return|dev|notice|custom|title|author)"),
+        # BUG FIX #2672: `/**`, `///` and the NatSpec tags (`@param`,
+        # `@notice`, ...) were independent alternatives, so one NatSpec
+        # comment counted doc=2. Block form first (bounded 0,15000 chars
+        # non-greedy span, the #2658 shape), then the line-marker form so
+        # `/// @param x` is one hit per line, not two; bare tags stay last
+        # so a tag outside any doc comment still counts.
+        # #2882 contract C4: doc counts the block, not the author tag -- the bare `@author` tag is ownership's alone.
+        "doc": re.compile(r"/\*\*[\s\S]{0,15000}?\*/|///[^\n]*|@(?:param|return|dev|notice|custom|title)"),
         # 14. test: Testing & Assertions. Foundry/Forge testing hooks and assertions.
         "test": re.compile(
             r"\b(?:setUp|test[A-Za-z0-9_]*|assertEq|assertTrue|assertFalse|assertGt|assertLt|vm\.expectRevert)\b"
@@ -137,7 +167,11 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership: Authorship indicators. Strictly targets SPDX license tags and authorship notes.
-        "ownership": re.compile(r"//[ \t]*SPDX-License-Identifier:|(?:@author|Created by):\s+(.*)", re.I),
+        # #2882 contract: C2 the SPDX license identifier is not who is responsible (the open cell, 4 vs 1) and its alternative had no group (C3); natspec @author and keyed lines
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- 🌌 PHASE 4: EXTENDED DIMENSIONS (Specialized Sub-Equations) ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -183,7 +217,9 @@ DEFINITION: dict[str, Any] = {
         # 44. sync_locks (Resource Management & Stability) Native Reentrancy guards.
         "sync_locks": re.compile(r"\b(nonReentrant)\b"),
         # 45. immutability_locks (Immutability Constraints) Gas-saving immutability constraints.
-        "immutability_locks": re.compile(r"\b(constant|immutable|view|pure)\b"),
+        "immutability_locks": re.compile(
+            r"\b(constant|immutable)\b"
+        ),  # #2772 C2: view/pure are purity annotations on functions, not locks on data
         # 46. cleanup (Resource Cleanup / Teardown) Deleting state variables to claim gas refunds.
         "cleanup": re.compile(r"\b(delete)\b"),
         # 47. encapsulation Access limitation to prevent external calls.
@@ -193,6 +229,11 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": None,
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Solidity Specifics) ---
+        # auth_middleware (#3004): OpenZeppelin AccessControl -- the role
+        # modifier, query, grant and revoke calls (solidity's GRANT/REVOKE
+        # analogue). `onlyOwner` stays safety's (owned there before this key)
+        # and `require(msg.sender == ...)` is safety's require.
+        "auth_middleware": re.compile(r"\b(?:onlyRole|hasRole|grantRole|revokeRole|renounceRole|_checkRole)[ \t]*\("),
         "serialization_parsing": re.compile(r"\b(abi\.encode|abi\.encodePacked|abi\.decode)\b"),
         "regex_execution": re.compile(
             r"\b(keccak256\s*\(\s*abi\.encodePacked)\b"
@@ -213,7 +254,13 @@ DEFINITION: dict[str, Any] = {
         #   failed for every event name longer than one letter, which
         #   is effectively all of them.
         "ipc_rpc_bridges": re.compile(
-            r"\b(?:delegatecall|staticcall|selfdestruct)\b|\.call\{value:|\bemit\s+[A-Z]\w*\b"
+            # #2898: `emit Event(` removed -- events' token (its rule already counts
+            # emit); what stays are genuine cross-contract call boundaries.
+            r"\b(?:delegatecall|staticcall|selfdestruct)\b|\.call\{value:"
         ),
+        # system_config_mutation (#3084): contract-level absence. on-chain
+        # execution; there is no host to configure -- contract storage writes
+        # are state_mutation's.
+        "system_config_mutation": None,
     },
 }

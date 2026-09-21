@@ -29,16 +29,21 @@ AGC_RULES = LANGUAGE_DEFINITIONS["agc_assembly"]["rules"]
 
 _AGC_SIMPLE_CASES = [
     # (signature, positive snippet, text expected to NOT match / None to skip)
-    # --- DEEP CASES: branch ---
-    ("branch", "\tTCF\tFOO", "\tCA\tBAR"),
-    ("branch", "  tcf  LBL", "TC_ALARM"),
-    ("branch", "BZF\tTARGET", "BATCH_TCF"),
-    ("branch", "\tRESUME\t", "MYCALL"),
-    ("branch", "  CALL  ", "RETURN_VAL"),
-    ("branch", "GOTO\tLBL", "GOTOO"),
-    ("branch", "\tBZMF\tFOO", "BZMF_VAR"),
+    # --- DEEP CASES: branch --- CONDITIONAL transfers only, #2764
+    ("branch", "\tBZF\tTARGET", "BATCH_BZF"),
+    ("branch", "  bzmf  LBL", "BZMF_VAR"),
     ("branch", "BMI\tBAR", "BMIS"),
-
+    ("branch", "\tCCS\tTEMP", "CCSS"),
+    ("branch", "\tBPL\tFOO", "BPLUS"),
+    ("branch", "\tOVSK\t", "OVSKIP"),
+    # #2764: unconditional transfers and returns are structure, not decisions.
+    ("branch", "\tBZF\tTARGET", "\tTCF\tFOO"),
+    ("branch", "\tBZF\tTARGET", "\tTC\tFOO"),
+    ("branch", "\tBZF\tTARGET", "\tTCR\tFOO"),
+    ("branch", "\tBZF\tTARGET", "  CALL  "),
+    ("branch", "\tBZF\tTARGET", "GOTO\tLBL"),
+    ("branch", "\tBZF\tTARGET", "\tRESUME\t"),
+    ("branch", "\tBZF\tTARGET", "\tRETURN\t"),
     # --- DEEP CASES: args ---
     ("args", "\tCA\tA", "\tCA\tBAR"),
     ("args", "\tEBANK= 4", "XEBANK="),
@@ -50,18 +55,26 @@ _AGC_SIMPLE_CASES = [
     ("args", "INCR Z", "AD_Z"),
     ("args", "\tCCS\tA", "CCS_A"),
     ("args", "DXCH\tZ", "DXCH_ZZ"),
-
     # --- DEEP CASES: structural_boundaries ---
-    ("structural_boundaries", "\tCA\tBAR", "\tTCF\tFOO"),
+    # `\tTCF\tFOO` stopped being a usable negative in #2764, which relocated
+    # the unconditional-transfer family into this rule; a real conditional
+    # (`\tBZF\tFOO`) is the negative now, and CCS left this rule for `branch`.
+    ("structural_boundaries", "\tCA\tBAR", "\tBZF\tFOO"),
     ("structural_boundaries", "  2OCT  ", "2OCTAL"),
     ("structural_boundaries", "XCH", "DECIMAL"),
     ("structural_boundaries", "COUNT\t", "MY_CA"),
     ("structural_boundaries", "SETLOC", "SETLOC_VAR"),
     ("structural_boundaries", "ERASE", "ERASED"),
     ("structural_boundaries", "\tCAF\tFOO", "CAFFEIN"),
-    ("structural_boundaries", "CCS\tBAR", "CCSS"),
     ("structural_boundaries", "DXCH\tFOO", "DXCH_VAR"),
-
+    # the relocated family (#2764)
+    ("structural_boundaries", "\tTCF\tFOO", "\tBZF\tFOO"),
+    ("structural_boundaries", "\tTC\tFOO", "\tBZF\tFOO"),
+    ("structural_boundaries", "\tTCR\tFOO", "\tBZF\tFOO"),
+    ("structural_boundaries", "  CALL  ", "\tBZF\tFOO"),
+    ("structural_boundaries", "GOTO\tLBL", "\tBZF\tFOO"),
+    ("structural_boundaries", "\tRESUME\t", "\tBZF\tFOO"),
+    ("structural_boundaries", "\tRETURN\t", "\tBZF\tFOO"),
     # --- DEEP CASES: func_start ---
     ("func_start", "MYLABEL\tTC\tFOO", "\tTC\tFOO"),
     ("func_start", "MY_SUB1\tCAF\tFOO", "LBL\n\tTC"),
@@ -82,7 +95,7 @@ _AGC_SIMPLE_CASES = [
     ("test", "\tSELFCHECK", "\tCA\tBAR"),
     ("concurrency", "\tEXEC", "\tCA\tBAR"),
     ("ui_framework", "\tVERB\t37", "\tCA\tBAR"),
-    ("globals", "\tERASABLE MEMORY", "\tCA\tBAR"),
+    ("globals", "DSPCOUNT\tERASE", "\tCA\tBAR"),  # #2859: NAME ERASE is the real erasable declaration
     ("scientific", "\tVAD\tVEC1", "\tCA\tBAR"),
     ("reflection_metaprogramming", "\tINDEX\tA", "\tCA\tBAR"),
     ("import", "\tSETLOC\tFOO", "\tCA\tBAR"),
@@ -96,14 +109,15 @@ _AGC_SIMPLE_CASES = [
     ("memory_alloc", "\tERASABLE", "\tCA\tBAR"),
     ("telemetry", "\tDOWNLINK", "\tCA\tBAR"),
     ("debug_prints", "\tFLASH", "\tCA\tBAR"),
-    ("explicit_casts", "\tEXTEND", "\tCA\tBAR"),
+    # explicit_casts is None since #2898 -- EXTEND is an opcode-mode prefix, not a
+    # type conversion; tested in test_agc_assembly_explicit_casts_vs_pointers_no_false_collision.
     ("panics_and_aborts", "\tTC\tBAILOUT", "\tCA\tBAR"),
     ("thread_sleeps", "\tVARDELAY", "\tCA\tBAR"),
     ("bitwise_ops", "\tMASK\tBAR", "\tTC\tBAR"),
     ("sync_locks", "\tINHINT", "\tCA\tBAR"),
     ("immutability_locks", "\tFIXED MEMORY", "\tCA\tBAR"),
     ("cleanup", "\tENDOFJOB", "\tCA\tBAR"),
-    ("encapsulation", "MYLABEL\tCA\tBAR", "# just a comment line"),
+    # encapsulation is None since #2766 -- AGC has no visibility construct.
     ("listeners", "\tEVENT WAIT", "\tCA\tBAR"),
 ]
 
@@ -123,8 +137,11 @@ def test_agc_assembly_dependency_capture_extracts_bank_and_setloc():
     pattern = AGC_RULES["_dependency_capture"]
     m = pattern.search("\tSETLOC\tFOO")
     assert m and m.group(1) == "FOO"
-    m2 = pattern.search("\tBANK\t27")
-    assert m2 and m2.group(1) == "27"
+    # #2875 import contract C4: a numeric bank switch names no unit -- the capture,
+    # like the count, reads a symbolic operand only.
+    assert pattern.search("\tBANK\t27") is None
+    m2 = pattern.search("\tBANK\tLUNAR")
+    assert m2 and m2.group(1) == "LUNAR"
 
 
 def test_agc_assembly_func_start_cross_line_false_match_regression():
@@ -160,12 +177,11 @@ def test_agc_assembly_encapsulation_case_regression():
     lowercase-only requirement here was a clear outlier. Confirmed a
     realistic label ("MYLABEL") never matched at all under the old pattern.
     """
-    old_pattern = re.compile(r"^[ \t]*[a-z0-9_][a-zA-Z0-9_.]*", re.M)
-    realistic = "MYLABEL\tCA\tBAR"
-    assert not old_pattern.search(realistic), "sanity check: bug must reproduce against the old pattern"
-
-    encapsulation = AGC_RULES["encapsulation"]
-    assert encapsulation.search(realistic), "uppercase AGC label still didn't match"
+    # #2766 superseded the case fix entirely: the case-corrected pattern was a
+    # catch-all matching EVERY identifier-shaped line (~12.5 hits/file of opcode
+    # mnemonics), and AGC assembly has no visibility construct at all -- the rule
+    # is a contract-level absence now.
+    assert AGC_RULES["encapsulation"] is None
 
 
 def test_agc_assembly_func_start_vs_macros_no_false_collision():
@@ -202,10 +218,14 @@ def test_agc_assembly_explicit_casts_vs_pointers_no_false_collision():
     explicit_casts = AGC_RULES["explicit_casts"]
     pointers = AGC_RULES["pointers"]
 
+    # #2898: explicit_casts is a contract-level absence -- EXTEND is an
+    # opcode-mode prefix, not a type conversion, and AGC assembly has no cast
+    # construct. The old EXTEND/INDEX co-occurrence scenario now belongs to
+    # pointers alone.
+    assert explicit_casts is None
+
     combined = "\tEXTEND\n\tINDEX\tA"
-    cast_match = explicit_casts.search(combined)
     ptr_match = pointers.search(combined)
-    assert cast_match and cast_match.group(0).upper() == "EXTEND"
     assert ptr_match and ptr_match.group(0).upper() == "INDEX"
 
 
@@ -217,8 +237,8 @@ def test_agc_assembly_lexical_family_no_block_terminator_state_to_confuse():
     comment-like token doesn't fool any rule into a false structural match.
     """
     branch = AGC_RULES["branch"]
-    stray = "some text # not real code\n\tTCF\tFOO"
-    assert branch.search(stray), "branch should still see TCF regardless of the preceding comment line"
+    stray = "some text # not real code\n\tBZF\tFOO"
+    assert branch.search(stray), "branch should still see BZF regardless of the preceding comment line"
 
 
 def test_agc_assembly_redos_immunity_sweep():
@@ -237,3 +257,106 @@ def test_agc_assembly_redos_immunity_sweep():
     # sanity: all still match their real positive cases after the sweep
     assert AGC_RULES["func_start"].search("MYLABEL\tTC\tFOO")
     assert AGC_RULES["api"].search("MYLABEL\tEQUALS\t5")
+
+
+def test_agc_assembly_ambiguity_doc_vs_ownership_author_no_collision():
+    """
+    BUG FIX (#2659): `AUTHOR` is exclusively an `ownership` trait. Including it
+    in `doc` caused double-counting on standard authorship headers.
+    """
+    header = "# AUTHOR: Jane Doe"
+    assert not AGC_RULES["doc"].search(header)
+    m = AGC_RULES["ownership"].search(header)
+    assert m and m.group(m.lastindex) == "Jane Doe"  # #2882 C3: the last group is the value
+
+
+def test_agc_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    `EXTEND`/`BEXT` are AGC instructions, not declarations -- 323 of the
+    crucible corpus's 367 matches were the bare `EXTEND` opcode.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = AGC_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search("SBIT1\t\tEQUALS\tBIT1"), "EQUALS symbol equate"
+
+    # Not declarations -- must not match.
+    assert not api.search("\tEXTEND"), "EXTEND is an instruction"
+    assert not api.search("EXTEND"), "EXTEND at column 0"
+
+
+def test_agc_branch_counts_decisions_not_transfers_2764():
+    """
+    #2764 (sibling of assembly's, same issue): `branch` carried
+    `TC|TCF|TCR|CALL|GOTO` -- unconditional transfers, `TC` being the
+    AGC's subroutine call -- and `RESUME|RETURN`, its returns, alongside
+    the real conditionals. Only BZF/BZMF/BZE/BMN/BPL/BMI/CCS/BVBZ/OVSK
+    test anything, and `branch` feeds the decision-density metrics plus
+    #2546's x3 cascading-flux amplifier.
+
+    Relocated to `structural_boundaries` per #2545's "relocate, not
+    delete", so `control_flow_ratio`'s denominator is unchanged. CCS --
+    Count, Compare and Skip, the AGC's one real multi-way test -- was
+    counted by BOTH rules and is now claimed by `branch` alone.
+    """
+    branch = AGC_RULES["branch"]
+    linear = AGC_RULES["structural_boundaries"]
+
+    for decision in (
+        "\tBZF\tTARGET",
+        "\tBZMF\tTARGET",
+        "\tBZE\tTARGET",
+        "\tBMN\tTARGET",
+        "\tBPL\tTARGET",
+        "\tBMI\tTARGET",
+        "\tCCS\tTEMP",
+        "\tBVBZ\tTARGET",
+        "\tOVSK\t",
+    ):
+        assert branch.search(decision), f"{decision!r} is a decision"
+        assert not linear.search(decision), f"{decision!r} must not double-count as linear"
+
+    for transfer in (
+        "\tTC\tPROBEIO",
+        "\tTCF\tPROBEIO",
+        "\tTCR\tPROBEIO",
+        "\tCALL\tPROBEIO",
+        "\tGOTO\tPROBEIO",
+        "\tRESUME\t",
+        "\tRETURN\t",
+    ):
+        assert not branch.search(transfer), f"{transfer!r} is not a decision (#2764)"
+        assert linear.search(transfer), f"{transfer!r} must stay measured as structure"
+
+    # A real probe body: the dispatch call and the fall-through transfer
+    # contribute zero decisions; the one conditional contributes one.
+    body = "DISPATCH\tTC\tPROBEBR\n\t\tCA\tA\nPROBEBR\t\tBZF\tPROBEIO\n"
+    assert len(branch.findall(body)) == 1
+    assert sorted(m.group(0) for m in linear.finditer(body)) == ["CA", "TC"]
+
+
+def test_agc_resume_stays_cleanup_after_2764():
+    """
+    #2764 moved `RESUME` out of `branch`; `cleanup` (ENDOFJOB|RESUME|EXIT)
+    is untouched, so the AGC's interrupt return keeps its Phase-4 reading
+    and only stops claiming to be a decision.
+    """
+    resume = "\tRESUME\t"
+    assert AGC_RULES["cleanup"].search(resume)
+    assert AGC_RULES["structural_boundaries"].search(resume)
+    assert not AGC_RULES["branch"].search(resume)
+
+
+def test_agc_structural_boundaries_redos_immunity_2764():
+    """ReDoS detonation for the alternation widened by #2764."""
+    assert_redos_immune(AGC_RULES["structural_boundaries"], "TC" * 50000, timeout_sec=3.0)
+    assert_redos_immune(AGC_RULES["branch"], "B" * 100000, timeout_sec=3.0)

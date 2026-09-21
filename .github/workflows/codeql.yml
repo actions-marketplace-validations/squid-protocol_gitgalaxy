@@ -10,10 +10,23 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # One run per workflow per PR (or per ref outside a PR). Without this, a PR
+  # that picks up several labels in one `gh pr create` starts a separate,
+  # IDENTICAL run per label event on the same SHA (measured 2026-09-09: four
+  # Full Suite Gate runs and five rosetta-audit runs for one commit), and a
+  # re-push leaves the superseded run occupying the queue. cancel-in-progress
+  # is scoped to pull_request on purpose -- the push/schedule/tag runs are the
+  # ones that commit (docs, history charts, releases), and cancelling one
+  # mid-write is how you get a half-written commit.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       actions: read
       contents: read
@@ -31,12 +44,12 @@ jobs:
           persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           languages: ${{ matrix.language }}
           queries: security-extended,security-and-quality
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           category: "/language:${{matrix.language}}"

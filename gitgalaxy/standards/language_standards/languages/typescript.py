@@ -61,9 +61,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
         # EXCLUDES: Exceptions (throw). Includes control flow and logical short-circuits.
-        "branch": re.compile(
-            r"\b(if|else|switch|case|default|for|while|do|catch|finally|continue|break|try)\b|&&|\|\||\?|\?\?"
-        ),
+        "branch": re.compile(r"\b(if|else|switch|case|default|for|while|do)\b|&&|\|\||\?|\?\?"),
         # 2. args (Parameters / Coupling)
         # CRITICAL FIX: Added negative lookahead for control flow, and `[^=;{]*` to support TypeScript return types.
         # QUADRATIC BLOWUP FIX: the bare-identifier-before-arrow branch's
@@ -82,15 +80,58 @@ DEFINITION: dict[str, Any] = {
         # 1/4 too, purely so existing extraction tests keep passing.
         "args": re.compile(
             r"function\s+(\w*)(?:[ \t\n]{0,50}<(?:[^<>]|<[^<>]*>)*>)?[ \t\n]{0,50}(\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))|"
-            r"(\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))[^=;{]*=>|"
+            # #2773: the gap between an arrow's parameter list and its `=>` used to be
+            # `[^=;{]*` -- unbounded and newline-crossing, so ANY parenthesised
+            # expression matched as long as some `=>` turned up later on the way to the
+            # next `=`/`;`/`{`. `some((type as UnionType).types, t => ...)` scored the
+            # cast's own parens as a parameter list (384 such hits on the typescript
+            # crucible corpus). The only thing that can legally sit between `)` and `=>`
+            # is a return-type annotation, so the gap is now whitespace or a `:`-led
+            # annotation, both bounded. Bounding it also RECOVERS ~580 real arrow
+            # parameter lists this arm used to swallow inside an over-long match.
+            # The annotation itself may carry ONE level of balanced parens, because a
+            # curried arrow's return type is itself a function type -- fp-ts's
+            # `tryCatchK = <A, B, E>(f: ..., onThrow: ...): ((...a: A) => Either<E, B>) =>`
+            # (Either.ts:1406). Excluding `(` outright made this arm skip the real
+            # 2-parameter list and match the `(...a: A)` inside the annotation instead
+            # (6 functions, tree_sitter_accuracy_audit args_exact_match 2881 -> 2875).
+            # Newlines stay excluded on both sides so the gap cannot run down the file.
+            r"(\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))[ \t\n]{0,50}(?::(?:[^=;{()\n]|\((?:[^()\n]|\([^()\n]*\))*\)){0,120})?=>|"
             r"([a-zA-Z_$][\w$]{0,100})[ \t]*=>|"
-            r"^[ \t]*(?:(?:public|private|protected|static|override|abstract|readonly)[ \t]+){0,4}(?:async[ \t]+)?(?:\*[ \t]*)?(?:get\s+|set[ \t]+)?(?!(?:if|for|while|switch|catch|return|throw|new|typeof|yield|await|void)\b)(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?:[ \t\n]{0,50}<(?:[^<>]|<[^<>]*>)*>)?[ \t\n]{0,50}(\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))",
+            # #2539: `with` excluded CONDITIONALLY (only when followed by whitespace
+            # then `(` -- the `with (shape) {` statement shape) rather than added to
+            # the unconditional keyword list: `with` is a real, prominent method name
+            # in modern code (`Array.prototype.with` ES2023, Temporal's `.with()`),
+            # and formatters never put a space before a method definition's paren --
+            # same discriminator func_start's #2276 catch/return/throw fix uses.
+            # #2773: this arm had no declaration anchor at all -- `^[ \t]*IDENT(...)` is
+            # equally the shape of a bare CALL STATEMENT, and a call consumes a
+            # parameter surface rather than declaring one (docs/args_rule_contract.md).
+            # Measured over the code stream of language-crucible/data/typescript and
+            # classified against a tree-sitter parse of the same stream, this arm
+            # produced 6133 call sites against 3026 real declarations -- 67% wrong, and
+            # `describe(kit);`/`expect(kit);` in the keyword-rosetta shell were two of
+            # them. What follows the parameter list separates the two cleanly: a
+            # declaration is followed by its body `{` or by a `:` return-type
+            # annotation (2900 of the 3026), a call statement by `;`, `,`, `)`, `|`,
+            # `&`, `.` (6039 of the 6133). Requiring `{` or `:` keeps 95.8% of the
+            # declarations and drops 98.5% of the calls.
+            r"^[ \t]*(?:(?:public|private|protected|static|override|abstract|readonly)[ \t]+){0,4}(?:async[ \t]+)?(?:\*[ \t]*)?(?:get\s+|set[ \t]+)?(?!(?:if|for|while|switch|catch|return|throw|new|typeof|yield|await|void)\b|with\b[ \t\n]+\()(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?:[ \t\n]{0,50}<(?:[^<>]|<[^<>]*>)*>)?[ \t\n]{0,50}(\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))[ \t\n]{0,50}[:{]|"
+            # #2773: the one declaration shape the `{`-or-`:` anchor above cannot
+            # cover. A constructor has no return type BY GRAMMAR, so a bodyless
+            # constructor overload signature (`constructor(runner: () => void, timeout:
+            # number);`, vscode/async.ts:1020) terminates in a bare `;` -- lexically
+            # identical to a call statement. Named explicitly rather than by loosening
+            # the anchor to accept `;`: all 125 declarations the anchor would otherwise
+            # lose on the crucible corpus are constructors, and accepting a bare `;`
+            # generally would readmit 4906 call statements.
+            r"^[ \t]*(?:(?:public|private|protected|abstract|declare)[ \t]+){0,3}(constructor)[ \t\n]{0,50}(\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))[ \t\n]{0,50};",
             re.M,
         ),
         # 3. linear (Sequential Boundaries)
         # Structural boundaries. EXCLUDES: Access modifiers (public/private) and Immutability (const).
         "structural_boundaries": re.compile(
-            r"\b(var|return|class|interface|type|enum|import|export|await|satisfies|using|namespace|module|implements|extends|declare)\b|=>"
+            r"\b(var|return|break|continue|class|interface|type|enum|import|export|await|satisfies|using|namespace|module|implements|extends|declare|unknown|never|void)\b|=>"
         ),
         # 4. func_start (Executable Logic Anchors)
         # Captures standard functions, assignments, object properties, and class methods.
@@ -338,7 +379,12 @@ DEFINITION: dict[str, Any] = {
             # testing that `} catch (e) {` still correctly does NOT
             # match, while `catch<TResult = never>(...)` and
             # `return: () => {...}` now do.
-            r"(?!(?:class|interface|enum|if|for|while|switch|new|typeof|jQuery|function|yield|await|void)\b|type\b(?![ \t\n]*\()|\$|(?:catch|return|throw)\b[ \t\n]+(?:\(|<))(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?=\??[ \t\n]{0,50}(?:<(?:[^<>]|<[^<>]*>)*>)?[ \t\n]{0,50}\()"
+            # #2539: `with` joined the CONDITIONAL exclusion group -- `with (shape) {`
+            # (a statement, always spaced) must not count as a method, but a real
+            # method/signature named `with` (`Array.prototype.with` ES2023,
+            # Temporal's `.with()` -- ubiquitous in `.d.ts`) never has that space,
+            # exactly the discriminator this group already relies on.
+            r"(?!(?:class|interface|enum|if|for|while|switch|new|typeof|jQuery|function|yield|await|void)\b|type\b(?![ \t\n]*\()|\$|(?:catch|return|throw|with)\b[ \t\n]+(?:\(|<))(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?=\??[ \t\n]{0,50}(?:<(?:[^<>]|<[^<>]*>)*>)?[ \t\n]{0,50}\()"
             r"|"
             # BUG FIX (R3): The arrow-value (Branch 5 / standalone value) branch
             # is known to fail on mid-statement function values (e.g. `const a = b || () => {}`)
@@ -418,7 +464,8 @@ DEFINITION: dict[str, Any] = {
             # `[^<>=]` vs `<`), so still linear (Rule 11). The mandatory
             # `:Type;` / `{` terminator below keeps a bare generic call
             # statement (`useCallback<() => void>(cb);`) from matching.
-            r"(?:^[ \t]*|(?<=[,{])[ \t\n]*)(?!(?:class|interface|enum|if|for|while|switch|new|typeof|jQuery|function|yield|await|void|constructor)\b|type\b(?![ \t\n]*\()|\$|(?:catch|return|throw)\b[ \t\n]+(?:\(|<))(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?=\??[ \t\n]{0,50}(?:<(?:=>|=(?!>)|[^<>=]|<(?:=>|=(?!>)|[^<>=])*>)*>)?[ \t\n]{0,50}\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)[ \t\n]{0,50}(?:(?::[^{;]{0,200})?[ \t\n]{0,50}(?:=>[ \t\n]{0,50})?\{|:[^{;]{0,200}[ \t\n]{0,50};))"
+            # #2539: same conditional `with` exclusion as Branch A -- see its comment.
+            r"(?:^[ \t]*|(?<=[,{])[ \t\n]*)(?!(?:class|interface|enum|if|for|while|switch|new|typeof|jQuery|function|yield|await|void|constructor)\b|type\b(?![ \t\n]*\()|\$|(?:catch|return|throw|with)\b[ \t\n]+(?:\(|<))(\[[^\]]+\]|[#]?[a-zA-Z_$][\w$]*)(?=\??[ \t\n]{0,50}(?:<(?:=>|=(?!>)|[^<>=]|<(?:=>|=(?!>)|[^<>=])*>)*>)?[ \t\n]{0,50}\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)[ \t\n]{0,50}(?:(?::[^{;]{0,200})?[ \t\n]{0,50}(?:=>[ \t\n]{0,50})?\{|:[^{;]{0,200}[ \t\n]{0,50};))"
             r")",
             re.M,
         ),
@@ -464,7 +511,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
         # 6. safety (Defensive Programming / Validation)
         "safety": re.compile(
-            r"\b(try|catch|finally|satisfies|unknown|never|void|Object\.freeze|z\.(?:string|object|parse)|v\.(?:string|parse))\b|\?\?|\?\.|\b(?:is|asserts)\s+\w+\b"
+            r"\b(try|catch|finally|satisfies|Object\.freeze|z\.(?:string|object|parse)|v\.(?:string|parse))\b|\?\?|\?\.|\b(?:is|asserts)\s+\w+\b"
         ),
         # 7. safety_neg (Safety Bypasses / Unchecked Types)
         # Force unwrapping, any, and linter bypasses.
@@ -473,8 +520,11 @@ DEFINITION: dict[str, Any] = {
         ),
         # 8. danger (High-Risk Execution / System Calls)
         # Process killers and catastrophic vulnerabilities. EXCLUDES TODO (debt) and console.log (print).
+        # #2878 contract C2: innerHTML/outerHTML count as the assignment sink, not a read or a
+        # method named innerHTML; `debugger` is the statement, not `'./debugger'`; C5 alert is output.
         "high_risk_execution": re.compile(
-            r"\b(eval|document\.write|innerHTML|outerHTML|dangerouslySetInnerHTML|debugger|alert|process\.exit)\b"
+            r"\b(?:eval|document\.write(?:ln)?|dangerouslySetInnerHTML|process\.(?:exit|abort)|execSync|new\s+Function)\b|\.(?:innerHTML|outerHTML)\s*\+?=(?!=)|(?:^|[;{}])[ \t]*debugger\b",
+            re.M,
         ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
@@ -482,8 +532,27 @@ DEFINITION: dict[str, Any] = {
         ),
         # 10. api (Public Surface Area)
         # Captures explicit exports and public visibility.
+        # BUG FIX #2730 (api contract): a bare `\bexport|public|module.exports|exports.\b` counted the
+        # access modifier ANYWHERE in the code stream -- inside a string
+        # literal, a `switch` case, a dotted name -- not only where it
+        # declares something. The alternatives below anchor it to the
+        # declaration it modifies, per docs/api_rule_contract.md ("a
+        # declaration that makes a named function or type visible outside
+        # this file"). Every quantifier is bounded (Rule 5) and the modifier
+        # stepper is `{0,5}`, not `*`, so the `[ \t\n]+`-separated
+        # alternation cannot nest unboundedly (the ReDoS shape swift's `open`
+        # alternative was already written against).
+        # `export` stays bare -- it is a declaration keyword in its own
+        # right and cannot appear anywhere else -- while `public` (a class
+        # member / parameter-property modifier, and a legal property name)
+        # gets the anchor. Measured: 3730 crucible matches before, 3726
+        # after; the four dropped were the string `"public"` and a
+        # `case "public":` in a compiler that parses the keyword.
         "api": re.compile(
-            r"\b(export|public|module\.exports|exports\.)\b|@(Controller|Resolver|Get|Post|Put|Delete)\b"
+            r"\b(?:export|module\.exports|exports\.)\b"
+            r"|\bpublic[ \t\n]+(?:(?:static|readonly|abstract|override|async)[ \t\n]+){0,4}"
+            r"(?:get\b|set\b|[A-Za-z_$#][\w$]*[ \t\n]*[(:?<=;,])"
+            r"|@(Controller|Resolver|Get|Post|Put|Delete)\b"
         ),
         # 11. flux (State Mutation)
         # Mutation of state. EXCLUDES const (freeze_hits).
@@ -496,8 +565,21 @@ DEFINITION: dict[str, Any] = {
         # already self-delimited by their leading `.`, so pulled out of
         # the shared boundary group entirely.
         "state_mutation": re.compile(
-            r"\b(?:let|var|this\.|setState|push|pop|shift|unshift|splice|sort|reverse)\b"
-            r"|\.current[ \t]*=|\.set\(|\.delete\(|\.add\("
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # Same shape as javascript: `let`/`var`/`const` declare, a bare `this.` reads,
+            # `=` directly followed by `{`/quote is a TSX attribute.
+            r"(?:^|[;{})])[ \t]*[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\?\.[A-Za-z_$][\w$]*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%&|^]|\*\*|<<|>>>?|&&|\|\||\?\?)?=(?![=>{\"'`])(?![^\n(]{0,300},[ \t]*$)"
+            r"|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*[A-Za-z_$(]"
+            r"|\bsetState\s*\("
+            r"|\.(?:push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin|set|delete|add|clear)\s*\(",
+            re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         # BUG FIX (Engine Rule 12, Comment-Style Completeness): typescript
@@ -506,7 +588,16 @@ DEFINITION: dict[str, Any] = {
         # function/class (`/* function foo() {} */`) was invisible.
         "dead_code": re.compile(r"(?://|/\*)[ \t]*(?:if|for|while|function|class|return|export|import)\b"),
         # 13. doc (Structured Documentation)
-        "doc": re.compile(r"/\*\*|@param|@return|@throws|@deprecated|@typedef|@type|@template|@callback"),
+        # BUG FIX #2672: `/**` and the JSDoc/TSDoc tags (`@param`,
+        # `@return`, ...) were independent alternatives, so one doc block
+        # counted doc proportional to its tag density. Block form first
+        # (bounded 0,15000 chars non-greedy span, the #2658 shape); bare
+        # tags stay last so a tag outside any doc block still counts. No
+        # corpus movement -- the rosetta corpus only plants one of
+        # {marker, tag} for this language.
+        "doc": re.compile(
+            r"/\*\*[\s\S]{0,15000}?\*/|@param|@return|@throws|@deprecated|@typedef|@type|@template|@callback"
+        ),
         # 14. test (Testing & Assertions)
         # CRITICAL FIX: Negative lookbehind (?<!\.) prevents matching 'regex.test()' as an assertion.
         "test": re.compile(
@@ -519,12 +610,21 @@ DEFINITION: dict[str, Any] = {
         ),
         # 16. ui_framework (UI / View Components)
         "ui_framework": re.compile(
-            r'<[A-Z]\w+|className=|use(?:State|Effect|Context|Reducer|Ref|Memo|Callback|Transition|Id)|props\.|this\.state|@Component|@Injectable|document\.(?:getElementById|querySelector)|["\']use\s+(?:client|server)["\']'
+            # #2898: `<[A-Z]\w+` also matched generic type arguments (Array<Foo>,
+            # <ModifierLike>). A generic always follows an identifier; a JSX element
+            # never does -- the not-word lookbehind separates them.
+            r'(?<!\w)<[A-Z]\w+|className=|use(?:State|Effect|Context|Reducer|Ref|Memo|Callback|Transition|Id)|props\.|this\.state|@Component|@Injectable|document\.(?:getElementById|querySelector)|["\']use\s+(?:client|server)["\']'
         ),
         # 17. closures (Closures / Anonymous Functions)
         "closures": re.compile(r"=>[ \t]*\{|\(\)[ \t]*=>|function\s*\([^)]*\)[ \t]*\{"),
         # 18. globals (Global / Shared State)
-        "globals": re.compile(r"\b(window\.|global\.|process\.env|document\.|navigator\.|self\.|globalThis\.)\b"),
+        "globals": re.compile(
+            # #2858 contract corollary 3: `self` and `global` are everyday
+            # identifiers (`const self = this`, assemblyscript's `let global =
+            # <Global>element` -- every crucible hit); the unambiguous handle is
+            # `globalThis.`.
+            r"\b(?:window|document|navigator|globalThis)\.(?=[\w$])|\bprocess\.env\b|\bimport\.meta\.env\b"
+        ),
         # 19. decorators (Decorators / Annotations)
         "decorators": re.compile(r"@\w+(?:\([^)]*\))?"),
         # 20. generics (Generics / Type Parameters)
@@ -553,7 +653,8 @@ DEFINITION: dict[str, Any] = {
         "dl_frameworks": GLOBAL_DL_FRAMEWORKS,
         # 24. import (Dependency Inclusions)
         "import": re.compile(
-            r"\b(?:import(?:\s+type)?|export(?:\s+type)?)\b[^;]*?\bfrom\b|\brequire\s*\(|\bimport\s*\(",
+            # #2875: bounded lazy scan (see javascript); no crucible change.
+            r"\b(?:import(?:\s+type)?|export(?:\s+type)?)\b[^;]{0,2000}?\bfrom\b|\brequire\s*\(|\bimport\s*\(",
             re.M,
         ),
         "_dependency_capture": re.compile(
@@ -591,7 +692,11 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"(?:@author|Created by)\s+(.*)", re.I),
+        # #2882 contract: C1 colon-less `Created by` matched vscode's prose eleven times; `author: T;` interface fields are not tags
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -609,7 +714,10 @@ DEFINITION: dict[str, Any] = {
             r"\b(getServerSideProps|getStaticProps|generateStaticParams|LoaderFunction|ActionFunction)\b"
         ),
         # 32. events (Event Emitters / Pub-Sub)
-        "events": re.compile(r"\b(emit|on|once|off|dispatchEvent|EventEmitter|EventTarget)\b"),
+        # #2899: the short generic words anchored to their method-call form -- bare
+        # `emit` was the typescript compiler's own emit pipeline (9/file), and bare
+        # on/once/off matched prose and identifiers.
+        "events": re.compile(r"\.(?:emit|on|once|off)\s*\(|\b(dispatchEvent|EventEmitter|EventTarget)\b"),
         # 33. dependency_injection (Dependency Injection / IoC)
         "dependency_injection": re.compile(r"\b(Inject|Injectable|Container|resolve|register|tsyringe|inversify)\b"),
         # 34. macros
@@ -617,7 +725,12 @@ DEFINITION: dict[str, Any] = {
         # 35. pointers
         "pointers": None,  # Managed memory environment.
         # 36. memory_alloc
-        "memory_alloc": re.compile(r"\bnew\s+[A-Z]\w*"),
+        # #2898: `new <AnyCapitalized>` counted every object construction (new Error,
+        # new Promise). The registry reads memory_alloc as UNMANAGED allocation only
+        # (java/kotlin/scala/dart precedent: Arena/memScoped/ffi.Allocator, honest 0s).
+        "memory_alloc": re.compile(
+            r"\bnew\s+(?:ArrayBuffer|SharedArrayBuffer|WebAssembly\.Memory)\b|\bBuffer\.alloc(?:Unsafe(?:Slow)?)?\s*\("
+        ),
         # 37. inline_asm
         "inline_asm": None,
         # --- PHASE 5: RESOURCE MANAGEMENT & STABILITY ---
@@ -641,9 +754,13 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 45. immutability_locks (Immutability Constraints)
-        "immutability_locks": re.compile(r"\b(const|readonly|final|Object\.freeze|Object\.seal)\b"),
+        "immutability_locks": re.compile(
+            r"\breadonly\b|\bObject\.(?:freeze|seal)\b|\bas[ \t]+const\b"
+        ),  # #2772 C1: `const` is the ordinary binding; `readonly`, `as const` and the runtime lock calls are the added forms
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"\b(dispose|close|destroy|clearTimeout|clearInterval|removeEventListener|delete)\b"),
+        "cleanup": re.compile(
+            r"\b(?:clearTimeout|clearInterval|removeEventListener)\s*\(|\b(?<!function )(?:dispose|close|destroy)\s*\((?!\s*\)\s*(?::|\{))"
+        ),  # #2888 C1: `dispose(): void;` / `dispose() {` declare; C5: .delete( is state_mutation\'s (#2765)
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # `#` needed its own un-bounded branch: \b#\b can only match when
         # `#` is directly sandwiched between two word characters with no
@@ -651,7 +768,12 @@ DEFINITION: dict[str, Any] = {
         # field syntax (`#foo` is always preceded by `{`, whitespace, or
         # `.` -- never a bare word char) -- so the `#` alternative was
         # completely unreachable, same bug as javascript's copy of this.
-        "encapsulation": re.compile(r"\b(private|protected|internal)\b|#[a-zA-Z_$]"),
+        # #2766: `internal` removed (not a ts modifier; matched './internal' import
+        # strings). #fields count at declaration position only, not every usage.
+        "encapsulation": re.compile(
+            r"\b(private|protected)\b|(?:^[ \t]*|[{;,][ \t]*)(?:static[ \t]+)?#[a-zA-Z_$]\w*[ \t]*[=;(]",
+            re.M,
+        ),
         # 48. listeners (Event Listeners / Observers)
         "listeners": re.compile(r"\b(on|addEventListener|subscribe|watch|effect)\b"),
         # 49. test_skip (Bypassed Tests / Ignored Specs)
@@ -671,12 +793,23 @@ DEFINITION: dict[str, Any] = {
         ),
         "vectorized_math": re.compile(r"\b(matmul|dot|cross|multiply)\s*\("),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (JS/TS Specifics) ---
+        # auth_middleware (#3004): javascript's vocabulary plus Nest's @UseGuards
+        # guard registration.
+        "auth_middleware": re.compile(
+            r"@UseGuards\("
+            r"|\b(?:passport\.authenticate|jwt\.verify|bcrypt\.compare(?:Sync)?|getServerSession)\("
+            r"|\breq\.(?:isAuthenticated|log(?:in|out))\("
+        ),
         "serialization_parsing": re.compile(r"\b(JSON\.parse|JSON\.stringify)\b"),
         "regex_execution": re.compile(r"\bnew\s+RegExp\b|\.(match|replace|search|split)\s*\("),
         "time_date_logic": re.compile(
             r"\b(Date\.now|new\s+Date|setTimeout|setInterval|clearTimeout|clearInterval|performance\.now)\b"
         ),
         "ipc_rpc_bridges": re.compile(r"\b(postMessage|Worker|MessageChannel|child_process|worker_threads|cluster)\b"),
+        # system_config_mutation (#3084): contract-level absence. runtime/app
+        # layer; same reasoning as javascript -- host config only through
+        # child_process command text.
+        "system_config_mutation": None,
         # --- PHASE 4: APPSEC & AI SENSORS (Zero-Trust Pipelines) ---
         "rce_funnel": re.compile(r"child_process\.(?:spawn|exec|execSync)\s*\(\s*['\"](?:python|bash|sh|bun|node)\b"),
         # BUG FIX (Rule 11, nested-delimiter coverage): the flat `[^)]*`

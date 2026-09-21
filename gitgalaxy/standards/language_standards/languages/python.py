@@ -83,7 +83,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
         # Includes match/case (3.10+) and logical short-circuits. EXCLUDES exceptions.
-        "branch": re.compile(r"\b(if|elif|else|for|while|with|try|finally|match|case|and|or)\b"),
+        "branch": re.compile(r"\b(if|elif|else|for|while|match|case|and|or)\b"),
         # 2. args (Parameters / Coupling)
         # Signatures for def/lambda. Bounded generics and params [^)]*.
         # RULE 11 FIX (epic #813/#818): the PEP 695 (3.12+) generic-parameter step-over was a
@@ -115,7 +115,7 @@ DEFINITION: dict[str, Any] = {
         # 3. linear (Sequential Boundaries)
         # Structural boundaries. EXCLUDES: _private (encapsulation) and Final (freeze_hits).
         "structural_boundaries": re.compile(
-            r"\b(def|class|return|import|from|as|pass|continue|break|await|assert|del|global|nonlocal|type)\b"
+            r"\b(def|class|return|import|from|as|with|pass|continue|break|await|assert|del|global|nonlocal|type)\b"
         ),
         # 4. func_start (Executable Logic Anchors)
         # Anchors executable logic. Steps safely over decorators.
@@ -165,8 +165,9 @@ DEFINITION: dict[str, Any] = {
         ),
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
         # 6. safety (Defensive Programming / Validation)
+        # C3: blanket except is safety_bypasses'; bare getattr is reflection_metaprogramming's. C1: dataclass/Field/TypeGuard/override are declaration/type-level.
         "safety": re.compile(
-            r"\b(try|except(?:\*)?|finally|assert|isinstance|issubclass|hasattr|getattr|dataclass|BaseModel|Field|TypeGuard|override)\b"
+            r"\b(try|finally|assert|isinstance|issubclass|hasattr|BaseModel)\b|\bexcept\*?\s+(?!(?:Base)?Exception\b)[A-Za-z_]\w*"
         ),
         # 7. safety_neg (Safety Bypasses / Unchecked Types)
         # Swallowed errors, wildcard imports, and Any bypasses.
@@ -176,8 +177,10 @@ DEFINITION: dict[str, Any] = {
         ),
         # 8. danger (High-Risk Execution / System Calls)
         # Process killers and un-sanitized deserialization. EXCLUDES TODO/print.
+        # #2878 contract C1a: sys.exit/os._exit/os.abort end the process (embedded_python twin
+        # parity); os.exec*/os.spawn* replace or spawn one (C1b).
         "high_risk_execution": re.compile(
-            r"\b(eval|exec|subprocess\.(?:call|Popen|run)|os\.system|pickle\.loads?|yaml\.unsafe_load|shell=True)\b"
+            r"\b(eval|exec|subprocess\.(?:call|Popen|run)|os\.system|os\.exec[lv]p?e?|os\.spawn[lv]p?e?|pickle\.loads?|yaml\.unsafe_load|shell=True|sys\.exit|os\._exit|os\.abort)\b"
         ),
         # 9. io (I/O & Network Boundaries)
         # #2593: `os\.`/`sys\.` used to match ANY `os.x`/`sys.x` attribute access, which
@@ -198,12 +201,29 @@ DEFINITION: dict[str, Any] = {
         # 11. flux (State Mutation)
         # State mutation. Includes Walrus operator and collection mutators.
         "state_mutation": re.compile(
-            r"\bglobal\b|\bnonlocal\b|\b(?:self|cls)\.\w+[ \t]*=|:=|(?:\.\w+)?\.(?:append|extend|update|pop|remove|insert|clear)\s*\("
+            # #2817: python has no declaration syntax, so corollary 1's fallback
+            # says every assignment statement is a write -- a plain `x = v` (also
+            # `obj.attr = v`, `d[k] = v`) counts, not only `self.x =`/container
+            # mutators. Anchored like lua/js (statement start + bare lvalue with
+            # `.attr`/`[idx]` tails), but with `[ \t]+=` REQUIRING a space before
+            # `=`: black/PEP8 writes a statement assignment as `x = 1` and a keyword
+            # argument as `x=1`, so the space is the usable anchor that excludes
+            # `foo(x=1)` and `def f(x=1)`. `(?![=])` drops `==`; the trailing-comma
+            # guard drops a spaced kwarg on its own line (`x = 1,`); `x: int = 1` is
+            # a declaration-with-initializer (the `:` breaks the lvalue) and is not a
+            # write. Needs re.M for the `^` anchor.
+            r"(?:^|;)[ \t]*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*[ \t]+=(?![=])(?![^\n(]{0,300},[ \t]*$)"
+            r"|\bglobal\b|\bnonlocal\b|\b(?:self|cls)\.\w+[ \t]*=|:=|(?:\.\w+)?\.(?:append|extend|update|pop|remove|insert|clear)\s*\(",
+            re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(r"#[ \t]*(?:def|class|import|if|for|while|try|return)\b"),
         # 13. doc (Structured Documentation)
-        "doc": re.compile(r'"""|\'\'\'|:param|:return|:raises|:type|\b(?:Args|Returns|Yields|Raises|Attributes):\b'),
+        # BUG FIX #2658: Match full docstring span as a single bounded body so
+        # """ counts as doc=1, not 2. Unterminated delimiters fail safely.
+        "doc": re.compile(
+            r'"""[\s\S]{0,15000}?"""|\'\'\'[\s\S]{0,15000}?\'\'\'|:param|:return|:raises|:type|\b(?:Args|Returns|Yields|Raises|Attributes):\b'
+        ),
         # 14. test (Testing & Assertions)
         # #2593: `assert` is a general-purpose validation keyword already owned by `safety`
         # (see that rule above) -- it isn't itself a testing signal, so a runtime invariant
@@ -228,7 +248,14 @@ DEFINITION: dict[str, Any] = {
         # whatever follows a function call (`;`, a newline, `.method`,
         # end of string) is never a word character. Neither builtin
         # ever matched in any real usage.
-        "globals": re.compile(r"\b(?:os\.environ|sys\.argv|sys\.path)\b|\bglobals\(\)|\blocals\(\)"),
+        "globals": re.compile(
+            # #2858 contract: the `global x` statement is python's declaration of a
+            # module-scope binding (the embedded twin already counted it);
+            # `locals()` is a handle on the LOCAL namespace, nobody's global
+            # (corollary 5); `sys.modules` is the interpreter's registry.
+            r"\b(?:os\.environ|sys\.argv|sys\.path|sys\.modules)\b|\bglobals\(\)|^[ \t]*global[ \t]+[A-Za-z_]",
+            re.M,
+        ),
         # 19. decorators (Decorators / Annotations)
         "decorators": re.compile(r"^[ \t]*@[\w.]+", re.M),
         # 20. generics (Generics / Type Parameters)
@@ -255,7 +282,9 @@ DEFINITION: dict[str, Any] = {
             r"\b(?:import|require|from)\b.*?(?:serialport|usb|bluetooth|socket\.io|websocket|printer|webgl)\b"
         ),
         "cryptography": re.compile(
-            r"\b(?:import|require|from)\b.*?(?:crypto|bcrypt|x509|tls|ssl|jsonwebtoken|argon2)\b"
+            # #2898: hashlib/hmac added -- the stdlib's own crypto modules were missing
+            # from the name list, so files importing them read 0.
+            r"\b(?:import|require|from)\b.*?(?:crypto|bcrypt|x509|tls|ssl|jsonwebtoken|argon2|hashlib|hmac)\b"
         ),
         # 23. heat_triggers (Metaprogramming & Reflection)
         # Metaprogramming and class-level binding.
@@ -269,8 +298,12 @@ DEFINITION: dict[str, Any] = {
         "ml_traditional": GLOBAL_ML_TRADITIONAL,
         "dl_frameworks": GLOBAL_DL_FRAMEWORKS,
         # 24. import (Dependency Inclusions)
+        # #2875 contract C5: statement position -- 279 of python's 1,925 crucible hits
+        # were doctest `>>> import numpy as np` lines inside docstrings (strings count
+        # uniformly, #2535; the prompt breaks statement position). The loader calls
+        # (`__import__(`, `importlib.import_module(`) are calls and stay unanchored.
         "import": re.compile(
-            r"\b(?:from[ \t]+[a-zA-Z0-9_.]+[ \t]+import\b|import[ \t]+[a-zA-Z0-9_., \t]+|\b__import__[ \t]*\(|\bimportlib\.import_module[ \t]*\()",
+            r"(?:^|;)[ \t]*(?:from[ \t]+[a-zA-Z0-9_.]+[ \t]+import\b|import[ \t]+[a-zA-Z_.])|\b__import__[ \t]*\(|\bimportlib\.import_module[ \t]*\(",
             re.M,
         ),
         "_dependency_capture": re.compile(
@@ -281,7 +314,11 @@ DEFINITION: dict[str, Any] = {
         ),
         "_named_token_capture": re.compile(r"^[ \t]*from\s+[\w.]+\s+import\s+([^({\n]+)", re.M),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"(?:__author__[ \t]*=|Author:|Created by:)\s*(.*)", re.I),
+        # #2882 contract: C1 `Author:` matched inside `.. moduleauthor::` by substring; the directive and the `:author:` docinfo field count by their own forms; `owner: T` annotations are not tags
+        "ownership": re.compile(
+            r"^[ \t]*__author__[ \t]*=[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*\.\.[ \t]+(?:module|section)author::[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:#+|:)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -335,10 +372,24 @@ DEFINITION: dict[str, Any] = {
         # 45. immutability_locks (Immutability Constraints)
         "immutability_locks": re.compile(r"\b(Final|frozenset|mappingproxy|immutable)\b"),
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"\b(close|__exit__|del|shutdown|cleanup)\b\s*\("),
+        "cleanup": re.compile(
+            r"\b(?<!def )(close|__exit__|del|shutdown|cleanup)\b\s*\("
+        ),  # #2888 C1: `def close(self):` declares (embedded_python twin)
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # Captures protected/private members via underscore convention.
-        "encapsulation": re.compile(r"\b_[a-zA-Z_]\w*\b"),
+        # #2766: declaration-position only. The `_` marker is part of the identifier,
+        # so the old bare-word form counted every USAGE of a private name (massive
+        # overcount vs keyword-morphology languages). One hit = declaring a private
+        # def/class, or binding a private module-level or attribute name.
+        "encapsulation": re.compile(
+            # dunders (__init__, __all__) are the PUBLIC protocol surface, excluded;
+            # _single and __mangled stay.
+            r"^[ \t]*(?:async[ \t]+)?def[ \t]+(?!__\w+__[ \t]*\()_\w+"
+            r"|^[ \t]*class[ \t]+(?!__\w+__\b)_\w+"
+            r"|^(?!__\w+__[ \t]*=)_[a-zA-Z_]\w*[ \t]*=(?!=)"
+            r"|self\.(?!__\w+__[ \t]*=)_\w+[ \t]*=(?!=)",
+            re.M,
+        ),
         # 48. listeners (Event Listeners / Observers)
         "listeners": re.compile(r"\b(on_event|add_listener|subscribe|callback|handler)\b"),
         # 49. test_skip (Bypassed Tests / Ignored Specs)
@@ -346,15 +397,32 @@ DEFINITION: dict[str, Any] = {
         # --- NEW: ADVANCED ALGORITHMIC SENSORS ---
         "lazy_evaluation": re.compile(r"\b(yield|yield\s+from|Generator|AsyncGenerator|Iterator|AsyncIterator)\b"),
         "vectorized_math": re.compile(
-            r"\b(einsum|matmul|tensordot|vdot|bmm)\b|\.dot\s*\(|(?<=[a-zA-Z0-9_\]\)])\s*@\s*(?=[a-zA-Z0-9_\[\(])"
+            # #2898: the matrix-multiply `@` operand gap must stay on one line --
+            # `\s*` crossed newlines, so a decorator under any expression counted
+            # (892 of the 898 crucible hits were decorator lines).
+            r"\b(einsum|matmul|tensordot|vdot|bmm)\b|\.dot\s*\(|(?<=[a-zA-Z0-9_\]\)])[ \t]*@[ \t]*(?=[a-zA-Z0-9_\[\(])"
         ),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Python Specifics) ---
+        # auth_middleware (#3004): django/flask's gate decorators, the permission
+        # query on a user object, and the credential-verification and session
+        # login/logout calls. `authenticate(` is guarded against its own
+        # definition site (`def authenticate(`).
+        "auth_middleware": re.compile(
+            r"@(?:login_required|permission_required)\b"
+            r"|\.has_perm\("
+            r"|\b(?:check_password|login_user|logout_user|pam_authenticate)\("
+            r"|(?<!def )\bauthenticate\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(pickle\.loads?|pickle\.Unpickler|marshal\.loads?|ast\.literal_eval)\b"
         ),
         "regex_execution": re.compile(r"\b(re\.compile|re\.search|re\.match|re\.sub|re\.findall|re\.split)\b"),
         "time_date_logic": re.compile(r"\b(datetime\.datetime|timedelta|time\.sleep|time\.time|calendar)\b"),
         "ipc_rpc_bridges": re.compile(r"\b(multiprocessing|subprocess|xmlrpc|socketserver)\b"),
+        # system_config_mutation (#3084): contract-level absence. stdlib winreg
+        # exists but crucible incidence is 0; host config is otherwise file I/O
+        # or subprocess (their owners').
+        "system_config_mutation": None,
         # --- PHASE 4: APPSEC & AI SENSORS (Zero-Trust Pipelines) ---
         "memory_scraping": re.compile(r"['\"]/proc/['\"]\s*\+\s*(?:str\([^)]*\)|f?['\"]\{[^}]*\})|/proc/\w+/mem"),
         "exfiltration_camouflage": re.compile(

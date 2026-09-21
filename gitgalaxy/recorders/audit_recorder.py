@@ -53,6 +53,16 @@ class AuditRecorder:
         self.RISK_SCHEMA = schemas.get("RISK_SCHEMA", [])
         # Note: The pipeline calls it SIGNAL_SCHEMA, but the Auditor references it as HIT_SCHEMA
         self.HIT_SCHEMA = schemas.get("SIGNAL_SCHEMA", [])
+        # gitgalaxy#2991: canonical new-name -> legacy risk_* mapping, bound
+        # here for parity with the other 4 definition sites. Deliberately NOT
+        # used to change any EXPOSURE_LABELS/FRIENDLY_MAP-derived string below
+        # -- this recorder's JSON ("Average Risk Exposures", "Vulnerability &
+        # Risk Exposures", ...) is exactly what tests/golden_master_audit.json
+        # and tests/golden_master_zero_dep_audit.json bless byte-for-byte
+        # (see tests/test_golden_crucible.py); changing these label strings
+        # would fail the golden-crucible regression test without a deliberate,
+        # separate golden-master regen this PR does not perform.
+        self.VECTOR_NAMES = schemas.get("VECTOR_NAMES", {})
 
         # PERFORMANCE OPTIMIZATION: Pre-cache all labels to avoid regex overhead on the hot path
         self._label_cache = {}
@@ -85,6 +95,66 @@ class AuditRecorder:
         if default_scalar != 1.0:
             return round(value / default_scalar, 3)
         return value
+
+    def _mainframe_facts_block(self, file_data):
+        """The Named System Facts for one file (#3200/#3201/#3246), or {} if none.
+
+        The forensic report is the VERBOSE surface (unlike the token-optimized LLM
+        brief, which shows only record roots), so this carries the FULL detail:
+        every call site, every dataset binding, and the complete DATA DIVISION
+        item tree, mirroring the master DB's call_site_data/dataset_data/record_data.
+        Each sub-list is omitted when empty, so the block only ever describes facts
+        that are actually present.
+        """
+        block = {}
+        calls = file_data.get("call_sites") or []
+        if calls:
+            block["Call Sites"] = [
+                {
+                    "Verb": c.get("verb"),
+                    "Form": c.get("form"),
+                    "Operand": c.get("operand"),
+                    "Target": c.get("target"),
+                    "Line": c.get("line", 0),
+                }
+                for c in calls
+            ]
+        datasets = file_data.get("dataset_bindings") or []
+        if datasets:
+            block["Dataset Bindings"] = [
+                {
+                    "DD Name": d.get("dd_name"),
+                    "Internal Name": d.get("internal_name"),
+                    "Assign Name": d.get("assign_name"),
+                    "Access Modes": d.get("modes") or [],
+                    "DSN": d.get("dsn"),
+                    "Step": d.get("step_name"),
+                    "Line": d.get("line", 0),
+                }
+                for d in datasets
+            ]
+        records = file_data.get("record_layouts") or []
+        if records:
+            block["Record Layout"] = [
+                {
+                    "Level": it.get("level"),
+                    "Name": it.get("name"),
+                    "Section": it.get("section"),
+                    "FD": it.get("fd_name"),
+                    "PIC": it.get("pic"),
+                    "Usage": it.get("usage"),
+                    "Occurs Min": it.get("occurs_min"),
+                    "Occurs Max": it.get("occurs_max"),
+                    "Occurs Depending On": it.get("occurs_depending_on"),
+                    "Redefines": it.get("redefines"),
+                    "Value": it.get("value"),
+                    "Ordinal": it.get("ordinal"),
+                    "Parent Ordinal": it.get("parent_ordinal"),
+                    "Line": it.get("line", 0),
+                }
+                for it in records
+            ]
+        return block
 
     def generate_report(
         self,
@@ -152,6 +222,7 @@ class AuditRecorder:
             }
 
         folder_archetype_counts = {}
+        function_archetype_totals: dict[str, int] = {}  # repo-wide function-archetype distribution
 
         # 2. Row Reconstruction (Parsed Files) mapped into Directory Groups
         for file_data in parsed_files:
@@ -216,6 +287,9 @@ class AuditRecorder:
                 folder_archetype_counts[d_name] = {}
             folder_archetype_counts[d_name][arch] = folder_archetype_counts[d_name].get(arch, 0) + 1
 
+            for fa, fc in (telemetry.get("function_archetype_mix") or {}).items():
+                function_archetype_totals[fa] = function_archetype_totals.get(fa, 0) + fc
+
             mitigation_data = telemetry.get("mitigation_telemetry", {})
 
             # THE FIX: Cast suppression lists to dictionary tallies to support inline galaxyscope:ignores
@@ -225,6 +299,10 @@ class AuditRecorder:
             formatted_mitigations = {
                 key.replace("_", " ").title(): f"{val} instances" for key, val in mitigation_data.items() if val > 0
             }
+            # #2813: section 7 below carries raw counts; the proximity-weighted figure
+            # each of those counts used to carry is shown here, beside its tally.
+            for key, val in (telemetry.get("weighted_signals") or {}).items():
+                formatted_mitigations[f"{self.format_label(key)} (Weighted View)"] = val
 
             # Assemble the individual artifact profile
             file_profile = {
@@ -242,13 +320,16 @@ class AuditRecorder:
                         if isinstance(telemetry.get("archetype_fingerprint"), dict)
                         else {}
                     ),
-                    "File Archetype": telemetry.get("local_archetype", "N/A"),
+                    "File Archetype": telemetry.get("local_archetype") or "N/A",
+                    "Composition Archetype": telemetry.get("composition_file_archetype", "N/A"),
+                    "Composition Fit (Z-Score)": round(float(telemetry.get("composition_file_z", 0.0) or 0.0), 3),
                     "File Drift (Z-Score)": telemetry.get("local_drift", 0.0),
                     "File Fingerprint": (
                         {k: round(v, 3) for k, v in telemetry.get("local_fingerprint", {}).items()}
                         if isinstance(telemetry.get("local_fingerprint"), dict)
                         else {}
                     ),
+                    "Function Archetype Mix": telemetry.get("function_archetype_mix", {}),
                     "Total LOC": file_data.get("total_loc", 0),
                     "Coding LOC": file_data.get("coding_loc", 0),
                     "Documentation LOC": file_data.get("doc_loc", 0),
@@ -271,6 +352,14 @@ class AuditRecorder:
                         "Control Flow Ratio": f"{round((func.get('control_flow_ratio') or func.get('cf_ratio') or 0.0) * 100, 1)}%",
                         "Start Line": func.get("start_line", 0),
                         "End Line": func.get("end_line", 0),
+                        # #2908 Phase 2: per-unit is_public/is_documented
+                        # (docs/risk_documentation_contract.md) and the
+                        # existing reflection hit_vector entry, surfaced per
+                        # function for the first time -- no existing key in
+                        # this block moves.
+                        "Is Public": int(func.get("is_public", False)),
+                        "Is Documented": int(func.get("is_documented", False)),
+                        "Reflection Hits": func.get("hit_vector", {}).get("reflection_metaprogramming", 0),
                     }
                     for func in file_data.get("functions", [])
                     if isinstance(func, dict)
@@ -297,6 +386,12 @@ class AuditRecorder:
                 },
                 "9. Extracted Dependencies": sorted(list(file_data.get("raw_imports", []))),
             }
+
+            # #3200/#3201/#3246: the named mainframe facts, present only for the
+            # COBOL/JCL files that carry them -- absent from every other artifact.
+            mainframe_facts = self._mainframe_facts_block(file_data)
+            if mainframe_facts:
+                file_profile["10. Mainframe System Facts"] = mainframe_facts
 
             # Map the file into its parent directory group
             if d_name not in pretty_directory_groups:
@@ -354,17 +449,17 @@ class AuditRecorder:
             )
 
         # 3.2 Append structurally bypassed artifacts to the local output list
-        for anon_path in summary.get("unparsable_files", {}).get("unparsable_artifacts", []):
-            pretty_unparsable.append(
-                {
-                    "Path": anon_path,
-                    "Forensic Category": "Parser Bypass",
-                    "Diagnostic Reason": "Engine Bypass (Dense Structure or Unrecognized Syntax)",
-                    "Size": "Unknown (Parser Bypass)",
-                    "Identity Confidence": "0.0% (Scan Yielded No Data)",
-                    "Discovery Proof": "Structural Signature Extractor Shielding",
-                }
-            )
+        pretty_unparsable.extend(
+            {
+                "Path": anon_path,
+                "Forensic Category": "Parser Bypass",
+                "Diagnostic Reason": "Engine Bypass (Dense Structure or Unrecognized Syntax)",
+                "Size": "Unknown (Parser Bypass)",
+                "Identity Confidence": "0.0% (Scan Yielded No Data)",
+                "Discovery Proof": "Structural Signature Extractor Shielding",
+            }
+            for anon_path in summary.get("unparsable_files", {}).get("unparsable_artifacts", [])
+        )
 
         # ==========================================================
         # 4. FORENSIC SECURITY & VULNERABILITY AUDIT
@@ -386,6 +481,7 @@ class AuditRecorder:
             "sec_homoglyphs": "Unicode Homoglyphs & Typosquatting",
             "sec_unicode_steganography": "Invisible Unicode Payload Smuggling (GlassWorm-style)",
             "sec_self_propagation": "Self-Referential File Copy/Overwrite (Worm Pattern)",
+            "sec_db_hooks": "Raw Database Sinks",
         }
 
         quarantined_files = []
@@ -540,12 +636,36 @@ class AuditRecorder:
 
         summary["Global Architectural Fingerprint"] = pretty_global_fingerprint
 
+        # Repo-wide function-archetype distribution (rolled up from every file's mix),
+        # so the deterministic audit carries the function taxonomy as a percentage share.
+        _fn_total = sum(function_archetype_totals.values())
+        if _fn_total:
+            summary["Function Archetype Distribution"] = {
+                fa: f"{round(100 * ct / _fn_total, 1)}% ({ct})"
+                for fa, ct in sorted(function_archetype_totals.items(), key=lambda kv: (-kv[1], kv[0]))
+            }
+
         # Formalize the Repository Ecosystem Baseline mapping
         macro = summary.get("repo_macro_species", {})
         if macro:
             summary["Repository Ecosystem Baseline (Architecture)"] = {
                 "Classification": macro.get("name", "Unclassified"),
                 "Architectural Drift (Z-Score)": macro.get("z_score", 0.0),
+            }
+
+        # Composition archetypes (function-stoichiometry taxonomy): the repo's archetype
+        # and its file-archetype distribution as % shares.
+        _inner = summary.get("summary", {})
+        if _inner.get("repo_composition_archetype"):
+            summary["Repository Composition Archetype"] = _inner["repo_composition_archetype"]
+            summary["Repository Composition Fit (Z-Score)"] = round(
+                float(_inner.get("repo_composition_z", 0.0) or 0.0), 3
+            )
+        _fcd = _inner.get("file_composition_distribution", {})
+        _fcd_total = sum(_fcd.values())
+        if _fcd_total:
+            summary["File Composition Distribution"] = {
+                fa: f"{round(100 * ct / _fcd_total, 1)}% ({ct})" for fa, ct in _fcd.items()
             }
 
         mission_audit = {

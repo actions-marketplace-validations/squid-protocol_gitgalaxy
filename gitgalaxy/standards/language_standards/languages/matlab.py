@@ -45,7 +45,7 @@ DEFINITION: dict[str, Any] = {
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # branch: MATLAB control flow. EXCLUDES 'error' and 'rethrow' (bailout_hits).
-        "branch": re.compile(r"\b(?:if|elseif|else|switch|case|otherwise|for|while|try|catch)\b|&&|\|\||~="),
+        "branch": re.compile(r"\b(?:if|elseif|else|switch|case|otherwise|for|while)\b|&&|\|\||~="),
         # args: Captures standard function inputs and return signatures `function [out1, out2] = myFun(in1, in2)`.
         # CRITICAL GUARDRAIL: Safely bounds `\([^)]*\)` and `\[[^\]]*\]`.
         # #1209: the trailing input-parameter parens wrapped in its own
@@ -95,13 +95,14 @@ DEFINITION: dict[str, Any] = {
         "safety_bypasses": re.compile(r'\b(?:eval|evalin|assignin|evalc)\b|\bwarning[ \t]*\([ \t]*[\'"]off[\'"]'),
         # danger: Destructive workspace actions and OS bypasses.
         # CRITICAL GUARDRAIL: Raw terminal prints (`disp`) strictly routed to print_hits.
+        # #2878 contract C5: `clear all`/`clc` reset the workspace (cleanup's, batch4 dual retired).
         "high_risk_execution": re.compile(
-            r"\b(?:clear[ \t]+all|clc|system|dos|unix|exit|quit|keyboard)\b|^[ \t]*![ \t]*[a-zA-Z_]",
+            r"\b(?:system|dos|unix|exit|quit|keyboard)\b|^[ \t]*![ \t]*[a-zA-Z_]",
             re.M | re.I,
         ),
         # io: Interactions with disk, hardware, or web.
         "io": re.compile(
-            r"\b(?:load|save|fopen|fclose|fread|fwrite|fscanf|webread|webwrite|urlread|urlwrite|readtable|writetable|readmatrix|writematrix|serialport|imread|imwrite|audioread)\b"
+            r"\b(?:load|save|fopen|fread|fwrite|fscanf|webread|webwrite|urlread|urlwrite|readtable|writetable|readmatrix|writematrix|serialport|imread|imwrite|audioread)\b"
         ),
         # api: Public APIs. We track explicit Methods blocks that don't declare private access.
         # BUG FIX 1: the bare `methods` literal had no trailing boundary at all
@@ -119,8 +120,19 @@ DEFINITION: dict[str, Any] = {
         # anywhere in a (possibly multi-attribute) attribute list, while still
         # matching bare `methods` (implicitly public by MATLAB default) and
         # explicit `Access = public`. Bounded to 200 chars per Rule 5.
+        # BUG FIX #2730 (api contract): a MATLAB *function file* has no
+        # visibility syntax at all -- the function it declares is callable by
+        # name from anywhere on the path -- so a corpus of function files
+        # measured 0 against a rule that could only see a `classdef` methods
+        # block. Added the column-0 `function` declaration as MATLAB's
+        # file-level surface (the documented fallback family, see
+        # docs/api_rule_contract.md). Column 0 deliberately: a `function`
+        # inside a `classdef` is indented under its `methods` block and is
+        # already counted by the alternative above, so the two cannot
+        # double-count the same declaration.
         "api": re.compile(
-            r"^[ \t]*methods\b(?![ \t]*\([^)]{0,200}\bAccess[ \t]*=[ \t]*(?:private|protected)\b)",
+            r"^[ \t]*methods\b(?![ \t]*\([^)]{0,200}\bAccess[ \t]*=[ \t]*(?:private|protected)\b)|"
+            r"^function\b",
             re.M | re.I,
         ),
         # flux: Mutation of state via assignment.
@@ -137,9 +149,28 @@ DEFINITION: dict[str, Any] = {
         "state_mutation": re.compile(
             r"^[ \t]*[a-zA-Z_]\w*"
             r"(?:\((?:[^()]|\([^()]*\))*\)|\{(?:[^{}]|\{[^{}]*\})*\}|\.[a-zA-Z_]\w*){0,5}"
-            r"[ \t]*=[ \t]*[^=]|\b(?:clear|clearvars)\b",
+            # #2765 contract: `clear`/`clearvars` release state and are the `cleanup`
+            # rule's tokens (count contract corollary 4); the write is the assignment.
+            r"[ \t]*=[ \t]*[^=]",
             re.M,
         ),
+        # #2654: MATLAB has no `return <value>` statement -- a function result
+        # IS an assignment to a variable named in the `function [out] = f(...)`
+        # signature. So the rule above charged every language-crucible and
+        # rosetta function one state_mutation just for RETURNING, the one
+        # language in the registry that pays for it (c/go/java's `return env;`
+        # costs nothing for the identical statement). The discriminator is not
+        # anything on the assignment's own line -- it is whether the enclosing
+        # function ever READS the variable back. `out = env;` in a body that
+        # never mentions `out` again is the return channel; runica.m's
+        # `weights = startweights;` in a body that reads `weights` throughout
+        # is genuine working state and still counts, as does any indexed or
+        # self-referential write (`out(i) = x`, `out = out + i`). See
+        # `_matlab_return_channel_offsets` in detector.py. Measured: the
+        # rosetta corpus drops 15 of 19 hits (all four files' `out = <arg>;`
+        # returns), eeglab drops 15 of 1321 (1.1%) and every one of those is a
+        # terminal `com = ''` / `varargout = {...}` / `h = uimenu(...)` binding.
+        "_scope_filters": {"state_mutation": "matlab_return_channel"},
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(r"^[ \t]*%[ \t]*(?:if|for|while|function|classdef)\b", re.M),
         # doc: Standard MATLAB Help text (`%%` sections) or typed annotations.
@@ -183,7 +214,11 @@ DEFINITION: dict[str, Any] = {
         "import": re.compile(r"^[ \t]*import[ \t]+[a-zA-Z0-9_.*]+", re.M),
         "_dependency_capture": re.compile(r"^[ \t]*import(?:[ \t]|\.\.\.[^\n]*\n)+([a-zA-Z0-9_.*]+)", re.M),
         # ownership: Standard MATLAB comment authorship signatures.
-        "ownership": re.compile(r"^[ \t]*%[ \t]*(?:Author|Created by|Copyright)[ \t]*:(.*)", re.M | re.I),
+        # #2882 contract: C2 `Copyright` out; `Authors:` joins
+        "ownership": re.compile(
+            r"^[ \t]*(?:%+\{?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.M | re.I,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -240,7 +275,10 @@ DEFINITION: dict[str, Any] = {
         # 45. immutability_locks (Immutability Constraints)
         "immutability_locks": re.compile(r"\bConstant\b"),
         # cleanup: Garbage collection and explicit file/handle destruction.
-        "cleanup": re.compile(r"\b(?:clear|clearvars|delete|close|fclose|onCleanup)\b"),
+        "cleanup": re.compile(
+            r"(?:^|[,;])[ \t]*(?:clear|clearvars|close|fclose|delete)\b(?![ \t]*=(?!=))|\b(?:delete|close|fclose|onCleanup)[ \t]*\(",
+            re.M,
+        ),  # #2888 C3: command form at statement position or call form; a bare token mid-expression is a name
         # 47. encapsulation (Encapsulation / Access Modifiers)
         "encapsulation": re.compile(r"Access[ \t]*=[ \t]*(?:private|protected)"),
         # 48. listeners (Event Listeners / Observers)
@@ -248,6 +286,10 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs) Safety Theater bypasses.
         "test_skip": re.compile(r"\b(?:assume|assumeFail|assumeTrue|assumeFalse)\b"),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (MATLAB Specifics) ---
+        # auth_middleware (#3004): contract-level absence. A numerical computing
+        # environment; authorization is the OS's or a database's, never the
+        # language's.
+        "auth_middleware": None,
         "serialization_parsing": re.compile(r"\b(jsondecode|jsonencode|xmlread|xmlwrite|load|save|readtable)\b"),
         "regex_execution": re.compile(r"\b(regexp|regexpi|regexprep)\b"),
         "time_date_logic": re.compile(r"\b(tic|toc|datetime|clock|now|pause|cputime)\b"),
@@ -261,6 +303,9 @@ DEFINITION: dict[str, Any] = {
         "ipc_rpc_bridges": re.compile(
             r"\b(system|dos|unix|tcpclient|tcpserver|parpool|parfor)\b|^[ \t]*!",
             re.M,
-        ),  # '!' is MATLAB's native shell escape
+        ),  # '!' is MATLAB's native shell escape,
+        # system_config_mutation (#3084): contract-level absence. numeric-
+        # computing environment; no host-configuration vocabulary of its own.
+        "system_config_mutation": None,
     },
 }

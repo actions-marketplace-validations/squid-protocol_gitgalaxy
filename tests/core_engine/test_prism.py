@@ -146,15 +146,15 @@ def test_prism_livecode_string_has_no_backslash_escape(prism_engine):
     (`"Android/*"`) opened a bogus block comment that blanked whole handlers.
     """
     content = (
-        'on escapeLabel pLabel\n'
+        "on escapeLabel pLabel\n"
         '   replace quote with "\\" & quote in pLabel\n'  # `"\\"` == string containing one backslash
-        '   return pLabel\n'
-        'end escapeLabel\n'
-        '\n'
-        'on doFilter\n'
+        "   return pLabel\n"
+        "end escapeLabel\n"
+        "\n"
+        "on doFilter\n"
         '   filter tItems with "Android/*"\n'  # `/*` here must NOT open a block comment
         '   put "keep me" into tResult\n'
-        'end doFilter\n'
+        "end doFilter\n"
     )
     result = prism_engine.split_streams(content, primary_lang="livecode")
     code = result["code_stream"]
@@ -275,7 +275,7 @@ def test_prism_positional_abap_quote_inside_string_literal_is_shielded(prism_eng
     """#259: ABAP's `"` comment delimiter must not split a `'...'` literal that
     contains a `"`; a real trailing `"` comment is still stripped."""
     code, lits = prism_engine._strip_positional_comments(
-        "    result = 'he said \"hi\"'. \" trailing comment", abap_mode=True
+        '    result = \'he said "hi"\'. " trailing comment', abap_mode=True
     )
     assert code.rstrip() == "    result = 'he said \"hi\"'."
     assert "trailing comment" in lits
@@ -1045,7 +1045,7 @@ def test_prism_line_exclusive_backslash_continued_string_interpolation():
     real_prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
     code = (
         'system "bundle exec dartsass \\\n'
-        '  #{@guides_dir}/assets/stylesrc/style.scss:#{@output_dir}/style.css \\\n'
+        "  #{@guides_dir}/assets/stylesrc/style.scss:#{@output_dir}/style.css \\\n"
         '  #{@guides_dir}/assets/stylesrc/print.scss"\n'
         "end\n"
         "\n"
@@ -1199,6 +1199,31 @@ def test_prism_scheme_string_literal_shielding():
     real_prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
     result = real_prism.split_streams('(display "this ; is not a comment")\n', "scheme")
     assert "this ; is not a comment" in result["code_stream"]
+
+
+def test_prism_scheme_char_literal_semicolon_is_not_a_comment():
+    """
+    #2674: `#\\;` is a char literal (cpnanopass.ss: `(write-char #\\; p)`), but
+    the family's `;` line-comment branch used to claim it and swallow the
+    rest of the line -- closing parens included -- so every paren-balanced
+    scan downstream ran one level deep for the rest of the file. The char
+    literal must survive verbatim, the real comment after it must still be
+    stripped, and `#\\"` must not open a string.
+    """
+    from gitgalaxy.standards.gitgalaxy_config import LEXICAL_FAMILY_HEURISTICS
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    real_prism = Prism(LEXICAL_FAMILY_HEURISTICS, LANGUAGE_DEFINITIONS)
+    src = '(write-char #\\; p) ; trailing comment\n(define q #\\") ; c2\n(define c #\\space)\n(display "a;b")\n'
+    result = real_prism.split_streams(src, "scheme")
+    code, comments = result["code_stream"], result["comment_stream"]
+    assert "(write-char #\\; p)" in code
+    assert '(define q #\\")' in code
+    assert "(define c #\\space)" in code
+    assert '"a;b"' in code
+    assert "trailing comment" not in code and "c2" not in code
+    assert "; trailing comment" in comments and "; c2" in comments
+    assert code.count("(") == code.count(")"), "char literals must not desync the paren balance"
 
 
 def test_prism_line_exclusive_no_longer_lists_scheme_block_tokens():

@@ -159,7 +159,9 @@ CHART_PATH = Path(__file__).resolve().parent.parent.parent / "docs" / "self_scan
 # (ledger_mod's "unvalidated cross-tool disagreement") -- this is a different evidentiary category
 # (single-source manual review, not multi-tool corroboration), not a stronger or weaker version of
 # the same claim, and the chart must never blur the two together.
-MANUAL_VERIFICATION_PATH = Path(__file__).resolve().parent.parent.parent / "docs" / "self_scan" / "manual_verification.json"
+MANUAL_VERIFICATION_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "docs" / "self_scan" / "manual_verification.json"
+)
 
 
 def _load_manual_verification() -> dict:
@@ -177,22 +179,31 @@ def _manual_verification_entry(manual_verification: dict, lang: str, symbol_type
     staleness is a signal to go re-verify and update the file by hand, not to guess."""
     return manual_verification.get(lang, {}).get(symbol_type)
 
-# The 45 languages with real structural signatures (see docs/language_status/README.md) --
-# NODE_MAPS's 30 tree-sitter-baselined languages plus the 15 GitGalaxy extracts from but
+
+# The 50 languages with real structural signatures (see docs/language_status/README.md) --
+# NODE_MAPS's 30 tree-sitter-baselined languages plus the 20 GitGalaxy extracts from but
 # tree-sitter has no grammar for (or, for groovy, has a grammar that loads but can't parse
 # real declarations -- see tree_sitter_accuracy_audit.py's NODE_MAPS exclusion comment).
+# The mainframe family (bms, db2_sql, hlasm, pli, rexx) joined the registry + corpus at
+# language-crucible v1.3.0 (#28); tree-sitter has no grammar for any of them, so -- like
+# jcl and sqlite already here -- they only surface on this chart via this list.
 _GG_ONLY_LANGS = (
     "abap",
     "ada",
     "agc_assembly",
     "assembly",
+    "bms",
     "cobol",
+    "db2_sql",
     "dockerfile",
     "embedded_python",
     "groovy",
+    "hlasm",
     "jcl",
     "livecode",
     "m4",
+    "pli",
+    "rexx",
     "scheme",
     "sqlite",
     "yacc",
@@ -201,8 +212,11 @@ _GG_ONLY_LANGS = (
 
 # See module docstring's CSS/HTML CLASS PANELS section -- class_start there targets
 # selector/tag-shaped entities, not OOP classes; excluded from class reconciliation entirely
-# (epic #1295 precedent), not scored and hidden.
-_CLASS_SCOPE_EXCLUDED_LANGS = frozenset({"css", "html"})
+# (epic #1295 precedent), not scored and hidden. Imported from detector.py, which is where
+# the decision is enforced, rather than kept as a third hand-copy of the same two names.
+from gitgalaxy.core.detector import (  # noqa: E402
+    _CLASS_EXTRACTION_OUT_OF_SCOPE_LANGS as _CLASS_SCOPE_EXCLUDED_LANGS,
+)
 
 # ARGS GRANULARITY: "args" doesn't mean the same unit across every language, even when a real
 # comparison tool exists for existence. See .claude/skills/tri-comparison-ledger-sweep/SKILL.md's
@@ -235,6 +249,10 @@ _CLASS_SCOPE_EXCLUDED_LANGS = frozenset({"css", "html"})
 # candidates at first glance and turned out to be ordinary recall bugs instead.
 ARGS_GRANULARITY: dict[str, str] = {
     "cobol": "program_level",
+    # css: not a recall bug -- the rule is `None` (#2893, a stated absence: CSS declares no
+    # callable, so no parameter surface). docs/language_status/css.md said "CSS has no
+    # parameter-list construct, so there is no args panel" long before the rule agreed.
+    "css": "none",
     "dockerfile": "none",
     "yaml": "none",
     "jcl": "none",
@@ -331,6 +349,10 @@ def run_pipeline(languages: list[str], verbose: bool = True) -> dict[str, Langua
         try:
             results = gather_language(lang)
         except SystemExit as e:
+            # Remember WHY, not just that it failed: run_ci_check must be able to tell a
+            # missing corpus from a scan that could not run at all (#2682 -- with galaxyscope
+            # off PATH this used to skip every language and still print "all OK").
+            data.awaiting_note = f"gather failed: {e}"
             if verbose:
                 print(f"tri_comparison_chart: {lang} -- gather failed ({e}), skipping")
             data.has_data = False
@@ -844,7 +866,9 @@ def render_chart(data_by_lang: dict[str, LanguageChartData]) -> str:
                     live_total = (
                         (gg_score.total_slots if gg_score is not None else None) if ranked else data.gg_args_found
                     )
-                    winner = _manual_verification_winner(manual_verification, lang, mv_key, live_total, data.available_tools)
+                    winner = _manual_verification_winner(
+                        manual_verification, lang, mv_key, live_total, data.available_tools
+                    )
                 if winner is None and ranked:
                     winner = _ledger_credited_lone_claimant_winner(
                         scores, data.available_tools, lang, symbol_type, ledger_metric
@@ -958,13 +982,22 @@ def _regressions(current: dict, baseline: dict) -> list[str]:
 def run_ci_check(lang: str, verbose: bool = True) -> int:
     data = run_pipeline([lang], verbose=verbose)[lang]
     if not data.has_data:
-        print(f"tri_comparison_chart: {lang} -- no corpus data available, skipping.")
-        return 0
+        # A baselined language with nothing to measure is a FAILURE in --ci, never a skip:
+        # the baseline proves corpus data existed when it was written, so "no data" here
+        # means the corpus is missing or galaxyscope could not run (#2682). Skipping used
+        # to turn either into a green "all OK" with zero languages actually checked.
+        print(
+            f"tri_comparison_chart: {lang} -- no corpus data available ({data.awaiting_note}); "
+            "a baselined language must be measurable in --ci, failing closed."
+        )
+        return 1
 
     current = _extract_precision(data)
     baseline = load_baseline(lang)
     if not baseline:
-        print(f"tri_comparison_chart: no baseline committed for {lang} -- run with --regenerate to create one, failing closed.")
+        print(
+            f"tri_comparison_chart: no baseline committed for {lang} -- run with --regenerate to create one, failing closed."
+        )
         return 1
 
     regressions = _regressions(current, baseline)
@@ -976,7 +1009,9 @@ def run_ci_check(lang: str, verbose: bool = True) -> int:
 
     improved = [k for k in _GATED_METRICS if k in current and k in baseline and current[k] > baseline[k]]
     if improved:
-        print(f"tri_comparison_chart: {lang} -- OK, improved on {', '.join(improved)} (consider --regenerate to lock it in).")
+        print(
+            f"tri_comparison_chart: {lang} -- OK, improved on {', '.join(improved)} (consider --regenerate to lock it in)."
+        )
     else:
         print(f"tri_comparison_chart: {lang} -- OK, matches committed baseline, no regressions.")
     return 0
@@ -990,7 +1025,9 @@ def run_regenerate(lang: str, verbose: bool = True) -> int:
 
     current = _extract_precision(data)
     if not current:
-        print(f"tri_comparison_chart: {lang} -- no gated precision metric available (no GitGalaxy score), nothing to write.")
+        print(
+            f"tri_comparison_chart: {lang} -- no gated precision metric available (no GitGalaxy score), nothing to write."
+        )
         return 1
 
     path = _get_baseline_path(lang)
@@ -1007,6 +1044,10 @@ def _all_baseline_langs() -> list[str]:
 
 
 def run_all_baseline_mode(languages: list[str], mode_fn, verbose: bool = True) -> int:
+    if not languages:
+        # "0 languages checked, all OK" is a failure wearing a pass (#2682).
+        print("tri_comparison_chart --ci: no languages to check -- refusing to report success.")
+        return 1
     failed = []
     for lang in languages:
         print(f"\n=== {lang} ===")

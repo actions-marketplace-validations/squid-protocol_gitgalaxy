@@ -82,11 +82,11 @@ CRUCIBLE_PATH = Path(os.environ.get("LANGUAGE_CRUCIBLE_PATH", REPO_ROOT.parent /
 # PyYAML is in BOTH modes' list, not just "full": since #1104 it's an optional
 # extra (`gitgalaxy[yaml]`), not a core pyproject.toml dependency, so a bare
 # `pip install -e .` no longer pulls it in for either venv. "zero-dependency"
-# here has only ever meant the optional networkx/tiktoken/pandas/xgboost stack
+# here has only ever meant the optional tiktoken/pandas/xgboost stack (networkx: none since #3041)
 # is absent -- the golden-master zero-dep fixture (tests/golden_master_zero_dep_audit.json)
 # expects PyYAML present even in that mode ("pyyaml": false, i.e. NOT missing).
 MODES = {
-    "full": ("full_precision", ["PyYAML", "networkx", "tiktoken", "pandas", "xgboost"]),
+    "full": ("full_precision", ["PyYAML", "tiktoken", "pandas", "xgboost"]),
     "zero": ("zero_dependency", ["PyYAML"]),
 }
 
@@ -271,13 +271,16 @@ def ensure_venv(mode_key: str, repo_root: Path = REPO_ROOT) -> Path:
 
 
 def run_check(mode_key: str, py: Path) -> bool:
+    # The wrapped pytest runs the full-corpus scan (GITGALAXY_GOLDEN_SCAN_TIMEOUT,
+    # default 600s) plus test overhead, so this outer cap must sit above it.
+    check_timeout = int(os.environ.get("GITGALAXY_GOLDEN_SCAN_TIMEOUT", "600")) + 180
     result = subprocess.run(
         [str(py), "-m", "pytest", "-m", "golden_crucible", "tests/test_golden_crucible.py", "-q"],
         cwd=REPO_ROOT,
         env=_venv_env(py),
         capture_output=True,
         text=True,
-        timeout=300,
+        timeout=check_timeout,
     )
     passed = result.returncode == 0
     label = MODES[mode_key][0]

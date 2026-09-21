@@ -46,7 +46,7 @@ _SOLIDITY_SIMPLE_CASES = [
     ("scientific", "keccak256(abi.encodePacked(x));", "sha256Hash = compute();"),
     ("reflection_metaprogramming", "fallback() external payable {}", "callingConvention = 1;"),
     ("import", 'import "./Token.sol";', "// import legacy code, no longer used"),
-    ("ownership", "// SPDX-License-Identifier: MIT", "// SPDX-FileCopyrightText: 2024 Acme"),
+    ("ownership", "/// @author Jane Doe", "// SPDX-License-Identifier: MIT"),  # #2882 C2: a license is not an owner
     ("planned_debt", "// TODO: optimize gas", "// See our TODOS backlog for details"),
     ("fragile_debt", "// HACK: workaround for reentrancy", "// this approach is a bit hacky"),
     ("spec_exposure", "// ERC-20 compliant", "ERC721 compliant"),
@@ -82,43 +82,39 @@ def test_solidity_signature_positive_and_negative(signature, positive, negative)
         )
 
 
-
 _SOLIDITY_ADVERSARIAL_CASES = [
     # --- branch ---
     ("branch", "uint256 x = a ? b : c;", "uint256 amount = 5;"),
-    ("branch", "try feed.getData(token) returns (uint v) {", "target.call{value: 1 ether}(\"\");"),
+    ("branch", "do { x--; } while (x > 0);", "try feed.getData(token) returns (uint v) {"),  # 2822 corollary 1
     ("branch", "if\n(x)\n{", "assembly { let x := 5 }"),
-    ("branch", "while(true){}", "string memory name = \"foo:bar\";"),
-    ("branch", "catch Error(string memory reason) {", "uint256[10] memory arr;"),
-
+    ("branch", "while(true){}", 'string memory name = "foo:bar";'),
+    ("structural_boundaries", "continue;", "amount = 5;"),  # 2832: unconditional transfer, relocated to boundaries
     # --- args ---
     ("args", "function\ntransfer\n(address to) public", "transfer(to, amount);"),
     ("args", "modifier onlyOwner\n() {", "emit Transfer(msg.sender);"),
     ("args", "event Transfer(\naddress indexed from,\naddress indexed to\n);", "revert Unauthorized(msg.sender);"),
-    ("args", "error Unauthorized\n(\naddress caller\n);", "require(x > 0, \"error\");"),
+    ("args", "error Unauthorized\n(\naddress caller\n);", 'require(x > 0, "error");'),
     ("args", "constructor\n(\n) payable", "if (x) { return; }"),
-
     # --- func_start ---
     ("func_start", "    function \n transfer \n(address to) public {", "transfer(to);"),
     ("func_start", "\tmodifier\nonlyOwner\n() {", "functionType = 5;"),
     ("func_start", "event\nTransfer\n(", "eventually = true;"),
     ("func_start", "error\nUnauthorized\n(", "    // function foo() {"),
     ("func_start", "    fallback\n(\n)\nexternal", "fallbackFn();"),
-
     # --- class_start ---
     ("class_start", "contract Token\nis\nERC20 {", "// contract Token {"),
-    ("class_start", "abstract  contract  Token \n{", "contractName = \"Token\";"),
+    ("class_start", "abstract  contract  Token \n{", 'contractName = "Token";'),
     ("class_start", "interface\nIToken\n{", "contractingParty = 0x0;"),
     ("class_start", "library\nMath\n{", "libraryAddress = 0x123;"),
     ("class_start", "contract\nToken\n \nis\nERC20\n{", "abstracted = true;"),
-
     # --- structural_boundaries ---
-    ("structural_boundaries", "pragma\nsolidity\n^0.8.20;", "pragmaVersion = \"0.8\";"),
+    ("structural_boundaries", "pragma\nsolidity\n^0.8.20;", 'pragmaVersion = "0.8";'),
     ("structural_boundaries", "uint256\npublic\nconstant", "uint256Amount = 5;"),
     ("structural_boundaries", "mapping\n(\naddress\n=>\nuint256\n)", "addressBook[msg.sender];"),
     ("structural_boundaries", "struct\nUser\n{", "structData = 0;"),
     ("structural_boundaries", "enum\nState\n{", "enumValue = 1;"),
 ]
+
 
 @pytest.mark.parametrize("signature,positive,negative", _SOLIDITY_ADVERSARIAL_CASES)
 def test_solidity_signature_adversarial(signature, positive, negative):
@@ -198,7 +194,8 @@ def test_solidity_ipc_rpc_bridges_boundary_regressions():
         "the idiomatic spaced .call{value: ...} form still didn't match"
     )
     assert pattern.search('target.call{value:amount}("");')
-    assert pattern.search("emit Transfer(from, to, amount);"), "a real multi-character event name still didn't match"
+    # #2898: `emit Event(` is events' token alone now -- the ipc arm was removed.
+    assert not pattern.search("emit Transfer(from, to, amount);")
     assert pattern.search("target.delegatecall(data);")
     assert pattern.search("target.staticcall(data);")
     assert pattern.search("selfdestruct(payable(owner));")
@@ -269,3 +266,56 @@ def test_solidity_explicit_casts_and_pointers_no_false_collision():
     assert not casts.search("uint256 memory x;"), "explicit_casts incorrectly matched a memory location keyword"
     assert pointers.search("uint256 memory arr;")
     assert not pointers.search("uint256(x);"), "pointers incorrectly matched an explicit cast"
+
+
+def test_solidity_return_not_counted_as_branch_regression():
+    """#2545: `return` must not phantom-count as a branch -- no checked sibling
+    language counts bare return. Moved to structural_boundaries (not just deleted,
+    since solidity had no other rule tracking it)."""
+    branch = SOLIDITY_RULES["branch"]
+    structural = SOLIDITY_RULES["structural_boundaries"]
+
+    assert not branch.search("return x;"), "bare return must not count as branch"
+    assert not branch.search("function f() public returns (uint) { return 1; }"), (
+        "return in a real function must not count as branch"
+    )
+    assert branch.search("if (x) return 1;"), "the real if must still count as branch"
+    assert len(branch.findall("if (x) return 1;")) == 1, "only the if should match, not the return"
+    assert structural.search("return x;"), "return must now be tracked via structural_boundaries"
+
+
+def test_solidity_structural_boundaries_redos_immune_after_return_addition():
+    assert_redos_immune(SOLIDITY_RULES["structural_boundaries"], "return " * 20000, timeout_sec=3.0)
+
+
+def test_solidity_doc_block_and_line_marker_count_once_regression():
+    """
+    #2672: `/\\*\\*`/`///` and the NatSpec tags (`@param`, `@notice`, ...)
+    were independent alternatives, so one NatSpec comment counted doc
+    proportional to its tag density -- the #2658 shape. Block form pairs
+    into a single bounded (0,15000 chars) non-greedy span; the line-marker
+    form (`///`) now swallows the rest of its line so a tag on the same
+    line as the marker is one hit, not two.
+    """
+    doc = SOLIDITY_RULES["doc"]
+
+    block = "/**\n * @param argv probe input\n */\n"
+    assert len(doc.findall(block)) == 1, "a single NatSpec block must count once, not once per tag"
+
+    one_line = "/// @param flag the probe input\n"
+    assert len(doc.findall(one_line)) == 1, "a single `///` line with a tag must count once, not twice"
+
+    two_lines = "/// @notice does a thing\n/// @param flag the probe input\n"
+    assert len(doc.findall(two_lines)) == 2, "two `///` lines still count once per line (explicit non-goal)"
+
+
+def test_solidity_doc_bare_tag_outside_marker_still_counts_regression():
+    """#2672: a NatSpec tag outside any `///`/`/**` marker must still count."""
+    doc = SOLIDITY_RULES["doc"]
+    assert doc.search("@dev standalone tag outside any doc comment")
+
+
+def test_solidity_doc_block_redos_immune_regression():
+    """#2672 ReDoS probes: unterminated `/**` and a very long unterminated `///` line must fail closed quickly."""
+    assert_redos_immune(SOLIDITY_RULES["doc"], "/**" + "x" * 200000, timeout_sec=3.0)
+    assert_redos_immune(SOLIDITY_RULES["doc"], "///" + "x" * 200000, timeout_sec=3.0)

@@ -44,7 +44,7 @@ _SQLITE_SIMPLE_CASES = [
     ("safety", "CREATE TABLE t (id INTEGER PRIMARY KEY, CHECK (id > 0));", "SELECT * FROM t;"),
     ("safety_bypasses", "DROP TABLE IF EXISTS staging;", "CREATE TABLE staging (id INTEGER);"),
     ("high_risk_execution", ".shell ls -la", "SELECT 1;"),
-    ("io", "SELECT * FROM users;", "BEGIN TRANSACTION;"),
+    ("io", "SELECT writefile('out.bin', 1);", "SELECT * FROM users;"),
     ("api", "CREATE VIEW active_users AS SELECT * FROM users;", "CREATE TABLE users (id INTEGER);"),
     ("state_mutation", "UPDATE users SET status = 'inactive' WHERE id = 1;", "SELECT * FROM users;"),
     ("dead_code", "-- SELECT * FROM old_table", "-- This is just a comment"),
@@ -90,7 +90,6 @@ _SQLITE_SIMPLE_CASES = [
     ("regex_execution", "SELECT * FROM t WHERE x REGEXP '^a';", "SELECT * FROM t WHERE x = 'a';"),
     ("time_date_logic", "SELECT datetime('now');", "SELECT 1;"),
     ("ipc_rpc_bridges", "ATTACH DATABASE 'other.db' AS other;", "SELECT 1;"),
-
     # ==========================================
     # ADVERSARIAL DEEP CASES
     # ==========================================
@@ -101,7 +100,6 @@ _SQLITE_SIMPLE_CASES = [
     ("branch", "SELECT IIF(x>0, 'A', 'B')", "SELECT x_iif FROM t"),
     ("branch", "SELECT x FROM t HAVING COUNT(*) > 1", "SELECT having_clause FROM t"),
     ("branch", "SELECT CASE x WHEN 1 THEN 2 ELSE 3 END", "SELECT end_time FROM t"),
-
     # args
     ("args", "WITH recursive my_cte (col1, col2) AS (SELECT 1, 2)", "WITH my_cte AS (SELECT 1, 2)"),
     ("args", "SELECT * FROM t WHERE id IN (SELECT id FROM other)", "SELECT * FROM t WHERE id = 1"),
@@ -110,7 +108,6 @@ _SQLITE_SIMPLE_CASES = [
     ("args", "SELECT * FROM t WHERE id = @param_name", "SELECT param_name FROM t"),
     ("args", "SELECT * FROM t WHERE id = $param_name", "SELECT param_name FROM t"),
     ("args", "SELECT * FROM t WHERE id = :param_name", "SELECT param_name FROM t"),
-
     # structural_boundaries
     ("structural_boundaries", "A INNER JOIN B", "UPDATE t SET inner_join_val = 1"),
     ("structural_boundaries", "A LEFT JOIN B", "UPDATE t SET left_join_val = 1"),
@@ -123,21 +120,19 @@ _SQLITE_SIMPLE_CASES = [
     ("structural_boundaries", "SELECT ROW_NUMBER() OVER (PARTITION BY x)", "UPDATE t SET partition_by_val = 1"),
     ("structural_boundaries", "SELECT a FROM t GROUP BY a", "UPDATE t SET group_by_val = 1"),
     ("structural_boundaries", "SELECT a FROM t ORDER BY a", "UPDATE t SET order_by_val = 1"),
-
     # func_start
     ("func_start", "CREATE TRIGGER IF NOT EXISTS main.my_trig AFTER INSERT", "CREATE TABLE main_my_trig (id INT)"),
     ("func_start", "CREATE TEMP VIEW [my view] AS SELECT 1", "CREATE TABLE temp_view (id INT)"),
     ("func_start", "CREATE UNIQUE INDEX `my idx` ON t(a)", "CREATE TABLE unique_index (id INT)"),
-    ("func_start", "CREATE TRIGGER \"my trig\" BEFORE UPDATE", "CREATE TABLE my_trig (id INT)"),
+    ("func_start", 'CREATE TRIGGER "my trig" BEFORE UPDATE', "CREATE TABLE my_trig (id INT)"),
     ("func_start", "CREATE VIEW IF NOT EXISTS v AS SELECT 1", "CREATE TABLE view_if_not_exists (id INT)"),
     ("func_start", "CREATE \n TRIGGER \n trg \n AFTER", "CREATE TABLE trg (id INT)"),
-
     # class_start
     ("class_start", "CREATE TABLE IF NOT EXISTS main.[my table] (id INT)", "CREATE VIEW main.[my table] AS SELECT 1"),
     ("class_start", "CREATE TEMP TABLE `my table` (id INT)", "CREATE VIEW temp_table AS SELECT 1"),
     ("class_start", "CREATE VIRTUAL TABLE t USING fts5", "CREATE VIEW virtual_table AS SELECT 1"),
     ("class_start", "CREATE \n TABLE \n IF NOT EXISTS \n tbl (id INT)", "CREATE VIEW tbl AS SELECT 1"),
-    ("class_start", "CREATE TABLE \"table with spaces\" (id INT)", "CREATE VIEW \"table with spaces\" AS SELECT 1"),
+    ("class_start", 'CREATE TABLE "table with spaces" (id INT)', 'CREATE VIEW "table with spaces" AS SELECT 1'),
 ]
 
 
@@ -192,8 +187,8 @@ def test_sqlite_high_risk_execution_dot_command_leading_boundary_and_case_regres
        of the CLI's process-killing/shell-escape commands never matched at
        all.
     2. The rule also had no `re.I` flag at all (every sibling Phase-2 rule
-       does), so even the keyword alternatives (`PRAGMA legacy_alter_table`,
-       `DROP DATABASE`) were silently case-sensitive-only and missed
+       does), so even the keyword alternative (`DROP DATABASE`; the
+       `PRAGMA legacy_alter_table` alternative left in #2878, C5) was silently case-sensitive-only and missed
        lowercase SQL, which is extremely common in real migration scripts.
 
     Fixed by pulling the dot-commands out into a `^[ \\t]*\\.` anchored
@@ -206,25 +201,25 @@ def test_sqlite_high_risk_execution_dot_command_leading_boundary_and_case_regres
     assert pattern.search(".system ls"), ".system still didn't match"
     assert pattern.search(".exit"), ".exit still didn't match"
     assert pattern.search(".quit"), ".quit still didn't match"
-    assert pattern.search("pragma legacy_alter_table=1;"), "lowercase PRAGMA still didn't match"
+    assert not pattern.search("pragma legacy_alter_table=1;"), "#2878 C5: a compatibility pragma is not a site"
     assert pattern.search("drop database foo;"), "lowercase DROP DATABASE still didn't match"
     assert pattern.search("DROP DATABASE foo;"), "uppercase form regressed"
 
 
 def test_sqlite_io_dot_command_leading_boundary_regression():
     """
-    Regression test: `.import`/`.output`/`.dump`/`.read` all start with `.`
-    (non-word), so the shared leading `\\b` inside `\\b(...)\\b` could only
-    fire when a word char immediately preceded the `.` -- never true for
-    how these sqlite3 CLI I/O dot-commands are actually written (always
-    the first token on a line). All four never matched at all.
+    Regression test: the CLI dot-commands start with `.` (non-word), so a
+    shared leading `\\b` inside `\\b(...)\\b` silenced them entirely (the
+    original bug). Since #2841 io keeps only the dot-commands that move data
+    OUT of the engine (C3); `.read`/`.import` are import's hits alone (C2),
+    and DML is in-engine computation, not io.
     """
     pattern = SQLITE_RULES["io"]
-    assert pattern.search(".import data.csv mytable"), ".import still didn't match"
     assert pattern.search(".output out.txt"), ".output still didn't match"
     assert pattern.search(".dump"), ".dump still didn't match"
-    assert pattern.search(".read script.sql"), ".read still didn't match"
-    assert pattern.search("SELECT * FROM users;"), "SELECT regressed"
+    assert not pattern.search(".read script.sql"), ".read is import's hit alone"
+    assert not pattern.search(".import data.csv mytable"), ".import is import's hit alone"
+    assert not pattern.search("SELECT * FROM users;"), "DML is not a boundary crossing"
 
 
 def test_sqlite_test_dot_command_leading_boundary_regression():
@@ -435,8 +430,9 @@ def test_sqlite_ambiguity_sweep_shared_literals_are_not_bugs():
       `STRICT`: a STRICT table declaration is simultaneously a structural
       qualifier and an integrity/immutability guarantee -- all three
       rules deliberately list it.
-    - `structural_boundaries` <-> `io` on `SELECT`: a SELECT is
-      simultaneously query structure and a read I/O operation.
+    - `structural_boundaries` owns `SELECT` alone since #2841 (C3): a
+      .sql script executes inside the engine, so DML is computation; io
+      is what leaves the engine (readfile/writefile, output dot-commands).
     - `func_start` <-> `api` on `CREATE VIEW`: a view is simultaneously
       executable query logic and explicitly public surface area.
     - `func_start` <-> `events` on `CREATE TRIGGER`: a trigger is
@@ -473,7 +469,7 @@ def test_sqlite_ambiguity_sweep_shared_literals_are_not_bugs():
 
     select_stmt = "SELECT * FROM t;"
     assert structural_boundaries.search(select_stmt)
-    assert io.search(select_stmt)
+    assert not io.search(select_stmt)
 
     view = "CREATE VIEW active_users AS SELECT * FROM users;"
     assert func_start.search(view)

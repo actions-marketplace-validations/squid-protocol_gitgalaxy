@@ -35,9 +35,22 @@ DEFINITION: dict[str, Any] = {
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
-        # Decisions and logical jumps. EXCLUDES fatal alarms (bailout_hits).
+        # Decisions only. EXCLUDES fatal alarms (bailout_hits) and, since #2764,
+        # every UNCONDITIONAL control transfer.
+        #
+        # BUG FIX #2764 (sibling of assembly's, same issue): this alternation used
+        # to carry `TC|TCF|TCR|CALL|GOTO` (unconditional transfers -- TC is the
+        # AGC's subroutine call) and `RESUME|RETURN` (returns) next to the real
+        # conditionals. Only BZF/BZMF/BZE/BMN/BPL/BMI/CCS/BVBZ/OVSK test anything.
+        # `branch` feeds the decision-density metrics (avg_func_complexity,
+        # func_internal_density, cog_raw, control_flow_ratio, risk_cognitive_load)
+        # plus #2546's x3 cascading-flux amplifier, so counting calls and returns
+        # inflated all of them with subroutine count. Relocated to
+        # `structural_boundaries` (Rule 3) per #2545's "relocate, not delete".
+        # CCS (Count, Compare and Skip -- the AGC's one real multi-way test) was
+        # double-counted in BOTH rules and is now claimed by `branch` alone.
         "branch": re.compile(
-            r"\b(TC|TCF|BZF|BZMF|BZE|BMN|BPL|BMI|CCS|RESUME|RETURN|TCR|OVSK|BVBZ|CALL|GOTO)\b",
+            r"\b(BZF|BZMF|BZE|BMN|BPL|BMI|CCS|OVSK|BVBZ)\b",
             re.I,
         ),
         # 2. args (Parameters / Coupling)
@@ -56,9 +69,15 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # 3. linear (Sequential Boundaries)
-        # Standard instruction flow and data markers.
+        # Standard instruction flow, data markers, and unconditional control
+        # transfer (#2764: TC/TCF/TCR/CALL/GOTO calls-and-jumps and
+        # RESUME/RETURN returns moved here out of `branch` -- structure, not
+        # decisions). CCS left `structural_boundaries` in the same change: it is a
+        # real conditional and was the one token counted by both rules.
+        # Longest-first on TCF|TCR|TC so the alternation does not backtrack.
         "structural_boundaries": re.compile(
-            r"\b(CA|CAF|CS|TS|DXCH|LXCH|QXCH|XCH|AD|SU|MULT|DV|MASK|CCS|SETLOC|BANK|COUNT|ADRES|OCTAL|2OCT|DEC|2DEC|BLOCK|ERASE)\b",
+            r"\b(CA|CAF|CS|TS|DXCH|LXCH|QXCH|XCH|AD|SU|MULT|DV|MASK|SETLOC|BANK|COUNT|ADRES|OCTAL|2OCT|DEC|2DEC|BLOCK|ERASE"
+            r"|TCF|TCR|TC|CALL|GOTO|RESUME|RETURN)\b",
             re.I,
         ),
         # 4. func_start (Executable Logic Anchors)
@@ -117,10 +136,16 @@ DEFINITION: dict[str, Any] = {
         "io": re.compile(r"\b(DSKY|CHANNEL|READ|WRITE|V\d+N\d+|OUT\d+|IN\d+)\b", re.I),
         # 10. api (Public Surface Area)
         # Global labels and externally visible entry points.
-        "api": re.compile(
-            r"^[A-Z0-9_-]+\s+EQUALS|^[ \t]*(?:SUBROUTINE|BEXT|EXTEND)\b",
-            re.M | re.I,
-        ),
+        # BUG FIX #2730 (api contract): the second alternative counted
+        # `EXTEND` and `BEXT`, which are AGC *instructions* (the extracode
+        # prefix and a bank-extended branch), not declarations that make a
+        # name visible outside the file -- 323 of the crucible corpus's 367
+        # matches were the bare `EXTEND` opcode. `SUBROUTINE` never fired
+        # at all (0 occurrences corpus-wide). Removed the whole alternative;
+        # `EQUALS` (the erasable/symbol equate that publishes a label) is
+        # AGC assembly's real named-surface declaration and is what
+        # docs/api_rule_contract.md records for this language.
+        "api": re.compile(r"^[A-Z0-9_-]+\s+EQUALS", re.M | re.I),
         # 11. flux (State Mutation)
         # Direct state mutation and register storage.
         "state_mutation": re.compile(
@@ -131,7 +156,7 @@ DEFINITION: dict[str, Any] = {
         "dead_code": re.compile(r"(?i)#[ \t]*(?:TCF|CCS|INDEX|BZF|BZN|CA|CS)\b"),
         # 13. doc (Structured Documentation)
         "doc": re.compile(
-            r"^#\s*(?:Page|MOD\s+(?:BY|NO)|FUNCTIONAL\s+DESCRIPTION|SUBROUTINE|PURPOSE|CALLING\s+SEQUENCE|AUTHOR|PROGRAM|REVISION)",
+            r"^#\s*(?:Page|MOD\s+(?:BY|NO)|FUNCTIONAL\s+DESCRIPTION|SUBROUTINE|PURPOSE|CALLING\s+SEQUENCE|PROGRAM|REVISION)",
             re.M | re.I,
         ),
         # 14. test (Testing & Assertions)
@@ -155,8 +180,20 @@ DEFINITION: dict[str, Any] = {
         # 18. globals (Global / Shared State)
         # Memory division markers.
         "globals": re.compile(
-            r"\b(ERASABLE\s+MEMORY|FIXED\s+MEMORY|WORKING-STORAGE|COMMON|FLAGWRD\d+|BIT\d+)\b",
-            re.I,
+            # #2858 contract corollary 2: `CAF BIT14` references a fixed constant
+            # (the bit-mask table), not shared erasable; a flagword is the shared
+            # state every program section reads and writes.
+            # #2859: `ERASABLE MEMORY`/`FIXED MEMORY`/`WORKING-STORAGE` were never
+            # AGC vocabulary (they only ever matched comment prose, which the code
+            # stream strips) and bare `COMMON` matched a routine label (`TCF COMMON`).
+            # The unambiguous program-scope declaration is erasable allocation
+            # (`NAME ERASE n`): a named cell of shared read/write RAM. The `EQUALS`/`=`
+            # equate is deliberately NOT counted -- it binds a symbol to a fixed
+            # value/address, which C2 reads as a constant reference, and the rosetta
+            # control corpus plants it as a decoy (b/c/main globals = 0). Flagword
+            # references stay (C2 ambient shared state).
+            r"\bFLAGWRD\d+\b|^[A-Za-z0-9][\w$#]*[ \t]+ERASE\b",
+            re.I | re.M,
         ),
         # 19. decorators
         "decorators": None,
@@ -174,14 +211,20 @@ DEFINITION: dict[str, Any] = {
         # Self-modifying logic and VM entry.
         "reflection_metaprogramming": re.compile(r"\b(INDEX|TC\s+INTPRET|DXCH\s+0000|RVQ)\b", re.I),
         # 24. import (Dependency Inclusions)
-        "import": re.compile(r"\b(BANK|SETLOC|EBANK=)\b", re.I),
+        # #2875 contract C4: a bare or numeric BANK/SETLOC is a location-counter
+        # directive binding nothing; a symbolic operand in opcode position (the
+        # capture's own reading) names the unit. `TCF SETLOC` is a label operand (C3).
+        # `EBANK=` is an erasable-bank addressing directive and args' token
+        # (`[EFB]BANK=`) -- one owner (C6), out of both the count and the capture.
+        "import": re.compile(r"^[ \t]*(?:BANK|SETLOC)[ \t]+[A-Za-z][A-Za-z0-9_]*", re.I | re.M),
         "_dependency_capture": re.compile(
-            r"^[ \t]*(?:BANK[ \t\n]+|SETLOC[ \t\n]+|EBANK=[ \t\n]*)([A-Za-z0-9_]+)",
+            r"^[ \t]*(?:BANK|SETLOC)[ \t\n]+([A-Za-z][A-Za-z0-9_]*)",  # #2875 C4/C6: symbolic operand, EBANK= is args'
             re.I | re.M,
         ),
         # 25. ownership (Authorship Metadata)
+        # #2882 contract: C1 MOD BY / AUTHOR / Contact keyed lines on `#`; every alternative captures (C3)
         "ownership": re.compile(
-            r"^#\s*(?:MOD\s+BY|AUTHOR|CREATED\s+BY|MAINTAINER|Contact)\s*[:\-]\s*(.*)",
+            r"^[ \t]*#+[ \t]*MOD[ \t]+BY[ \t]*[:\-]+[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:#+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.M | re.I,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -220,7 +263,9 @@ DEFINITION: dict[str, Any] = {
         # 39. debug_prints (Debug Artifacts / Unstructured Outputs)
         "debug_prints": re.compile(r"\b(?:FLASH|PINBALL|OUT\d+)\b", re.I),
         # 40. explicit_casts (Explicit Type Casting)
-        "explicit_casts": re.compile(r"\bEXTEND\b", re.I),
+        # #2898: contract-level absence. EXTEND is an opcode-mode prefix, not a type
+        # conversion -- AGC assembly has no cast construct.
+        "explicit_casts": None,
         # 41. panics_and_aborts (Execution Interrupts / Fatal Aborts)
         "panics_and_aborts": re.compile(r"\b(POODOO|BAILOUT|TC\s+ALARM|ABORT)\b", re.I),
         # 42. thread_sleeps (Thread Blocking / Synchronous Pauses)
@@ -232,7 +277,9 @@ DEFINITION: dict[str, Any] = {
         # 45. immutability_locks (Immutability Constraints)
         "immutability_locks": re.compile(r"\bFIXED\s+MEMORY\b", re.I),
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"\b(ENDOFJOB|RESUME|EXIT)\b", re.I),
+        "cleanup": re.compile(
+            r"\b(ENDOFJOB|RESUME)\b", re.I
+        ),  # #2888 C2: EXIT is a control transfer; ENDOFJOB releases the job core set, RESUME the interrupt context
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # Internal task-local labels or non-global tags.
         # BUG FIX: required a lowercase-starting label, but authentic
@@ -241,7 +288,10 @@ DEFINITION: dict[str, Any] = {
         # func_start's own capture class is `[A-Z0-9_-]+`) -- confirmed
         # a realistic label ("MYLABEL") never matched at all. Widened
         # to accept any case.
-        "encapsulation": re.compile(r"^[ \t]*[A-Za-z0-9_][a-zA-Z0-9_.]*", re.M),
+        # #2766: contract-level absence. The old pattern matched every identifier-
+        # shaped token at line start (a catch-all, ~12.5 hits/file); AGC assembly has
+        # no visibility construct of any kind.
+        "encapsulation": None,
         # 48. listeners (Event Listeners / Observers)
         "listeners": re.compile(r"\b(EVENT\s+WAIT|TC\s+WAITLIST)\b", re.I),
         # 49. test_skip (Bypassed Tests / Ignored Specs)

@@ -58,7 +58,7 @@ for the same metrics tracked over time across pushes to main.
 | Shell | 99.8% | 97.0% | N/A | N/A |
 | Solidity | 100.0% | 94.3% | 100.0% | 100.0% |
 | Swift | 100.0% | 99.2% | 100.0% | 100.0% |
-| Tcl | 100.0% | 99.1% | N/A | N/A |
+| Tcl | 95.1% | 96.4% | N/A | N/A |
 | Typescript | 100.0% | 100.0% | 100.0% | 100.0% |
 | Zig | 100.0% | 100.0% | 100.0% | 100.0% |
 <!-- TREE_SITTER_ACCURACY_TABLE:END -->
@@ -66,7 +66,7 @@ for the same metrics tracked over time across pushes to main.
 
 from typing import Any
 
-from ._lens_config import LENS_CONFIG, LensConfig
+from ._lens_config import COMPILED_HANDSHAKE_REGISTRY, LENS_CONFIG, LensConfig
 from ._overrides import PROJECT_OVERRIDES
 from ._prism_config import PRISM_CONFIG, PrismConfigSchema
 from ._shared_patterns import HTML_NONEXECUTABLE_SCRIPT_TAG
@@ -77,13 +77,16 @@ from .languages import apex as _apex
 from .languages import assembly as _assembly
 from .languages import batch as _batch
 from .languages import blp as _blp
+from .languages import bms as _bms
 from .languages import c as _c
 from .languages import cobol as _cobol
 from .languages import cpp as _cpp
+from .languages import csd as _csd
 from .languages import csharp as _csharp
 from .languages import css as _css
 from .languages import csv as _csv
 from .languages import dart as _dart
+from .languages import db2_sql as _db2_sql
 from .languages import dockerfile as _dockerfile
 from .languages import embedded_python as _embedded_python
 from .languages import fortran as _fortran
@@ -91,6 +94,7 @@ from .languages import glsl as _glsl
 from .languages import go as _go
 from .languages import groovy as _groovy
 from .languages import haskell as _haskell
+from .languages import hlasm as _hlasm
 from .languages import hlo as _hlo
 from .languages import html as _html
 from .languages import java as _java
@@ -111,9 +115,11 @@ from .languages import pbtxt as _pbtxt
 from .languages import perl as _perl
 from .languages import php as _php
 from .languages import plaintext as _plaintext
+from .languages import pli as _pli
 from .languages import powershell as _powershell
 from .languages import proto as _proto
 from .languages import python as _python
+from .languages import rexx as _rexx
 from .languages import ruby as _ruby
 from .languages import rust as _rust
 from .languages import scala as _scala
@@ -131,6 +137,7 @@ from .languages import yaml as _yaml
 from .languages import zig as _zig
 
 __all__ = [
+    "COMPILED_HANDSHAKE_REGISTRY",
     "HTML_NONEXECUTABLE_SCRIPT_TAG",
     "LANGUAGE_DEFINITIONS",
     "LENS_CONFIG",
@@ -200,4 +207,10 @@ LANGUAGE_DEFINITIONS: dict[str, Any] = {
     "batch": _batch.DEFINITION,
     "jcl": _jcl.DEFINITION,
     "ada": _ada.DEFINITION,
+    "pli": _pli.DEFINITION,
+    "bms": _bms.DEFINITION,
+    "db2_sql": _db2_sql.DEFINITION,
+    "hlasm": _hlasm.DEFINITION,
+    "rexx": _rexx.DEFINITION,
+    "csd": _csd.DEFINITION,
 }

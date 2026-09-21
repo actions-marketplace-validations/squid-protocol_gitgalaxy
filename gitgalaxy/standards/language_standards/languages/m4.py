@@ -45,7 +45,28 @@ DEFINITION: dict[str, Any] = {
         "branch": re.compile(r"\b(?:ifelse|ifdef|AS_IF|AS_CASE|m4_if|m4_case|m4_cond|m4_ifval|m4_ifblank)\b"),
         # 2. args (Parameters / Coupling)
         # M4 positional arguments.
-        "args": re.compile(r"\$[0-9]+|\$[@*#]"),
+        # #2784: m4, like shell, has NO formal parameter list -- `m4_define(foo,
+        # [...])` names no parameters, and `$1`/`$@` inside the body IS the whole
+        # parameter surface (settled as intended morphology for the FILE-LEVEL
+        # count in keyword-rosetta's `m4-parameters-are-use-sites` ledger entry,
+        # which this change deliberately leaves untouched: wrapping the existing
+        # alternation in one capture group changes no match boundary, so the raw
+        # rule count is byte-for-byte identical).
+        # What it DOES fix is the PER-FUNCTION arity `_calculate_block_metrics`
+        # derives. m4 has no `args_search_text` bound (that exists only for
+        # objective-c/c/cpp/dart), so the generic derivation `.search()`es the
+        # whole macro body and trusts the single LEFTMOST hit -- which reads
+        # `AS_IF([test "$1"], [do_thing($3)])` as arity 1, silently dropping every
+        # higher position after the first. Shell hit exactly this in #1518 and
+        # solved it with `_args_findall_max_groups`, which makes the shared
+        # counter re-scan the whole block and take the HIGHEST positional index
+        # seen (`_count_shell_positional_max`) rather than the first match or a
+        # count of matches. Group 1 is the hook that helper indexes on, so the
+        # alternation is wrapped rather than left group-less. Bare `$@`/`$*`
+        # (variadic, no explicit index) resolve to "at least 1" and `$0` (the
+        # macro's own name) never raises the max, both handled by that helper.
+        "args": re.compile(r"(\$[0-9]+|\$[@*#])"),
+        "_args_findall_max_groups": {1},
         # 3. linear (Sequential Boundaries)
         # Execution flow diversion and dependency signaling.
         "structural_boundaries": re.compile(r"\b(?:divert|undivert|m4_divert|m4_undivert|m4_require|AC_REQUIRE)\b"),
@@ -83,10 +104,26 @@ DEFINITION: dict[str, Any] = {
         # 10. api (Public Surface Area)
         # M4 macros are inherently public, but these explicitly export state into the generated Makefile/C headers.
         "api": re.compile(r"\b(?:AC_SUBST|AC_DEFINE|AC_PROVIDE|m4_provide)\b"),
+        # #2872: the ORPHAN-CENSUS EXEMPTION -- see the matching note in
+        # shell.py and #2823's plural form in scheme.py. `AC_PROVIDE([name])` /
+        # `m4_provide([name])` publish the macro `name` as a provided feature;
+        # naming a macro in a provide statement is a visibility DECLARATION, not
+        # a use, so this captures that NAME (group 1) and `_is_orphan` discounts
+        # only that capture's own span. Without it the api plant the corpus wants
+        # to land on this form would clear the orphan flag it is meant to leave
+        # standing (keyword-rosetta#53). Group 1 is the name inside the argument;
+        # the leading `[` is m4's quote char and is optional so the bare
+        # `AC_PROVIDE(name)` form is captured too. Singular rather than the list
+        # form because each provide clause names exactly one feature. Leading `_`
+        # keeps it out of `coding_analysis`'s rule loop and the counts schema, the
+        # same way `_scope_filters` does.
+        "_visibility_export": re.compile(r"\b(?:AC_PROVIDE|m4_provide)\b[ \t]*\([ \t]*\[?[ \t]*([a-zA-Z_]\w*)"),
         # 11. flux (State Mutation)
         # Stack-based macro overriding and list appending.
         "state_mutation": re.compile(
-            r"\b(?:pushdef|popdef|m4_pushdef|m4_popdef|m4_append|m4_append_uniq|m4_combine)\b"
+            # #2765 contract: `popdef` restores a definition and is the `cleanup` rule's
+            # token (count contract corollary 4); `pushdef`/`m4_append` write one.
+            r"\b(?:pushdef|m4_pushdef|m4_append|m4_append_uniq|m4_combine|m4_set_add|m4_set_add_all|m4_list_append)\b"
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         # Commented-out macro definitions.
@@ -133,11 +170,26 @@ DEFINITION: dict[str, Any] = {
         ),
         # 24. import (Dependency Inclusions)
         # File inclusions.
-        "import": re.compile(r"^[ \t]*(?:include|sinclude|m4_include|m4_sinclude)\b", re.M),
+        # #2875 contract C5: the m4 form is `include(`; a path whose first component is
+        # a directory named include (`include/Makefile \`) is not one.
+        "import": re.compile(r"^[ \t]*(?:m4_)?s?include\(", re.M),
+        # BUG FIX (#2652 shape, #2668): the `import` rule above counts the
+        # signal but produced no DAG edge, so m4 sat in keyword-rosetta's
+        # `no-dependency-capture-languages` ledger entry with popularity,
+        # betweenness and producer_ratio structurally 0 and orphan->api
+        # conversion unable to fire. Captures the included file out of all
+        # four spellings and past m4's own quoting -- `include(b.m4)`,
+        # ``include(`b.m4')``, `m4_include([build-aux/foo.m4])`. Both
+        # quantifiers are bounded (Engine Rule 14).
+        "_dependency_capture": re.compile(
+            r"^[ \t]*(?:m4_)?s?include\([ \t]*[\[`'\"]{0,2}([^\s\]`'\")]{1,200})",
+            re.M,
+        ),
         # 25. ownership (Authorship Metadata)
         # Same comment-style completeness fix as dead_code above (Engine Rule 12).
+        # #2882 contract: C2 AC_COPYRIGHT is doc's alone (the intentional dual retired), `Copyright:`/`License:` out; every alternative captures (C3)
         "ownership": re.compile(
-            r"^[ \t]*(?:dnl[ \t]+|#[ \t]*)(?:Author|Maintainer|Copyright|License):|AC_COPYRIGHT",
+            r"^[ \t]*(?:dnl\b|#+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.I | re.M,
         ),
         # --- 🌌 PHASE 4: EXTENDED DIMENSIONS (Specialized Sub-Equations) ---
@@ -195,7 +247,10 @@ DEFINITION: dict[str, Any] = {
         "cleanup": re.compile(r"\b(?:m4_popdef|popdef|AT_CLEANUP)\b"),
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # Forbidding specific patterns from reaching the output script.
-        "encapsulation": re.compile(r"\b(?:m4_pattern_forbid)\b"),
+        # #2766: contract-level absence. m4_pattern_forbid is an error-generation
+        # directive (an assertion shape), not a name-visibility marker; m4 macros are
+        # globally visible. See #2872 for the m4/makefile visibility questions.
+        "encapsulation": None,
         # 48. listeners
         "listeners": None,
         # 49. test_skip (Bypassed Tests / Ignored Specs)

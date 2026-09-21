@@ -70,7 +70,7 @@ _LUA_SIMPLE_CASES = [
     ("sync_locks", "local mutex = Mutex.new()", "local locker = KeyHolder.new()"),
     ("immutability_locks", "local x <const> = 5", "local x <close> = 5"),
     ("cleanup", "file:close()", "local data = file:read()"),
-    ("encapsulation", "local x = 5", "x = 5"),
+    # encapsulation is None since #2766 -- `local` is lexical scope, not API visibility.
     ("listeners", "emitter:on('event', cb)", "emitter:off('event', cb)"),
     ("test_skip", 'xit("skip this")', 'it("runs normally")'),
     ("serialization_parsing", "cjson.decode(str)", "cjson.safe.decode(str)"),
@@ -82,33 +82,29 @@ _LUA_SIMPLE_CASES = [
 
 _LUA_DEEP_CASES = [
     # --- branch ---
-    ("branch", "goto skip_label", "my_goto = 1"),
-    ("branch", "continue", "local continue_flag = true"),
+    ("branch", "repeat", "goto skip_label"),  # 2822 corollary 3: goto moved to boundaries
+    ("structural_boundaries", "break", "breakfast = true"),  # 2832: unconditional transfer, not a branch
     ("branch", "elseif\n  condition\nthen", "local if_true = 1"),
     ("branch", "for i, v in ipairs(t) do", "local format = 1"),
     ("branch", "repeat\nuntil x == 0", "local until_now = 0"),
-
     # --- args ---
     ("args", "function obj:method(x, y)", "obj:method(x, y)"),
     ("args", "function foo<T>(x: T)", "local function_pointer = foo"),
     ("args", "function foo<T, U = Array<T>>(x: T)", "foo<T>(x)"),
     ("args", "function \n foo \n ( \n x \n )", "function_name = 1"),
     ("args", "function(a, b, ...)", "if function_called then"),
-
     # --- func_start ---
     ("func_start", "export function my_api()", "local f = function() end"),
     ("func_start", "local\nfunction\nfoo\n()", "return function()"),
     ("func_start", "function tbl.foo:bar()", "function_name = 1"),
     ("func_start", "function generic_func<T>()", "generic_func<T>()"),
     ("func_start", "function deeply_nested<T, U = Array<T>>()", "deeply_nested()"),
-
     # --- class_start ---
     ("class_start", "export type User = {", "local lowercase_type = {}"),
     ("class_start", "type GameState = {", "type(GameState) == 'table'"),
     ("class_start", "export MyClass = {", "MyClass.foo = 1"),
     ("class_start", "local SomeObject\n = \n {", "local SomeObject = 1"),
     ("class_start", "---@class My_Class", "-- @class My_Class"),
-
     # --- structural_boundaries ---
     ("structural_boundaries", "export type", "exported = true"),
     ("structural_boundaries", "local x < const > = 1", "x = 1"),
@@ -116,6 +112,7 @@ _LUA_DEEP_CASES = [
     ("structural_boundaries", "module('mymod')", "module_name = 1"),
     ("structural_boundaries", "require  (  'mod'  )", "requires_auth = true"),
 ]
+
 
 @pytest.mark.parametrize("signature,positive,negative", _LUA_SIMPLE_CASES)
 def test_lua_signature_positive_and_negative(signature, positive, negative):
@@ -134,9 +131,7 @@ def test_lua_signature_deep_cases(signature, positive, negative):
     assert pattern is not None, f"lua's {signature!r} rule is unexpectedly None"
     assert pattern.search(positive), f"lua {signature!r} failed to match deep positive case: {positive!r}"
     if negative is not None:
-        assert not pattern.search(negative), (
-            f"lua {signature!r} incorrectly matched deep negative case: {negative!r}"
-        )
+        assert not pattern.search(negative), f"lua {signature!r} incorrectly matched deep negative case: {negative!r}"
 
 
 def test_lua_listeners_on_call_boundary_regression():
@@ -154,16 +149,14 @@ def test_lua_listeners_on_call_boundary_regression():
 
 def test_lua_ambiguity_sweep_shared_literals_are_not_bugs():
     """
-    Documents 7 pairs the automated ambiguity sweep flagged, mostly
+    Documents pairs the automated ambiguity sweep flagged, mostly
     centered on Lua 5.4's `<const>`/`<close>` attribute syntax
-    (cleanup<->concurrency, cleanup<->safety, cleanup<->
-    structural_boundaries, concurrency<->safety, concurrency<->
-    structural_boundaries, safety<->structural_boundaries) plus
+    (cleanup<->concurrency, cleanup<->structural_boundaries) plus
     dead_code<->doc (sharing "return"). All confirmed non-bugs:
-    - A `<close>`-attributed local variable is genuinely triple-
-      classified by design (it's simultaneously a safety mechanism, a
-      structural declaration modifier, and a cleanup signal) -- verified
-      directly, not a false collision.
+    - A `<close>`-attributed local variable is genuinely dual-
+      classified by design (it's simultaneously a structural declaration
+      modifier and a cleanup signal) -- verified directly, not a false
+      collision.
     - "close" appearing in both `uv.close` (concurrency) and `io.close`/
       `ffi.C.free` (cleanup) are different, correctly-namespaced tokens
       that don't actually collide on the same real code.
@@ -171,6 +164,10 @@ def test_lua_ambiguity_sweep_shared_literals_are_not_bugs():
       disambiguates it from doc's `---@return` EmmyLua tag (three
       dashes, not two) -- confirmed neither matches the other's positive
       case.
+
+    #2869 contract: `<close>`/`<toclose>` dropped from `safety` (C3 --
+    cleanup is the verified owner). `<close>` is no longer triple-
+    classified; it's cleanup<->structural_boundaries only now.
     """
     dead_code = LUA_RULES["dead_code"]
     doc = LUA_RULES["doc"]
@@ -188,7 +185,8 @@ def test_lua_ambiguity_sweep_shared_literals_are_not_bugs():
     assert not doc.search(commented_return)
 
     close_var = "local f <close> = io.open(path)"
-    assert cleanup.search(close_var) and safety.search(close_var) and structural_boundaries.search(close_var)
+    assert cleanup.search(close_var) and structural_boundaries.search(close_var)
+    assert not safety.search(close_var), "<close> must no longer count as safety (#2869 C3, cleanup owns it)"
 
     uv_close = "uv.close(handle)"
     assert concurrency.search(uv_close)
@@ -221,3 +219,70 @@ def test_lua_redos_immunity_sweep():
     ratios) before writing this as a permanent regression pin.
     """
     assert_redos_immune(LUA_RULES["args"], "function foo(" + "(" * 100000, timeout_sec=3.0)
+
+
+def test_lua_api_module_return_column_anchored_regression():
+    """
+    #2657: the api rule's `return M`-at-EOF module-export idiom used a
+    `^[ \t]*` (any-indentation) anchor, so an ordinary indented `return x`
+    inside a function body false-positived as a module export (rosetta
+    corpus: risk_api_exposure +110%). Anchored to true column 0.
+    """
+    api = LUA_RULES["api"]
+
+    assert not api.search("    return x"), "indented function-body return must NOT count as api"
+    assert not api.search("\treturn value"), "tab-indented function-body return must NOT count as api"
+
+    assert api.search("return M"), "column-0 module-final return must still count as api"
+    assert api.search("return MyModule"), "column-0 module-final return (named module) must still count as api"
+
+
+def test_lua_safety_bypasses_globals_and_cleanup_ownership_regression():
+    """#2675: `safety_bypasses` dropped `_G`/`_ENV` (owned by `globals`) and
+    `collectgarbage` (owned by `cleanup`). probe_globals in a.lua and
+    probe_cleanup in c.lua each contributed +1 of this rule's +2 over the
+    planted value.
+    """
+    safety_bypasses = LUA_RULES["safety_bypasses"]
+    globals_rule = LUA_RULES["globals"]
+    cleanup = LUA_RULES["cleanup"]
+
+    assert not safety_bypasses.search("_G"), "_G must NOT count as safety_bypasses"
+    assert not safety_bypasses.search("_ENV"), "_ENV must NOT count as safety_bypasses"
+    assert globals_rule.search("_G"), "_G must still count as globals"
+    assert globals_rule.search("_ENV"), "_ENV must still count as globals"
+
+    assert not safety_bypasses.search("collectgarbage()"), "collectgarbage must NOT count as safety_bypasses"
+    assert cleanup.search("collectgarbage()"), "collectgarbage must still count as cleanup"
+
+    # legitimate safety_bypasses tokens must still be counted
+    assert safety_bypasses.search("rawget(t, k)"), "rawget must still count as safety_bypasses"
+    assert safety_bypasses.search("rawset(t, k, v)"), "rawset must still count as safety_bypasses"
+    assert safety_bypasses.search("rawlen(t)"), "rawlen must still count as safety_bypasses"
+    assert safety_bypasses.search("debug.getinfo(1)"), "debug.* must still count as safety_bypasses"
+    assert safety_bypasses.search("getfenv(1)"), "getfenv must still count as safety_bypasses"
+    assert safety_bypasses.search("setfenv(1, t)"), "setfenv must still count as safety_bypasses"
+
+
+def test_lua_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    `[^_]` accepted any non-underscore character, so `function ()` -- an
+    anonymous function, which declares no name -- counted.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = LUA_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search("function Writer(doc, opts)"), "named global function"
+
+    # Not declarations -- must not match.
+    assert not api.search("function ()"), "anonymous function"
+    assert not api.search("local function helper()"), "local function"

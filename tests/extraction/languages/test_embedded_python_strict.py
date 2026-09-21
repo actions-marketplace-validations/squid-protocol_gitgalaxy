@@ -95,102 +95,98 @@ EP_RULES = LANGUAGE_DEFINITIONS["embedded_python"]["rules"]
 _EMBEDDED_PYTHON_SIMPLE_CASES = [
     # (signature, positive snippet, text expected to NOT match / None to skip)
     # --- DEEP ADVERSARIAL CASES ---
-    ('branch', 'if (a == b):', 'different'),
-    ('branch', 'while True:', 'while_loop_name'),
-    ('branch', 'match data:', 'matchable'),
-    ('branch', 'case 1:', '_case'),
-    ('branch', 'for i in range(10):', 'foraging'),
-    ('branch', 'try:', 'try_this'),
-    ('branch', 'finally:', 'finally_clause'),
-    ('branch', 'a and b', 'random'),
-    ('branch', 'a or b', 'oracle'),
-    ('branch', 'with open("f") as f:', 'without'),
-
-    ('args', 'def foo(a="bar)", b=2):', 'foo(a="bar)", b=2)'),
-    ('args', 'async def fetch(url):', 'async fetch(url)'),
-    ('args', 'lambda: 5', 'lambda_func: 5'),
-    ('args', 'lambda x, y: x+y', 'lambda_x_y'),
-    ('args', 'lambda \nx: 5', 'lambda_var = 5'),
-    ('args', 'def generic[T](x: T):', 'generic[T](x)'),
-    ('args', 'def generic_nested[T: Sequence[int]](x: T):', 'non_generic()'),
-
-    ('func_start', 'def bar():', 'bar()'),
-    ('func_start', 'async def foo():', 'foo()'),
-    ('func_start', '    @staticmethod\n    def baz():', 'def_baz():'),
-    ('func_start', '@decorator(arg=1)\ndef wrapped():', 'wrapped()'),
-    ('func_start', 'def foo[T]():', 'foo[T]()'),
-    ('func_start', 'def foo[T: List[int]]():', 'def_foo():'),
-    ('func_start', '    async   def    many_spaces():', 'def_many_spaces():'),
-
-    ('class_start', 'class Robot:', 'Robot()'),
-    ('class_start', 'class Robot(Machine):', 'Robot(Machine)'),
-    ('class_start', 'class Robot[T]:', 'Robot[T]()'),
-    ('class_start', '    @dataclass\n    class Robot(Machine, metaclass=ABCMeta):', 'dataclass_robot'),
-    ('class_start', 'class Robot[T: Sequence[int]](Machine):', 'Robot[T]()'),
-    ('class_start', 'class    SpacedClass ( object ) :', 'SpacedClass(object)'),
-
-    ('structural_boundaries', 'yield x', 'yield_value'),
-    ('structural_boundaries', 'await foo()', 'awaitable'),
-    ('structural_boundaries', 'assert x == 1', 'assertion'),
-    ('structural_boundaries', 'global x', 'global_var'),
-    ('structural_boundaries', 'nonlocal y', 'nonlocal_var'),
-    ('structural_boundaries', 'del x', 'delete'),
-    ('structural_boundaries', 'pass', 'passed'),
-    ('structural_boundaries', 'continue', 'continuation'),
-    ('structural_boundaries', 'break', 'break_point'),
-    ('structural_boundaries', 'type X = int', 'type_var'),
+    ("branch", "if (a == b):", "different"),
+    ("branch", "while True:", "while_loop_name"),
+    ("branch", "match data:", "matchable"),
+    ("branch", "case 1:", "_case"),
+    ("branch", "for i in range(10):", "foraging"),
+    # 2822 corollary 1: try/finally are safety's
+    ("branch", "elif x:", "try:"),
+    ("structural_boundaries", "with open(f) as fh:", "finally:"),  # 2833: with is resource scope, not a branch
+    ("branch", "a and b", "random"),
+    ("branch", "a or b", "oracle"),
+    ("structural_boundaries", 'with open("f") as f:', "without"),  # 2833: with is resource scope, not a branch
+    ("args", 'def foo(a="bar)", b=2):', 'foo(a="bar)", b=2)'),
+    ("args", "async def fetch(url):", "async fetch(url)"),
+    ("args", "lambda: 5", "lambda_func: 5"),
+    ("args", "lambda x, y: x+y", "lambda_x_y"),
+    ("args", "lambda \nx: 5", "lambda_var = 5"),
+    ("args", "def generic[T](x: T):", "generic[T](x)"),
+    ("args", "def generic_nested[T: Sequence[int]](x: T):", "non_generic()"),
+    ("func_start", "def bar():", "bar()"),
+    ("func_start", "async def foo():", "foo()"),
+    ("func_start", "    @staticmethod\n    def baz():", "def_baz():"),
+    ("func_start", "@decorator(arg=1)\ndef wrapped():", "wrapped()"),
+    ("func_start", "def foo[T]():", "foo[T]()"),
+    ("func_start", "def foo[T: List[int]]():", "def_foo():"),
+    ("func_start", "    async   def    many_spaces():", "def_many_spaces():"),
+    ("class_start", "class Robot:", "Robot()"),
+    ("class_start", "class Robot(Machine):", "Robot(Machine)"),
+    ("class_start", "class Robot[T]:", "Robot[T]()"),
+    ("class_start", "    @dataclass\n    class Robot(Machine, metaclass=ABCMeta):", "dataclass_robot"),
+    ("class_start", "class Robot[T: Sequence[int]](Machine):", "Robot[T]()"),
+    ("class_start", "class    SpacedClass ( object ) :", "SpacedClass(object)"),
+    ("structural_boundaries", "yield x", "yield_value"),
+    ("structural_boundaries", "await foo()", "awaitable"),
+    ("structural_boundaries", "assert x == 1", "assertion"),
+    ("structural_boundaries", "global x", "global_var"),
+    ("structural_boundaries", "nonlocal y", "nonlocal_var"),
+    ("structural_boundaries", "del x", "delete"),
+    ("structural_boundaries", "pass", "passed"),
+    ("structural_boundaries", "continue", "continuation"),
+    ("structural_boundaries", "break", "break_point"),
+    ("structural_boundaries", "type X = int", "type_var"),
     # --- END DEEP ADVERSARIAL CASES ---
-
-    ('branch', 'if button.value:\n    pass', "raise ValueError('x')"),
-    ('args', 'def blink(pin, times=3):', 'blink(pin, times=3)'),
-    ('structural_boundaries', 'import machine', 'imported = true'),
-    ('func_start', 'def blink():', 'blink()'),
-    ('class_start', 'class Robot:', 'Robot()'),
-    ('safety', 'try:\n    read_sensor()\nexcept OSError:\n    pass', 'read_sensor()'),
-    ('safety_bypasses', 'except Exception:\n    pass', 'except OSError:\n    handle(e)'),
-    ('high_risk_execution', 'machine.reset()', "print('safe')"),
-    ('io', 'i2c = I2C(0, scl=Pin(9), sda=Pin(8))', 'i2c = 0'),
-    ('api', 'def read_temperature():\n    pass', 'def _read_temperature():'),
-    ('state_mutation', 'led.value(1)', 'led.value == 1'),
-    ('dead_code', '# def old_blink():', '# just a note'),
-    ('doc', '"""Blink the onboard LED."""', "'a string'"),
-    ('test', 'def test_login():\n    assert True', 'def foo():'),
-    ('concurrency', 'async def main():\n    await asyncio.sleep(1)', 'def main():'),
-    ('ui_framework', 'display.fill(0)', 'd = 0'),
-    ('closures', 'cb = lambda pin: pin.value()', 'cb = pin.value()'),
-    ('globals', 'global counter', 'globals = 1'),
-    ('decorators', "@app.route('/status')\ndef status():", "app.route('/status')"),
-    ('generics', 'def read() -> Optional[int]:', 'def read():'),
-    ('comprehensions', '[x for x in range(10)]', 'x = 10'),
-    ('scientific', 'import ulab as np', 'import foo'),
-    ('reflection_metaprogramming', "getattr(sensor, 'read')", 'sensor.read'),
-    ('import', 'from machine import Pin', 'from_machine = True'),
-    ('ownership', "__author__ = 'Jane Doe'", "author = 'Jane Doe'"),
-    ('planned_debt', '# TODO: add debouncing', '# TODONE'),
-    ('fragile_debt', '# HACK: temporary polling workaround', '# HACKATHON'),
-    ('spec_exposure', '# [SPEC-123] implements the boot contract', '# spec sheet'),
-    ('ssr_boundaries', 'microdot.Response("ok")', 'm = 1'),
-    ('events', 'pin.irq(trigger=Pin.IRQ_FALLING, handler=on_press)', 'pin = 1'),
-    ('macros', 'const(BAUD_RATE = 9600)', 'consts = 1'),
-    ('pointers', 'addr = uctypes.addressof(buf)', 'addr = 1'),
-    ('memory_alloc', 'buf = bytearray(64)', 'buf = 1'),
-    ('inline_asm', '@micropython.asm_thumb\ndef delay(r0):', 'delay(r0)'),
-    ('telemetry', "logger.info('boot complete')", 'logger = 1'),
-    ('debug_prints', "print('debug value:', x)", 'printer = 1'),
-    ('explicit_casts', 'int(raw_value)', 'raw_value.integer()'),
-    ('panics_and_aborts', "raise ValueError('bad reading')", 'ValueError = 1'),
-    ('thread_sleeps', 'time.sleep(1)', 'time = 1'),
-    ('bitwise_ops', 'mask = flags << 2', 'mask = flags < 2'),
-    ('sync_locks', 'lock = _thread.allocate_lock()', 'lock = 1'),
-    ('immutability_locks', "cfg = mappingproxy({'x': 1})", 'cfg = 1'),
-    ('cleanup', 'i2c.close()', 'i2c = 1'),
-    ('encapsulation', 'self._buffer = bytearray(16)', 'self.buffer = bytearray(16)'),
-    ('listeners', 'pin.irq(handler=on_change)', 'pin = 1'),
-    ('test_skip', '@pytest.mark.skip', 'pytest = 1'),
-    ('serialization_parsing', 'data = ujson.loads(raw)', 'data = 1'),
-    ('regex_execution', "m = ure.match(r'^boot', line)", 'm = 1'),
-    ('time_date_logic', 'now = utime.ticks_ms()', 'now = 1'),
-    ('ipc_rpc_bridges', 'i2c = machine.I2C(0)', 'i2c = 0'),
+    ("branch", "if button.value:\n    pass", "raise ValueError('x')"),
+    ("args", "def blink(pin, times=3):", "blink(pin, times=3)"),
+    ("structural_boundaries", "import machine", "imported = true"),
+    ("func_start", "def blink():", "blink()"),
+    ("class_start", "class Robot:", "Robot()"),
+    ("safety", "try:\n    read_sensor()\nexcept OSError:\n    pass", "read_sensor()"),
+    ("safety_bypasses", "except Exception:\n    pass", "except OSError:\n    handle(e)"),
+    ("high_risk_execution", "machine.reset()", "print('safe')"),
+    ("io", "i2c = I2C(0, scl=Pin(9), sda=Pin(8))", "i2c = 0"),
+    ("api", "def read_temperature():\n    pass", "def _read_temperature():"),
+    ("state_mutation", "x = 1", "led.value == 1"),  # #2817: plain reassignment counts
+    ("dead_code", "# def old_blink():", "# just a note"),
+    ("doc", '"""Blink the onboard LED."""', "'a string'"),
+    ("test", "def test_login():\n    assert True", "def foo():"),
+    ("concurrency", "async def main():\n    await asyncio.sleep(1)", "def main():"),
+    ("ui_framework", "display.fill(0)", "d = 0"),
+    ("closures", "cb = lambda pin: pin.value()", "cb = pin.value()"),
+    ("globals", "global counter", "globals = 1"),
+    ("decorators", "@app.route('/status')\ndef status():", "app.route('/status')"),
+    ("generics", "def read() -> Optional[int]:", "def read():"),
+    ("comprehensions", "[x for x in range(10)]", "x = 10"),
+    ("scientific", "import ulab as np", "import foo"),
+    ("reflection_metaprogramming", "getattr(sensor, 'read')", "sensor.read"),
+    ("import", "from machine import Pin", "from_machine = True"),
+    ("ownership", "__author__ = 'Jane Doe'", "author = 'Jane Doe'"),
+    ("planned_debt", "# TODO: add debouncing", "# TODONE"),
+    ("fragile_debt", "# HACK: temporary polling workaround", "# HACKATHON"),
+    ("spec_exposure", "# [SPEC-123] implements the boot contract", "# spec sheet"),
+    ("ssr_boundaries", 'microdot.Response("ok")', "m = 1"),
+    ("events", "pin.irq(trigger=Pin.IRQ_FALLING, handler=on_press)", "pin = 1"),
+    ("macros", "const(BAUD_RATE = 9600)", "consts = 1"),
+    ("pointers", "addr = uctypes.addressof(buf)", "addr = 1"),
+    ("memory_alloc", "buf = bytearray(64)", "buf = 1"),
+    ("inline_asm", "@micropython.asm_thumb\ndef delay(r0):", "delay(r0)"),
+    ("telemetry", "logger.info('boot complete')", "logger = 1"),
+    ("debug_prints", "print('debug value:', x)", "printer = 1"),
+    ("explicit_casts", "int(raw_value)", "raw_value.integer()"),
+    ("panics_and_aborts", "raise ValueError('bad reading')", "ValueError = 1"),
+    ("thread_sleeps", "time.sleep(1)", "time = 1"),
+    ("bitwise_ops", "mask = flags << 2", "mask = flags < 2"),
+    ("sync_locks", "lock = _thread.allocate_lock()", "lock = 1"),
+    ("immutability_locks", "cfg = mappingproxy({'x': 1})", "cfg = 1"),
+    ("cleanup", "i2c.close()", "i2c = 1"),
+    ("encapsulation", "self._buffer = bytearray(16)", "self.buffer = bytearray(16)"),
+    ("listeners", "pin.irq(handler=on_change)", "pin = 1"),
+    ("test_skip", "@pytest.mark.skip", "pytest = 1"),
+    ("serialization_parsing", "data = ujson.loads(raw)", "data = 1"),
+    ("regex_execution", "m = ure.match(r'^boot', line)", "m = 1"),
+    ("time_date_logic", "now = utime.ticks_ms()", "now = 1"),
+    ("ipc_rpc_bridges", "s = usocket.socket()", "i2c = machine.I2C(0)"),  # 2898: peripherals are io's
 ]
 
 
@@ -239,7 +235,10 @@ def test_embedded_python_test_signature_pytest_convention_boundary_regression():
     assert fixed_pattern.search("m = Mock()")
     assert fixed_pattern.search("def setUp(self):")
     assert fixed_pattern.search("def tearDown(self):")
-    assert fixed_pattern.search("assert x == 1")
+    # #2852 contract C1: the assert statement is the runtime guard -- safety's
+    # hit, not test's (#2626 applied to the twin).
+    assert not fixed_pattern.search("assert x == 1")
+    assert EP_RULES["safety"].search("assert x == 1")
 
 
 def test_embedded_python_generics_redos_immunity():
@@ -260,24 +259,15 @@ def test_embedded_python_generics_redos_immunity():
     immune and still matches realistic (including one-level-nested, per
     Rule 11) generic annotations.
     """
-    old_buggy_pattern = re.compile(
-        r"\b(?:List|Dict|Set|Tuple|Optional|Union|Any|Callable|Sequence|Iterable)\[[^\]]*\]|->"
-    )
-    import time as _time
-
-    durations = []
-    for n in (2000, 4000, 8000, 16000):
-        payload = "List[" * n
-        start = _time.perf_counter()
-        list(old_buggy_pattern.finditer(payload))
-        durations.append(_time.perf_counter() - start)
-    # Each doubling should show a roughly 4x increase for real O(n^2); assert
-    # the ratio between the last two measurements is well above the ~2x a
-    # linear-time pattern would show, confirming this really is quadratic.
-    assert durations[-1] / durations[-2] > 2.0, (
-        f"expected quadratic scaling on the pre-fix pattern, got durations={durations}"
-    )
-
+    # #2901: the pre-fix pattern
+    #     \b(?:List|Dict|...|Iterable)\[[^\]]*\]|->
+    # measured ~4x per size doubling at n=2000/4000/8000/16000. That
+    # measurement used to run here as a `durations[-1] / durations[-2] > 2.0`
+    # assertion; it is retained as this comment instead. It timed a regex
+    # this repo no longer ships, and a ratio between sub-100ms samples is
+    # inside the scheduling noise of a shared runner -- it went red on
+    # macOS for unrelated PRs. The shipped pattern's immunity is asserted
+    # below as an absolute bound in an isolated process, which is stable.
     pattern = EP_RULES["generics"]
     assert_redos_immune(pattern, "List[" * 40000, timeout_sec=3.0)
     assert pattern.search("def read() -> Optional[int]:")
@@ -303,19 +293,15 @@ def test_embedded_python_spec_exposure_redos_immunity():
     `[^\\]]*` to `{0,300}`; verify the fixed pattern stays immune and still
     matches realistic SPEC/audit tags.
     """
-    old_buggy_pattern = re.compile(r"\[(?:\s*SPEC\s*-\s*\d+|spec|audit)[^\]]*\]", re.I)
-    import time as _time
-
-    durations = []
-    for n in (2000, 4000, 8000, 16000):
-        payload = "[SPEC-" + "1" * n
-        start = _time.perf_counter()
-        list(old_buggy_pattern.finditer(payload))
-        durations.append(_time.perf_counter() - start)
-    assert durations[-1] / durations[-2] > 2.5, (
-        f"expected quadratic scaling on the pre-fix pattern, got durations={durations}"
-    )
-
+    # #2901: the pre-fix pattern
+    #     \[(?:\s*SPEC\s*-\s*\d+|spec|audit)[^\]]*\]
+    # measured ~4x per size doubling (the numbers are in the docstring
+    # above). That measurement used to run here as a
+    # `durations[-1] / durations[-2] > 2.5` assertion and is the specific
+    # assert named in #2901: macOS run 34288012477 produced 2.31 on a PR
+    # that touched none of this. Deleted rather than re-tuned -- it timed
+    # a deleted regex, and no threshold is both meaningful and stable on
+    # a shared runner. The shipped pattern's absolute bound is below.
     pattern = EP_RULES["spec_exposure"]
     assert_redos_immune(pattern, "[SPEC-" + "1" * 80000, timeout_sec=3.0)
     assert pattern.search("# [SPEC-123] implements the boot contract")
@@ -402,7 +388,7 @@ def test_embedded_python_test_vs_regex_execution_no_collision():
     Known ambiguity pattern from the issue template: embedded_python's
     regex library is `ure` (`ure.compile`/`ure.search`/`ure.match`/
     `ure.sub`), not a `.test(`-style method, so it shares no token with
-    `test`'s unittest/pytest/assert/Mock/setUp/tearDown/def-test_
+    `test`'s unittest/pytest/Mock/setUp/tearDown/def-test_
     alternatives.
     """
     test = EP_RULES["test"]
@@ -432,16 +418,20 @@ def test_embedded_python_func_start_vs_macros_no_collision():
 def test_embedded_python_safety_and_reflection_metaprogramming_intentional_double_classification():
     """
     Ambiguity sweep: `safety` and `reflection_metaprogramming` both list
-    `hasattr`/`getattr` and both fire on the same
-    `hasattr(sensor, 'read')`/`getattr(sensor, 'read')` call. Confirmed
-    genuine, intentional double-classification (present identically in
-    python's own already-hardened rules dict, not an embedded_python-only
-    accident): a runtime attribute-existence probe is simultaneously a
-    defensive validation technique (safety) AND a dynamic/reflective
-    attribute access (reflection_metaprogramming) -- both are structurally
-    true at once, the same accepted double-classification shape used
-    elsewhere in this codebase (e.g. dockerfile's ENV firing both `globals`
-    and `state_mutation`).
+    `hasattr` and both fire on the same `hasattr(sensor, 'read')` call.
+    Confirmed genuine, intentional double-classification (present
+    identically in python's own already-hardened rules dict, not an
+    embedded_python-only accident): a runtime attribute-existence probe is
+    simultaneously a defensive validation technique (safety) AND a
+    dynamic/reflective attribute access (reflection_metaprogramming) --
+    both are structurally true at once, the same accepted
+    double-classification shape used elsewhere in this codebase (e.g.
+    dockerfile's ENV firing both `globals` and `state_mutation`).
+
+    #2869 contract: bare `getattr` dropped from `safety` (C3 twin-parity
+    with python -- it's reflection_metaprogramming's alone now, the
+    unchecked/no-default attribute pull is not itself a defensive form).
+    `hasattr` keeps its dual role; `getattr` no longer does.
     """
     safety = EP_RULES["safety"]
     reflection = EP_RULES["reflection_metaprogramming"]
@@ -451,7 +441,7 @@ def test_embedded_python_safety_and_reflection_metaprogramming_intentional_doubl
     assert reflection.search(line)
 
     line2 = "value = getattr(sensor, 'read', None)"
-    assert safety.search(line2)
+    assert not safety.search(line2), "getattr must no longer count as safety (#2869 C3 twin-parity)"
     assert reflection.search(line2)
 
 
@@ -498,3 +488,18 @@ def test_embedded_python_comprehensions_one_level_nesting():
     pattern = EP_RULES["comprehensions"]
     assert pattern.search("[x for x in [y for y in range(10)]]")
     assert pattern.search("{k: v for k, v in {a: b for a, b in pairs}.items()}")
+
+
+def test_embedded_python_doc_docstring_counts_once_regression():
+    """
+    #2658: same fix as python's doc rule -- one docstring must count once,
+    not twice from unpaired open/close delimiter matches.
+    """
+    doc = LANGUAGE_DEFINITIONS["embedded_python"]["rules"]["doc"]
+
+    assert len(doc.findall('"""one docstring"""')) == 1, "a single docstring must count once, not twice"
+
+    two = '"""first"""\ndef f():\n    """second"""\n'
+    assert len(doc.findall(two)) == 2, "two separate docstrings must count as 2"
+
+    assert_redos_immune(doc, '"""' + "x" * 200000, timeout_sec=3.0)

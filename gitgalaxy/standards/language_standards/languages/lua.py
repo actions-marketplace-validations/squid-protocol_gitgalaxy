@@ -27,7 +27,10 @@ DEFINITION: dict[str, Any] = {
     # ECOSYSTEM ANCHORS & DISAMBIGUATION: Primary sibling extensions, package manifests, and linting configs to resolve ambiguous files.
     "discriminators": [".lua", ".luacheckrc", "stylua.toml", ".rockspec"],
     # EXECUTION SIGNATURES: Interpreters found on Line 1 for CLI, Game-Engine, and embedded scripts.
-    "shebangs": ["lua", "luajit", "luau", "texlua"],
+    # #3116: `luatrace` (the darwin-xnu tracing scripts' interpreter) resolved
+    # only because `lua` used to match as a bare substring of the shebang line;
+    # token matching needs it named. Same shape as shell.py's csh/pfsh gap.
+    "shebangs": ["lua", "luajit", "luau", "texlua", "luatrace"],
     # Maps to Family 5 (Hybrid Dash) -- #621: this comment always said
     # "Family 5 (Hybrid Dash)" but the value below was "standard_block"
     # until now, so lua shared a regex with C-style languages and got
@@ -38,7 +41,7 @@ DEFINITION: dict[str, Any] = {
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch: decisions that split flow. Includes standard loops and Lua 5.2+ goto.
-        "branch": re.compile(r"\b(if|then|elseif|else|for|in|while|do|repeat|until|break|continue|goto|and|or|not)\b"),
+        "branch": re.compile(r"\b(if|elseif|else|for|while|repeat|and|or|not)\b"),
         # 2. args: Parameters / Coupling. Captures parameters in named and anonymous function signatures.
         # #1209: parameter-list span wrapped in its own capture group (was
         # only reachable via group(0), the whole match including the
@@ -52,7 +55,7 @@ DEFINITION: dict[str, Any] = {
         ),
         # 3. linear: Sequential I/O & Network Boundaries. Structural boundaries defining scope and data definitions.
         "structural_boundaries": re.compile(
-            r"\b(local|end|require|module|return|export\s+type|type)\b|<\s*(?:const|close|toclose)\s*>"
+            r"\b(local|end|require|module|return|break|export\s+type|type|then|in|do|until|goto)\b|<\s*(?:const|close|toclose)\s*>"
         ),
         # 4. func_start: Executable Logic Anchors. Anchors executable logic blocks (named functions).
         "func_start": re.compile(
@@ -80,25 +83,50 @@ DEFINITION: dict[str, Any] = {
         ),
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
         # 6. safety: Defensive Programming. Protected calls, assertions, and type checks.
-        "safety": re.compile(
-            r"\b(pcall|xpcall|assert|error|type|getmetatable|rawequal|ipairs|pairs|next)\b|<\s*(?:const|close|toclose)\s*>"
-        ),
+        # C2: error( raises; type/getmetatable/rawequal/ipairs/pairs/next are introspection/iteration. C3: <close|toclose> cleanup's (verified owner); <const> immutability's.
+        "safety": re.compile(r"\b(pcall|xpcall|assert)\b"),
         # 7. safety_neg: Safety Bypasses. Actively bypassing safety (environment manipulation/raw access).
-        "safety_bypasses": re.compile(
-            r"\b(rawget|rawset|rawlen|debug\.[a-zA-Z0-9_]+|collectgarbage|_G|_ENV|getfenv|setfenv)\b"
-        ),
+        # BUG FIX (#2675): dropped `_G`/`_ENV` (a bare reference to the global
+        # table -- `globals` owns it via `\b(_G|_ENV|_VERSION|arg)\b`) and
+        # `collectgarbage` (GC control, not a bypass -- `cleanup` owns it).
+        # probe_globals in a.lua and probe_cleanup in c.lua each contributed
+        # +1 of this rule's +2 over the planted value.
+        "safety_bypasses": re.compile(r"\b(rawget|rawset|rawlen|debug\.[a-zA-Z0-9_]+|getfenv|setfenv)\b"),
         # 8. danger: High-Risk Execution. Dynamic evaluation and OS-level execution hooks.
-        "high_risk_execution": re.compile(r"\b(os\.execute|os\.exit|os\.remove|os\.rename|load|loadstring|loadfile)\b"),
+        # #2878 contract C4: os.remove/os.rename touch one file (cleanup's question, #2843);
+        # io.popen and dofile join (C1b/C1c).
+        "high_risk_execution": re.compile(r"\b(os\.execute|os\.exit|io\.popen|load|loadstring|loadfile|dofile)\b"),
         # 9. io: I/O & Network Boundaries. Standard IO library and environment inquiries.
-        "io": re.compile(r"\b(io\.open|io\.read|io\.lines|io\.close|io\.input|io\.output|io\.popen|os\.getenv)\b"),
+        "io": re.compile(r"\b(io\.open|io\.read|io\.lines|io\.input|io\.output|io\.popen|os\.getenv)\b"),
         # 10. api: Public Surface Area. Functions NOT marked local or explicit module returns.
+        # BUG FIX #2657: The 'return M' module-export idiom is anchored to column 0 (^return)
+        # to avoid false positives on indented function-body returns, which spiked risk_api_exposure.
+        # BUG FIX #2730 (api contract): `[^_]` accepted ANY non-underscore
+        # character, so `function ()` -- an anonymous function, which
+        # declares no name at all -- counted as a public declaration (16 of
+        # the crucible corpus's 288 matches). Requiring a letter keeps the
+        # `_`-prefixed private-by-convention exclusion the class was written
+        # for while demanding a real name.
         "api": re.compile(
-            r"^[ \t]*function\s+[^_][\w.:]*|^[ \t]*return\s+[a-zA-Z_]\w*[ \t]*$|---@public|\bexport\b",
+            r"^[ \t]*function\s+[A-Za-z][\w.:]*|^return[ \t]+[a-zA-Z_]\w*[ \t]*$|---@public|\bexport\b",
             re.M,
         ),
         # 11. flux: State Mutation. State mutation (assignments and table mutators).
         "state_mutation": re.compile(
-            r"\b[a-zA-Z_]\w*(?:\[[^\]]+\]|\.[a-zA-Z_]\w*)?\s*(?<![=<>~])=(?![=])|\btable\.(?:insert|remove|move|sort|concat)\b"
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `local x = v` declares (corollary 1); a bare `x = v` writes (a global, an
+            # upvalue, or a re-assignment). A `{ key = value, }` line is a table
+            # constructor field, not a statement. `table.concat` reads.
+            r"(?:^|;)[ \t]*(?!local\b)[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*=(?![=])(?![^\n(]{0,300},[ \t]*$)"
+            r"|\btable\.(?:insert|remove|move|sort)\b",
+            re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails) Commented out structural code trails.
         "dead_code": re.compile(
@@ -112,7 +140,8 @@ DEFINITION: dict[str, Any] = {
         ),
         # 14. test: Testing & Assertions. Busted, LuaUnit, and custom verification markers.
         "test": re.compile(
-            r'\b(?:setup|teardown|busted|luassert|assert|mock|stub|spy|luaunit|Test[A-Z]\w*)\b|\b(?:describe|it)\s*[\'"(]'
+            # #2852 contract C1: bare assert( is Lua's runtime guard -- safety's hit; the framework form is the matcher chain assert.<chain>
+            r'\b(?:setup|teardown|busted|luassert|mock|stub|spy|luaunit|Test[A-Z]\w*)\b|\bassert\s*\.|\b(?:describe|it)\s*[\'"(]'
         ),
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
         # 15. concurrency: Temporal Static. Lua coroutines and task schedulers.
@@ -126,7 +155,13 @@ DEFINITION: dict[str, Any] = {
         # 17. closures: Closures / Anonymous Functions. Anonymous function depth.
         "closures": re.compile(r"(?:^|[(=,\s])function\s*\([^)]*\)", re.M),
         # 18. globals: Global / Shared State. Access to global registries.
-        "globals": re.compile(r"\b(_G|_ENV|_VERSION|arg)\b|^[ \t]*[A-Z][A-Z0-9_]*[ \t]*=(?![=])", re.M),
+        "globals": re.compile(
+            # #2858 contract corollary 3: `arg` is the script's global argument
+            # table only when it is not being declared as a local (`local arg =
+            # {...}`), assigned, or read as a field (`t.arg`).
+            r"\b(?:_G|_ENV|_VERSION)\b|(?<!local )(?<![\w.:])arg\b(?![ \t]*=(?![=]))|^[ \t]*[A-Z][A-Z0-9_]*[ \t]*=(?![=])",
+            re.M,
+        ),
         # 19. decorators: Decorators / Annotations. EmmyLua annotations.
         "decorators": re.compile(r"^[ \t]*---@[a-zA-Z_]\w*", re.M),
         # 20. generics: Generics / Type Parameters. EmmyLua generic type annotations.
@@ -167,8 +202,9 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership: Authorship metadata in comments.
+        # #2882 contract: C2 `Copyright:`/`License:` out
         "ownership": re.compile(
-            r"--\s*(?:Author|Copyright|License|Maintainer):\s+([^\n]+)|---\s*@author\s+([^\n]+)",
+            r"^[ \t]*(?:--+(?:\[\[)?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -204,7 +240,8 @@ DEFINITION: dict[str, Any] = {
         # 40. explicit_casts (Explicit Type Casting): "Trust Me" Tax.
         "explicit_casts": re.compile(r"\b(ffi\.cast|tonumber|tostring)\b"),
         # 41. panics_and_aborts (Execution Interrupts / Fatal Aborts)
-        "panics_and_aborts": re.compile(r"\b(error|assert|os\.exit)\b"),
+        # #2898: `assert` removed -- safety's token (its rule already counts it).
+        "panics_and_aborts": re.compile(r"\b(error|os\.exit)\b"),
         # 42. thread_sleeps (Thread Blocking / Synchronous Pauses)
         "thread_sleeps": re.compile(r'\b(task\.wait|os\.execute\s*\(?[\'"]sleep)\b'),
         # 43. bitwise_ops (Bitwise Operations)
@@ -214,9 +251,15 @@ DEFINITION: dict[str, Any] = {
         # 45. immutability_locks (Immutability Constraints)
         "immutability_locks": re.compile(r"<\s*const\s*>"),
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r"\b(ffi\.C\.free|collectgarbage|io\.close|:[ \t]*close)\b|<\s*(?:close|toclose)\s*>"),
+        "cleanup": re.compile(
+            r"\b(ffi\.C\.free|collectgarbage(?![ \t]*\([ \t]*[\"\'](?:stop|restart|isrunning|count|setpause|setstepmul|incremental|generational)\b)|io\.close|:[ \t]*close)\b|<\s*(?:close|toclose)\s*>"
+        ),  # #2888 C4: collectgarbage("stop"/"restart"/...) configures the collector
         # 47. encapsulation
-        "encapsulation": re.compile(r"\b(local|_ENV)\b|---@private", re.M),
+        # #2766: contract-level absence. `local` is lexical scoping of every variable
+        # (scope is not API visibility) and `---@private` is a doc annotation, not a
+        # language construct. Lua's module-privacy idiom (not returning a name from
+        # the module table) is structural, not a marker.
+        "encapsulation": None,
         # 48. listeners (Event Listeners / Observers)
         # BUG FIX: `on\s*\(` ends on `(` (non-word), so the shared
         # trailing \b could only fire when a word char immediately
@@ -226,11 +269,20 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"\b(xdescribe|xit|skip)\b"),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Lua Specifics) ---
+        # auth_middleware (#3004): contract-level absence. Lua is an embedded
+        # scripting language -- authentication belongs to the host (openresty's
+        # access phase, a game engine's account service); no native vocabulary.
+        "auth_middleware": None,
         "serialization_parsing": re.compile(r"\b(string\.dump|loadstring|load|cjson\.decode|cjson\.encode)\b"),
         "regex_execution": re.compile(r"\b(string\.match|string\.gmatch|string\.find|string\.gsub)\b"),
         "time_date_logic": re.compile(r"\b(os\.time|os\.clock|os\.date|os\.difftime)\b"),
-        "ipc_rpc_bridges": re.compile(
-            r"\b(os\.execute|io\.popen|coroutine\.create|coroutine\.resume|coroutine\.yield)\b"
-        ),
+        # #2898: the coroutine.* family removed -- in-process control transfer is
+        # concurrency's (its rule already counts `coroutine`); a bridge crosses a
+        # process boundary, which os.execute/io.popen do.
+        "ipc_rpc_bridges": re.compile(r"\b(os\.execute|io\.popen)\b"),
+        # system_config_mutation (#3084): contract-level absence. embedded
+        # scripting layer; host config is reachable only through os.execute
+        # command text (high_risk_execution's boundary).
+        "system_config_mutation": None,
     },
 }

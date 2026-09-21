@@ -63,8 +63,17 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
         # Control flow. Includes modern match expression. EXCLUDES throw (bailout_hits).
+        # BUG FIX (#2541): the bare ternary `\?` alternation matched the `?`
+        # inside PHP's own tag syntax -- `<?php`, `<?=` (short echo), and `?>`
+        # -- so every PHP file recorded branch >= 1 from its open tag alone.
+        # Excluded via tag-shape guards on the `?` alternations: `(?<!<)`
+        # blocks a `?` directly after `<` (all open-tag forms, incl. the bare
+        # `<?` short tag) and `(?!>)` blocks a `?` directly before `>` (the
+        # close tag). Real ternaries (`$a ? $b : $c`, Elvis `?:`) and
+        # null-coalescing `??`/`??=` are unaffected: no valid PHP operator
+        # use of `?` sits immediately after `<` or immediately before `>`.
         "branch": re.compile(
-            r"(?<!\$)(?<!->)(?<!::)\b(if|else|elseif|switch|case|default|foreach|for|while|do|try|catch|finally|break|continue|match|goto)\b|&&|\|\||\?\?|\?"
+            r"(?<!\$)(?<!->)(?<!::)\b(if|else|elseif|switch|case|default|foreach|for|while|do|break|continue|match)\b|&&|\|\||(?<!<)\?\?|(?<!<)\?(?!>)"
         ),
         # 2. args (Parameters / Coupling)
         # Signatures for functions and arrow functions. Bounded to prevent ReDoS.
@@ -82,7 +91,7 @@ DEFINITION: dict[str, Any] = {
         # 3. linear (Sequential Boundaries)
         # Structural boundaries. EXCLUDES: Access modifiers (encapsulation) and const/readonly (freeze_hits).
         "structural_boundaries": re.compile(
-            r"(?<!\$)(?<!->)(?<!::)\b(namespace|use|class|interface|trait|enum|function|return|yield|declare|require|require_once|include|include_once|as|implements|extends|clone|new)\b"
+            r"(?<!\$)(?<!->)(?<!::)\b(namespace|use|class|interface|trait|enum|function|return|yield|declare|require|require_once|include|include_once|as|implements|extends|clone|new|goto)\b"
         ),
         "func_start": re.compile(
             r"(?:^|(?<!->)(?<!::)[^a-zA-Z0-9_$])(?:#\[(?:[^\]\'\"]|'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")*\][ \t\n]*){0,10}"
@@ -116,14 +125,38 @@ DEFINITION: dict[str, Any] = {
         ),
         # 8. danger (High-Risk Execution / System Calls)
         # Shell execution and process killers. EXCLUDES prints (Phase 5).
-        "high_risk_execution": re.compile(r"\b(exec|shell_exec|system|passthru|proc_open|popen)\b|`[^`]+`"),
+        # #2878 contract C2: call form, and a backtick command sits at expression position (the
+        # crucible's backticks were MySQL identifier quotes inside SQL strings); eval/exit/die join.
+        "high_risk_execution": re.compile(
+            r"\b(?:exec|shell_exec|system|passthru|proc_open|popen|pcntl_exec|eval|die|exit)\s*\(|(?<![\$\w])(?:exit|die)\s*;|(?:^|[=(,;{]|\breturn|\becho)[ \t]*`[^`\n]+`",
+            re.M,
+        ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
             r"\b(fopen|fread|fwrite|file_get_contents|file_put_contents|PDO|mysqli|curl_exec|socket|header|setcookie)\b|\$_(?:GET|POST|FILES|REQUEST|COOKIE)"
         ),
         # 10. api (Public Surface Area)
         # Exposed surface. Explicit public markers + attribute routes.
-        "api": re.compile(r"\b(public)\b|#\[(?:ApiResource|Route|Get|Post|Put|Delete|Patch)[^\]]*\]"),
+        # BUG FIX #2730 (api contract): a bare `\bpublic\b` counted the
+        # access modifier ANYWHERE in the code stream -- inside a string
+        # literal, a `switch` case, a dotted name -- not only where it
+        # declares something. The alternatives below anchor it to the
+        # declaration it modifies, per docs/api_rule_contract.md ("a
+        # declaration that makes a named function or type visible outside
+        # this file"). Every quantifier is bounded (Rule 5) and the modifier
+        # stepper is `{0,5}`, not `*`, so the `[ \t\n]+`-separated
+        # alternation cannot nest unboundedly (the ReDoS shape swift's `open`
+        # alternative was already written against).
+        # PHP always follows the modifier with `function`, `const`, a `$`
+        # property (optionally typed), or another modifier. Measured: 1153
+        # crucible matches before, 1146 after -- the seven dropped were a
+        # `$public` variable, a `'path.public'` container key and a
+        # `->public` property read.
+        "api": re.compile(
+            r"\bpublic[ \t\n]+(?:(?:static|final|abstract|readonly)[ \t\n]+){0,4}"
+            r"(?:function\b|const\b|\$[a-zA-Z_]|\??[\\A-Za-z_][\w\\|]*[ \t\n]+\$[a-zA-Z_])"
+            r"|#\[(?:ApiResource|Route|Get|Post|Put|Delete|Patch)[^\]]*\]"
+        ),
         # 11. flux (State Mutation)
         # Mutation of state. Variable reassignments and array mutators.
         # QUADRATIC BLOWUP FIX: the optional `(?:\w+)?` before the
@@ -131,7 +164,20 @@ DEFINITION: dict[str, Any] = {
         # preceding \b anchor -- O(n^2) on a long run of word characters
         # with neither token present. Bounded to {1,100}.
         "state_mutation": re.compile(
-            r"\$[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*\s*(?:[-+*./%&|])?=|&\$|\bglobal\s+\$|(?:\w{1,100})?(?:->|::)[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*[ \t]*=|array_(?:push|pop|shift|unshift|splice)\b|(?:\+\+|--)"
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # PHP has no declaration syntax, so every assignment statement is a write
+            # (contract corollary 1's fallback). `global $x` is the `globals` rule's token
+            # (corollary 4) and `&$x` a reference declaration -- neither writes. `==`,
+            # `===` and `=>` are excluded.
+            r"\$[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*(?:\[[^\]\n]{0,80}\])*\s*(?:[-+*./%&|^]|\*\*|<<|>>|\?\?)?=(?![=>])"
+            r"|(?:\w{1,100})?(?:->|::)\$?[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*(?:\[[^\]\n]{0,80}\])*[ \t]*(?:[-+*./%&|^]|\?\?)?=(?![=>])"
+            r"|\barray_(?:push|pop|shift|unshift|splice)\b|[\w)\]][ \t]*(?:\+\+|--)|(?:\+\+|--)[ \t]*\$"
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         # BUG FIX: the `function|class|namespace|use|if|foreach`
@@ -145,10 +191,16 @@ DEFINITION: dict[str, Any] = {
             r"|#\s*\$|//\s*(?:echo|print|\$|return|var_dump)"
         ),
         # 13. doc (Structured Documentation)
-        "doc": re.compile(r"/\*\*|@param|@return|@throws|@var|@deprecated|@property|@method"),
+        # BUG FIX #2672: pair `/**` with its closing `*/` into one bounded
+        # (0,15000 chars) non-greedy span so a PHPDoc block counts once, not
+        # once per tag inside it (the #2658 shape). Bare tags stay last so a
+        # tag outside any doc block still counts.
+        "doc": re.compile(r"/\*\*[\s\S]{0,15000}?\*/|@param|@return|@throws|@var|@deprecated|@property|@method"),
         # 14. test (Testing & Assertions)
         "test": re.compile(
-            r"\b(PHPUnit|TestCase|assertSame|assertEquals|assertTrue|assertFalse|mock|spy|expects|toBe|test|it)\b|#\[Test\]"
+            # #2852 contract C3: everyday words anchor to their call form; ->test( is an ordinary method
+            # call (Twig's Token.test) and $mock an ordinary variable, measured in the crucible
+            r"\b(?:PHPUnit|TestCase|assertSame|assertEquals|assertTrue|assertFalse)\b|\b(?:mock|spy|expects|toBe)\s*\(|(?<!->)\b(?:test|it)\s*\(|#\[Test\]"
         ),
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
         # 15. concurrency (Asynchronous Execution)
@@ -238,7 +290,11 @@ DEFINITION: dict[str, Any] = {
             re.M | re.I,
         ),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"@(?:author|copyright)\s+(.*)|(?:Created by|Maintainer):?\s+(.*)", re.I),
+        # #2882 contract: C2 `@copyright` out; C1 colon-less `Created by`/`Maintainer` matched prose
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+|#+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -301,7 +357,9 @@ DEFINITION: dict[str, Any] = {
         # 42. thread_sleeps (Thread Blocking / Synchronous Pauses)
         "thread_sleeps": re.compile(r"\b(sleep|usleep|time_nanosleep|time_sleep_until)\b"),
         # 43. bitwise_ops (Bitwise Operations)
-        "bitwise_ops": re.compile(r"<<|>>|(?<!&)&(?!&)|(?<!\|)\|(?!\|)|\^|~"),
+        # #2899: `&` no longer matches HTML entities (&amp;, &#123;) inside the string
+        # stream -- 12316 of php's 15137 crucible hits were entity ampersands.
+        "bitwise_ops": re.compile(r"<<|>>|(?<!&)&(?!&)(?![a-zA-Z#]\w*;)|(?<!\|)\|(?!\|)|\^|~"),
         # 44. sync_locks (Resource Management & Stability)
         "sync_locks": re.compile(r"\b(mutex|lock|synchronized|Semaphore|flock|sem_acquire)\b", re.I),
         # 45. immutability_locks (Immutability Constraints)
@@ -309,7 +367,8 @@ DEFINITION: dict[str, Any] = {
         # 46. cleanup (Resource Cleanup / Teardown)
         "cleanup": re.compile(r"\b(unset|fclose|mysql_close|mysqli_close|PDO::null|dispose|cleanup)\b\s*\("),
         # 47. encapsulation (Access Modifiers / Encapsulation)
-        "encapsulation": re.compile(r"\b(private|protected|internal)\b"),
+        # #2766: `internal` removed -- not a php keyword (matched prose/identifiers).
+        "encapsulation": re.compile(r"\b(private|protected)\b"),
         # 48. listeners (Event Listeners / Observers)
         "listeners": re.compile(r"\.on\(|addEventListener|subscribe|@KafkaListener|@RabbitListener"),
         # 49. test_skip (Bypassed Tests / Ignored Specs)
@@ -319,6 +378,16 @@ DEFINITION: dict[str, Any] = {
         # (`mock();`).
         "test_skip": re.compile(r"\b(?:markTestSkipped|test\.skip|it\.skip)\b|\bmock\(|\bfake\("),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (PHP Specifics) ---
+        # auth_middleware (#3004): laravel's Auth/Gate facades, the controller
+        # authorize call, blade's @can directive, and PHP's native
+        # password_verify. Facade-anchored so the bare words never count.
+        "auth_middleware": re.compile(
+            r"\bAuth::(?:check|attempt|user|login|logout|guard)\("
+            r"|\bGate::(?:allows|denies|authorize|check|any)\("
+            r"|->authorize\("
+            r"|\bpassword_verify\("
+            r"|@can\("
+        ),
         "serialization_parsing": re.compile(
             r"\b(unserialize|serialize|json_decode|json_encode|simplexml_load_(?:string|file)|DOMDocument)\b"
         ),
@@ -330,5 +399,9 @@ DEFINITION: dict[str, Any] = {
         # (`date("Y-m-d")`).
         "time_date_logic": re.compile(r"\b(?:strtotime|DateTime(?:Immutable)?|date_create)\b|\btime\s*\(|\bdate\s*\("),
         "ipc_rpc_bridges": re.compile(r"\b(shell_exec|exec|system|passthru|proc_open|curl_exec|fsockopen)\b"),
+        # system_config_mutation (#3084): contract-level absence. web-app layer;
+        # ini_set( tunes the current process only (program-own state, not
+        # durable), and conf-file writes are ordinary I/O.
+        "system_config_mutation": None,
     },
 }

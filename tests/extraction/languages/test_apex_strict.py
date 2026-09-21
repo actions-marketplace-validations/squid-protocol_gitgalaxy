@@ -94,44 +94,65 @@ _APEX_SIMPLE_CASES = [
     ("branch", "else if(y != 2)", "elseVar = 5;"),
     ("branch", "switch on account.Industry {", "Integer switchCount = 0;"),
     ("branch", "when 'Agriculture' {", "whenMethod();"),
-    ("branch", "try {", "tryVar = 1;"),
-    ("branch", "catch (Exception e) {", "catchVar = 1;"),
-    ("branch", "finally {", "finalVar = 1;"),
+    # 2822 corollary 1: the try/catch/finally construct is safety's, not a decision
+    ("branch", "while (x > 0) {", "try {"),
+    ("branch", "for (Integer i : items) {", "catch (Exception e) {"),
+    ("branch", "break;", "finally {"),
     ("branch", "do {", "doMethod();"),
-
     # args
     ("args", "public static List<Id> getIds(Map<Id, Account> accMap, Boolean flag) {", "System.debug(map, true);"),
     ("args", "global override Database.QueryLocator start(Database.BatchableContext BC)", "Id x = start();"),
     ("args", "@AuraEnabled(cacheable=true) public static List<Account> getAccounts(String name)", "public class Foo {"),
-    ("args", "@RestResource(urlMapping='/Account/*/details/(.*)') global static void doThing(String id) {", "System.debug('public void doThing()');"),
+    (
+        "args",
+        "@RestResource(urlMapping='/Account/*/details/(.*)') global static void doThing(String id) {",
+        "System.debug('public void doThing()');",
+    ),
     ("args", "trigger MyTrigger on Account (before insert, after update) {", "for (Integer i = 0; i < 10; i++) {"),
     ("args", "public void noArgs()", "class noArgs {"),
-    ("args", "private static Map<Id, List<Contact>> complex(Map<String, Map<Id, SObject>> nested, Boolean flag) {", "String x = 'x';"),
-
+    (
+        "args",
+        "private static Map<Id, List<Contact>> complex(Map<String, Map<Id, SObject>> nested, Boolean flag) {",
+        "String x = 'x';",
+    ),
     # func_start
     ("func_start", "public void doThing() {", "public class Foo {"),
     ("func_start", "global static List<Account> getAccounts() {", "global class AccountService {"),
     ("func_start", "private \n void \n helperMethod \n () {", "private String varName;"),
     ("func_start", "@AuraEnabled\npublic static String performAction(Id recId)", "@AuraEnabled public Integer count;"),
-    ("func_start", "override protected Database.QueryLocator start(Database.BatchableContext BC)", "override class MyBatch {"),
+    (
+        "func_start",
+        "override protected Database.QueryLocator start(Database.BatchableContext BC)",
+        "override class MyBatch {",
+    ),
     ("func_start", "@AuraEnabled(cacheable=true) public static List<Account> getAccounts() {", "if (true) {"),
-    ("func_start", "@RestResource(urlMapping='/Account/*/details/(.*)') global static void doThing() {", "public interface Foo {"),
+    (
+        "func_start",
+        "@RestResource(urlMapping='/Account/*/details/(.*)') global static void doThing() {",
+        "public interface Foo {",
+    ),
     ("func_start", "trigger MyTrigger on Account (before insert) {", "catch (Exception e) {"),
     ("func_start", "public virtual List<Map<String, Object>> complexReturn() {", "return complexReturn;"),
-
     # class_start
     ("class_start", "public class Foo {", "public void doThing() {"),
     ("class_start", "global with sharing class SecureService implements BaseService {", "global void doSharing() {"),
     ("class_start", "private virtual abstract class BaseHelper", "private String baseVar;"),
     ("class_start", "@isTest\nprivate class MyTestClass {", "@isTest static void testMethod() {"),
-    ("class_start", "@RestResource(urlMapping='/Account/*/details/(.*)') global class Foo {", "String className = 'Foo';"),
+    (
+        "class_start",
+        "@RestResource(urlMapping='/Account/*/details/(.*)') global class Foo {",
+        "String className = 'Foo';",
+    ),
     ("class_start", "public \n without \n sharing \n class \n Foo \n extends \n Bar {", "System.debug('class');"),
     ("class_start", "public enum Status {", "public void Status() {"),
     ("class_start", "global interface IService {", "global void IService() {"),
-
     # structural_boundaries
     ("structural_boundaries", "public class Foo {", "Integer x = 1;"),
-    ("structural_boundaries", "trigger AccountTrigger on Account (before insert)", "AccountTrigger handler = new AccountTrigger();"),
+    (
+        "structural_boundaries",
+        "trigger AccountTrigger on Account (before insert)",
+        "AccountTrigger handler = new AccountTrigger();",
+    ),
     ("structural_boundaries", "public interface IService {", "String classVar = 'x';"),
     ("structural_boundaries", "public enum Status {", "Integer enumVal = 1;"),
     ("structural_boundaries", "final Integer x = 1;", "finalize();"),
@@ -141,10 +162,13 @@ _APEX_SIMPLE_CASES = [
     ("structural_boundaries", "public virtual class Foo", "virtualMethod();"),
     ("structural_boundaries", "public abstract class Foo", "abstractMethod();"),
     ("structural_boundaries", "return x;", "String returnVar = 'x';"),
-
     ("safety", "try {", "Integer x = 1;"),
     ("safety_bypasses", "without sharing", "with sharing"),
-    ("high_risk_execution", "delete records;", "insert records;"),
+    (
+        "high_risk_execution",
+        "Database.emptyRecycleBin(ids);",
+        "delete records;",
+    ),  # #2878 C4/C5: DML delete is not a site
     ("io", "[SELECT Id FROM Account]", "Integer x = 1;"),
     ("api", "global class Foo {", "public class Foo {"),
     ("state_mutation", "insert acc;", "System.debug('hi');"),
@@ -159,7 +183,7 @@ _APEX_SIMPLE_CASES = [
     ("comprehensions", "for (Account a : [SELECT Id FROM Account]) {", "for (Integer i=0;i<10;i++) {"),
     ("scientific", "Math.abs(x);", "Integer x = 1;"),
     ("reflection_metaprogramming", "Type.forName('Foo');", "Integer x = 1;"),
-    ("import", "MyUtil.Helper();", "System.debug('x');"),
+    ("import", "Type.forName('MyUtil');", "MyUtil.Helper();"),  # #2875 C3: a reference is not a binding
     ("ownership", "Author: Jane Doe", "Integer x = 1;"),
     ("planned_debt", "// TODO: fix this", "// done"),
     ("fragile_debt", "// HACK: workaround", "// clean"),
@@ -175,7 +199,11 @@ _APEX_SIMPLE_CASES = [
     ("bitwise_ops", "x = a & b;", "x = a && b;"),
     ("sync_locks", "[SELECT Id FROM Account FOR UPDATE]", "[SELECT Id FROM Account]"),
     ("immutability_locks", "final Integer MAX = 10;", "Integer x = 1;"),
-    ("cleanup", "emptyRecycleBin();", "Integer x = 1;"),
+    (
+        "cleanup",
+        "Database.rollback(sp);",
+        "emptyRecycleBin();",
+    ),  # #2878 C6: emptyRecycleBin is high_risk_execution's alone
     ("encapsulation", "private Integer x;", "public Integer x;"),
     ("listeners", "trigger MyTrigger on Account (before insert) {", "public class Foo {"),
     ("test_skip", "Test.setMock(HttpCalloutMock.class, mock);", "Integer x = 1;"),
@@ -358,3 +386,108 @@ def test_apex_redos_immunity_sweep():
     assert APEX_RULES["func_start"].search("public void doThing() {")
     assert APEX_RULES["class_start"].search("public class Foo {")
     assert APEX_RULES["safety_bypasses"].search("without sharing")
+
+
+def test_apex_doc_counts_apexdoc_block_once_not_per_tag_regression():
+    """#2672: a `doc` rule listing both a doc-comment marker (`/**`) and the tags that
+    live inside it (`@param`, `@return`, ...) as independent alternatives counts one
+    ApexDoc block once per marker plus once per tag. Fixed by pairing the block into a
+    single bounded, non-greedy span (same shape as #2658's python `\"\"\"` fix) so the
+    whole block -- markers and every tag inside it -- is one hit.
+    """
+    doc = APEX_RULES["doc"]
+    block = "/**\n * @description does the thing\n * @param x in\n * @return out\n */"
+    assert len(doc.findall(block)) == 1, "one ApexDoc block must count as doc=1, not once per tag"
+
+    # a tag OUTSIDE any doc comment must still count (non-goal: bare tags stay counted).
+    assert len(doc.findall("@param bare tag with no enclosing doc block")) == 1
+
+
+def test_apex_doc_and_ownership_author_colon_optional_split_regression():
+    """#2672's apex-specific half-step: `doc` and `ownership` both listed `@author`, but
+    `ownership` required a colon (`@author:\\s+`), so idiomatic colon-less ApexDoc
+    (`@author Joe`) was doc-only while `@author: Joe` double-counted both rules. Fix:
+    drop `@author` from `doc` entirely (it's `ownership`'s to own) and relax just the
+    `@author` alternative in `ownership` to colon-optional, leaving the other
+    prose-risky alternatives (Author|Created by|Maintainer|Copyright|...) colon-required
+    so ordinary prose can't false-positive. Four cases verified directly against the
+    issue's own worked examples.
+    """
+    doc = APEX_RULES["doc"]
+    ownership = APEX_RULES["ownership"]
+
+    # idiomatic ApexDoc: @author with no colon, inside a real doc block -> doc counts the
+    # block once (not via @author, which doc no longer lists), ownership claims @author.
+    idiomatic = "/**\n * @author Joe\n */"
+    assert len(doc.findall(idiomatic)) == 1
+    m = ownership.search(idiomatic)
+    assert m and m.group(m.lastindex).strip() == "Joe"  # #2882 C3: the last group is the value
+
+    # colon form outside any doc block: doc has nothing to match (no /**, @author isn't
+    # a doc tag anymore); ownership still claims it via the colon-optional alternative.
+    colon_form = "@author: Joe"
+    assert not doc.search(colon_form)
+    m2 = ownership.search(colon_form)
+    assert m2 and m2.group(m2.lastindex).strip() == "Joe"
+
+    # the real rosetta corpus construct (data/apex/main.cls): doc=1 comes from the
+    # separate @description line, unaffected by dropping @author; ownership still
+    # claims the colon-required "Author:" alternative. Unchanged by this fix.
+    corpus = "// Author: keyword-rosetta generator\n// @description dispatch each probe once"
+    assert len(doc.findall(corpus)) == 1
+    m3 = ownership.search(corpus)
+    assert m3 and m3.group(m3.lastindex).strip() == "keyword-rosetta generator"
+
+    # prose must never false-positive on either rule.
+    prose = "the Author of this module"
+    assert not doc.search(prose)
+    assert not ownership.search(prose)
+
+
+def test_apex_doc_block_redos_immunity():
+    """ReDoS probe on #2672's new bounded, non-greedy block alternative -- an
+    unterminated `/**` running into 200k+ chars of never-closing input must fail
+    closed (no catastrophic backtracking), same profile as #2658's python probe.
+    """
+    assert_redos_immune(APEX_RULES["doc"], "/**" + "a" * 200000, timeout_sec=3.0)
+    # sanity: the pattern still matches its real positive case after the sweep.
+    assert APEX_RULES["doc"].search("/** @param x in */")
+
+
+def test_apex_import_ignorecase_type_guard_regression():
+    """#2671 found the reference arm's `[A-Z]` guard neutralised by re.IGNORECASE (every
+    `word.word` counted as an import) and scoped it with `(?-i:...)`. The #2875 import
+    contract (C3, docs/import_rule_contract.md) then retired the arm: a qualified
+    `Receiver.Member` is a *reference* to a type, not a binding of a unit -- apex has no
+    import statement at all, and `Type.forName(` is its one load form. The #2671
+    negatives stay negatives; the capitalised type reference joins them.
+    """
+    import_rule = APEX_RULES["import"]
+
+    # positive: the dynamic loader in either case (apex is case-insensitive).
+    assert import_rule.search("Type.forName('a')")
+    assert import_rule.search("TYPE.FORNAME('a')")
+    assert import_rule.search("Type.forName(ns, 'a')")
+
+    # negative: the #2671 micro-repro, plus the type reference the old arm counted.
+    for false_positive in ("foo.bar", "conn.clear", "Logger.info", "Account.SObjectType", "acct.Id"):
+        assert not import_rule.search(false_positive), (
+            f"apex 'import' matched a reference, not a binding: {false_positive!r}"
+        )
+
+    # the namespace lookahead the old arm needed is gone with it -- still excluded.
+    assert not import_rule.search("System.debug('x')")
+    assert not import_rule.search("Database.query('SELECT Id FROM Account')")
+
+
+def test_apex_return_not_counted_as_branch_regression():
+    """#2545: `return` must not phantom-count as a branch -- java, apex's own JVM
+    sibling, doesn't count it either. Still tracked under structural_boundaries."""
+    branch = APEX_RULES["branch"]
+    structural = APEX_RULES["structural_boundaries"]
+
+    assert not branch.search("return x;"), "bare return must not count as branch"
+    assert not branch.search("Integer f() { return 1; }"), "return in a real method must not count as branch"
+    assert branch.search("if (x) return 1;"), "the real if must still count as branch"
+    assert len(branch.findall("if (x) return 1;")) == 1, "only the if should match, not the return"
+    assert structural.search("return x;"), "return must still be tracked via structural_boundaries"

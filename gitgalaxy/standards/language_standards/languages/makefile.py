@@ -13,6 +13,24 @@ from typing import Any
 
 from .._shared_patterns import GLOBAL_FRAGILE_DEBT, GLOBAL_PLANNED_DEBT
 
+# #2851: the pieces of the `dead_code` target alternatives (see the rule for the reasoning).
+# One Make prerequisite token: bare name / path / pattern chars, or a `$(...)` / `${...}` ref.
+_MK_TOK = r"(?:[A-Za-z0-9_./%+@~*-]|\$[({][^ \t\n)}]*[)}])+"
+# A prerequisite list: whitespace-separated tokens, `|` (order-only), an optional `;` recipe.
+_MK_PREREQS = r"[ \t]*(?:(?:" + _MK_TOK + r"|\|)(?:[ \t]+(?:" + _MK_TOK + r"|\|))*)?[ \t]*(?:;[^\n]*)?"
+# The lifecycle names the `api` rule already treats as public targets, plus the GNU
+# standard-target set (make.info "Standard Targets for Users"), minus the ones that are
+# also common prose labels (info, ps, html, pdf, dvi).
+_MK_LIFECYCLE_TARGET = (
+    r"(?:all|install(?:-(?:strip|html|dvi|pdf|ps))?|uninstall|installcheck|installdirs"
+    r"|build|clean|distclean|mostlyclean|maintainer-clean|test|check|run|dist)(?![A-Za-z0-9_./%+@~-])"
+)
+# A file / pattern / variable target name: carries `.`, `/` or `%`, or starts with a `$(...)`
+# ref; never a leading `-` (an option table) and never a trailing `.` (`e.g.`).
+_MK_FILE_TARGET = r"(?!-)(?=[./%+@~-]*[A-Za-z0-9$])(?:[A-Za-z0-9_+@~-]*[./%][A-Za-z0-9_./%+@~-]*|\$[({][^ \t\n)}]*[)}][A-Za-z0-9_./%+@~-]*)(?<!\.)"
+# Any target name a commented recipe can vouch for: lowercase-initial, digit, or a file form.
+_MK_PLAIN_TARGET = r"(?:[a-z0-9_./%+@~][A-Za-z0-9_./%+@~-]*|\$[({][^ \t\n)}]*[)}][A-Za-z0-9_./%+@~-]*)(?<!\.)"
+
 DEFINITION: dict[str, Any] = {
     "_meta": {
         "target_version": "GNU Make 4.4+",
@@ -38,13 +56,24 @@ DEFINITION: dict[str, Any] = {
     # UPGRADED: Maps to Family 3 (Pure Hash)
     # Rationale: Make natively uses '#' exclusively for line-level comments.
     "lexical_family": "line_exclusive",
+    # #2904: a makefile's callable units are invoked EXTERNALLY -- a human typing
+    # `make all`, CI, a Dockerfile -- never by an in-repo caller or import, so a
+    # `.PHONY:` target is a curated declaration of the file's external interface,
+    # not dead weight. This opts makefile into the tier-3 Contextual Baseline Fix
+    # (galaxyscope.py): its declared entry-point orphans are credited as api
+    # surface instead of `risk_tech_debt`, while the census keeps reading the
+    # orphan honestly. Narrow and safe because `_visibility_export_list`
+    # (`.PHONY:`) names exactly the external interface, unlike a JS/TS `export`
+    # that decorates every symbol. Closed set asserted by
+    # tests/core_engine/test_export_visibility_contract_2904.py.
+    "export_visibility": "external_entry_points",
     "rules": {
         # --------------------------------------------------------------------------
         # 1. GEOMETRY & SHAPE (Geometry & Shape)
         # --------------------------------------------------------------------------
         # Captures Make conditionals and typical inline shell conditional branches.
         "branch": re.compile(
-            r"^[ \t]*(?:ifeq|ifneq|ifdef|ifndef|else|endif)\b(?![ \t]*:)|(?:^[ \t]*(?:@|-|\+)*[ \t]*|[;|&(][ \t]*)\b(?:if|elif|for|while|case)\b|&&|\|\|",
+            r"^[ \t]*(?:ifeq|ifneq|ifdef|ifndef|else)\b(?![ \t]*:)|(?:^[ \t]{0,64}(?:@|-|\+){0,8}[ \t]{0,64}|[;|&(][ \t]*)\b(?:if|elif|for|while|case)\b|&&|\|\|",
             re.M,
         ),
         # Make dynamically accesses arguments within $(call macro, args...) or positional $1, $2 inside recipes.
@@ -63,7 +92,7 @@ DEFINITION: dict[str, Any] = {
         # Smooth structural boundaries: variable assignments (:=, =, ?=) and native structural controls like vpath.
         # Explicitly excludes the append operator `+=` which belongs in flux.
         "structural_boundaries": re.compile(
-            r"^[ \t]*(?:[a-zA-Z0-9_.-]|\+(?!=))+[ \t]*(?::|\?|::)?=(?![ \t]*=)|^[ \t]*(?:vpath|undefine)\b",
+            r"^[ \t]*(?:[a-zA-Z0-9_.-]|\+(?!=))+[ \t]*(?::|\?|::)?=(?![ \t]*=)|^[ \t]*(?:vpath|undefine|endif)\b",
             re.M,
         ),
         # 4. func_start (Executable Logic Anchors)
@@ -134,7 +163,11 @@ DEFINITION: dict[str, Any] = {
         # valid, equally common ignore-errors forms.
         "safety_bypasses": re.compile(r"^\t[ \t]*-[ \t]*[a-zA-Z0-9_./$]|\|\|[ \t]*(?:true|exit[ \t]+0)\b", re.M),
         # Heavily destructive sequence patterns or overriding permissions. (Eval is categorized under heat_triggers).
-        "high_risk_execution": re.compile(r"\bsudo[ \t]+|\brm[ \t]+-[rR]?[fF][ \t]+(?:/|\$[{(])|\bkill[ \t]+-9\b"),
+        # #2878 contract C4: root-only recursive delete (a `$(VAR)` target is cleanup's form,
+        # as yaml already reads it); any kill except the -0 probe / -l listing (C1a).
+        "high_risk_execution": re.compile(
+            r"\bsudo[ \t]+|\brm[ \t]+(?:-[rR][fF]|-[fF][rR])[ \t]+[\"']?/(?![A-Za-z])|\bkill[ \t]+(?!-[0l]\b)"
+        ),
         # Interacting directly with outputs, networks, or the disk filesystem.
         "io": re.compile(
             r"\$\((?:file|wildcard)[ \t]+|\b(?:curl|wget|scp|rsync|tar|unzip|mkdir|cp|mv)\b|>>?[ \t]*[^ \t\n/]+"
@@ -144,11 +177,61 @@ DEFINITION: dict[str, Any] = {
             r"^[ \t]*(?:\.PHONY|export\b|(?:all|install|build|clean|test|run)[ \t]*::?)",
             re.M,
         ),
+        # #2872: the ORPHAN-CENSUS EXEMPTION, plural form -- see #2823's note in
+        # scheme.py and haskell.py. A `.PHONY:` line names every target it lists
+        # as phony; naming a target in that declaration is a visibility
+        # DECLARATION, not a use, so the census must not let it clear the orphan
+        # flag the api plant is meant to leave standing (keyword-rosetta#53). The
+        # list form because a single `.PHONY:` prerequisite list names an
+        # arbitrary number of targets in one clause. Group 1 is the region after
+        # the colon; `_export_declaration_offsets` tokenizes it with
+        # `_EXPORT_LIST_NAME` and records the start offset of each name, which
+        # `_is_orphan` then discounts. A trailing `#` comment on the line falls
+        # inside the region, but only name-start offsets are used and a comment
+        # word's offset never coincides with a target's definition, so it costs
+        # nothing. Leading `_` keeps it out of `coding_analysis`'s rule loop and
+        # the counts schema, the same way `_scope_filters` does.
+        "_visibility_export_list": re.compile(r"^[ \t]*\.PHONY[ \t]*:[ \t]*(.*)$", re.M),
         # Mutating variable state by appending (+=) or shell assignment (!=). .
         "state_mutation": re.compile(r"^[ \t]*(?:[a-zA-Z0-9_.-]|\+(?!=))+[ \t]*(?:\+|!)=", re.M),
-        # Commented-out targets, commented out shell logic, or commented conditional Make directives.
+        # Commented-out targets, assignments, or conditional / include directives.
+        # BUG FIX #2851: the target alternative was `<identifier>[ \t]*::?` -- a bare shape
+        # that every `Label: text` prose comment satisfies (`# TODO:`, `# NOTE:`, `# Author:`,
+        # and `# SPDX-License-Identifier:` on every kernel Makefile: 82% of the rule's hits on
+        # a 3,002-file real-world pool were that one line). The sibling comment-stream rules
+        # (shell, python, yaml) all anchor on a closed keyword set; Make's target syntax has
+        # no keyword, so a commented target now needs evidence a prose label cannot supply:
+        #   (a) its name is one of the lifecycle targets the `api` rule already names (plus
+        #       the GNU standard-target set), e.g. `# all: $(PRG).elf`, `# clean:`;
+        #   (b) its name is a file / pattern / variable form (`# %.o: %.c`, `# lib.a: $(OBJS)`,
+        #       `# $(TARGET): $(OBJS)`, `# .PHONY: x`) -- not a leading `-` (an option table
+        #       like `#  -Wall...: warning level`) and not a trailing `.` (`# e.g.:`);
+        #   (c) the next comment line is a commented recipe (`#\t...`), the shape a rule takes
+        #       when it is commented out whole: `# install-html: html` / `#\t./install.sh`.
+        # In every form the prerequisite list must read as Make prerequisites (bare tokens,
+        # variable refs, `|`, an optional `;` recipe) -- a `,`, a `:` (URLs) or a trailing
+        # sentence period ends the claim -- and a multi-target rule carries at most three
+        # co-targets (`# build parallelizes well and finishes roughly at once:` is a sentence).
+        # Form (c) wants a single name, lowercase or file-form (`# vmlinuz is:` + a tab-indented
+        # listing is prose; a tab-continued `# NOTE:\t...` paragraph is prose), on a line that
+        # is space-indented after the `#` (a tab-indented `#\tavrdude: ...` is a pasted log).
+        # A commented assignment cannot start with `-` (`# -mcmodel=medium breaks modules`),
+        # and `include` (also `-include` / `sinclude`, the forms the `import` rule reads) needs
+        # a path-like argument (`# include the stub's deps` is prose).
+        # Known narrowness, deliberate: a commented recipe line on its own (`#\t$(CC) ...`) is
+        # not counted -- `#\t` also opens tab-aligned prose paragraphs and pasted tool output.
         "dead_code": re.compile(
-            r"^[ \t]*#[ \t]*(?:[a-zA-Z0-9_./%+-]+[ \t]*::?|(?:[a-zA-Z0-9_.-]|\+(?!=))+[ \t]*(?::|\?|::)?=|\b(?:ifeq|ifneq|ifdef|ifndef|include)\b)",
+            r"^[ \t]*#(?:"
+            # -- target forms (a) and (b): name + optional co-targets + `:`/`::` + prerequisites to end of line
+            r"[ ]*(?:" + _MK_LIFECYCLE_TARGET + r"|" + _MK_FILE_TARGET + r")(?:[ \t]+" + _MK_TOK + r"){0,3}"
+            r"[ \t]*(?:::(?!=)|:(?!:?=))" + _MK_PREREQS + r"$"
+            # -- target form (c): any lowercase / file-form name whose next comment line is a commented recipe
+            r"|[ ]*" + _MK_PLAIN_TARGET + r"[ \t]*(?:::(?!=)|:(?!:?=))" + _MK_PREREQS + r"\n[ \t]*#[ ]*\t"
+            # -- a commented assignment (`# CFLAGS := -O2`) or conditional / include directive
+            r"|[ \t]*(?!-)(?:[a-zA-Z0-9_.-]|\+(?!=))+[ \t]*(?::|\?|::)?="
+            r"|[ \t]*\b(?:ifeq|ifneq|ifdef|ifndef)\b"
+            r"|[ \t]*-?\bs?include[ \t]+[^ \t\n]*[./$]"
+            r")",
             re.M,
         ),
         # Structured self-documenting makefile comments typically utilizing a double hash block.
@@ -183,7 +266,10 @@ DEFINITION: dict[str, Any] = {
             r"\$\((?:eval|call|value|origin|flavor|shell)[ \t]+|\.SECONDEXPANSION:"
         ),
         # Linking isolated segments of the graph execution via modular file resolution.
-        "import": re.compile(r"^[ \t]*-?(?:include|sinclude)[ \t]+[^ \t\n]+", re.M),
+        # #2875 contract C5 (statement position): a tab-initial line is a recipe command in
+        # Make's own lexical rules, never a directive -- the fix #844 applied to func_start
+        # and _dependency_capture below and deliberately left this rule out of.
+        "import": re.compile(r"^[ ]*-?(?:include|sinclude)[ \t]+[^ \t\n]+", re.M),
         # BUG FIX (epic #813/#844): the leading `[ \t]*` allowed a TAB, but
         # a tab-initial line is ALWAYS a recipe command in Make's own
         # lexical rules (never a directive, absent a custom
@@ -197,8 +283,9 @@ DEFINITION: dict[str, Any] = {
         # same precedent as #843's identical call for yaml.
         "_dependency_capture": re.compile(r"^[ ]*-?(?:include|sinclude)[ \t\n]+([^\s#]+)", re.M),
         # Metadata anchoring authorship and structural domain owners.
+        # #2882 contract: C1 the keyed family on `#`; `AUTHOR := x` is a variable (the separator is not `:=`)
         "ownership": re.compile(
-            r"^[ \t]*#[ \t]*(?:@author\b|author:|maintainer:|created by:)",
+            r"^[ \t]*(?:#+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.I | re.M,
         ),
         # --------------------------------------------------------------------------
@@ -246,10 +333,16 @@ DEFINITION: dict[str, Any] = {
         # Enforcing strict immutability bounds on state configuration. .
         "immutability_locks": re.compile(r"^[ \t]*override[ \t]+[a-zA-Z0-9_.-]+", re.M),
         # Janitor routines ripping apart build artifacts and cleanly tearing down output paths. .
-        "cleanup": re.compile(r"^[ \t]*(?:dist)?clean[ \t]*::?|\brm[ \t]+-[a-zA-Z]*f[a-zA-Z]*\b", re.M),
+        "cleanup": re.compile(
+            r"\brm[ \t]+-[a-zA-Z]*f[a-zA-Z]*\b", re.M
+        ),  # #2888 C1: a clean: target header names the routine (func_start\'s unit); its recipe carries the sites
         # The Vault explicitly hiding scope logic away from external API leakage boundaries. .
+        # #2766: `.SILENT:` dropped -- it suppresses command echo (output quieting),
+        # not name visibility. `unexport` (hides a variable from child makes) and the
+        # target-specific `private` modifier are makefile's genuine non-public
+        # markers. See #2872 for the wider m4/makefile visibility questions.
         "encapsulation": re.compile(
-            r"^[ \t]*(?:unexport[ \t]+[a-zA-Z0-9_.-]+|[a-zA-Z0-9_.-]+[ \t]*:[ \t]*private[ \t]+|\.SILENT[ \t]*:)",
+            r"^[ \t]*(?:unexport[ \t]+[a-zA-Z0-9_.-]+|[a-zA-Z0-9_.-]+[ \t]*:[ \t]*private[ \t]+)",
             re.M,
         ),
         # Subscribing the file system to continuous native observation hooks.
@@ -260,6 +353,10 @@ DEFINITION: dict[str, Any] = {
             re.I,
         ),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Makefile Specifics) ---
+        # auth_middleware (#3004): contract-level absence. A build DSL: identity
+        # and privilege belong to the invoking shell (whose recipes shell.py's
+        # contract covers), not the dependency graph.
+        "auth_middleware": None,
         # NOTE: `^\s*` (matching `\n` under re.M) is a confirmed real O(n^2) ReDoS on a
         # long run of blank lines with no closing keyword -- each blank-line `^` position
         # re-scans forward through the rest of the run before failing. Swapped for the
@@ -269,5 +366,9 @@ DEFINITION: dict[str, Any] = {
         "regex_execution": re.compile(r"(?m)\$\((?:filter|filter-out|patsubst)\b|^[ \t]*(?:@|-)?(?:grep|egrep|sed)\b"),
         "time_date_logic": re.compile(r"(?m)\$\(shell[ \t]+date\b|^[ \t]*(?:@|-)?(?:sleep|date)\b"),
         "ipc_rpc_bridges": re.compile(r"(?m)\$\(shell\b|^[ \t]*(?:@|-)?(?:curl|wget|ssh|scp|docker|kubectl)\b"),
+        # system_config_mutation (#3084): contract-level absence. recipe lines
+        # are shell's morphology -- a config-mutating command there is the shell
+        # rule's question (deferred there, see #3084).
+        "system_config_mutation": None,
     },
 }

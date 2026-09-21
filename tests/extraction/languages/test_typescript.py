@@ -97,10 +97,11 @@ FUNCTION_CASES: dict[str, Any] = {
         "interface TargetFunc",
         "type Foo = (a: T) => R;",  # type alias -- was a real bug, now fixed
         "export type Foo = (a: T) => R;",
-        "f: (...a: A) => B,", # arrow function type annotation defined at the start of a line
+        "f: (...a: A) => B,",  # arrow function type annotation defined at the start of a line
         "class Foo {\n  @Input() TargetFunc: string;\n}",  # decorated field, not a method
         "type TargetFunc = () => void;",
         "if (this.TargetFunc as unknown as boolean) {",
+        "with (shape) {",  # #2539: with-statement lookalike (invalid TS, but real in misrouted JS-ish text)
         # NOTE: string-literal lookalikes (`let query = "function Foo() {";`) are
         # NOT tested here as an invalid case -- func_start's own regex has no
         # way to know it's inside a string (that's Prism's/detector.py's job).
@@ -265,10 +266,44 @@ ARGS_CASES: dict[str, Any] = {
         ("constructor(private readonly logger: Logger, public id: string) {", None),
         ("function foo(a: Record<string, (x: number) => void>) {", None),  # nested-paren generic param (Rule 11)
         ("function foo({ a, b = 1, ...rest }: Props) {", None),  # destructured param w/ default and rest
+        # #2773: the declaration shapes the new `{`-or-`:` anchor must keep.
+        ("  select(index: number): void {", None),  # class method, body
+        ("  select(index: number): void;", None),  # interface / overload signature
+        ("  currentNode(position: number) {", None),  # method, no return type
+        ("  get size(): number {", None),  # accessor
+        ("  static create(name: string): Node {", None),
+        ("  #privateMethod(a: string): void {", None),
+        ("  [Symbol.iterator](): Iterator<T> {", None),
+        # A constructor cannot have a return type, so a bodyless overload
+        # signature terminates in a bare `;` -- named explicitly by the rule.
+        ("\tconstructor(runner: () => void, timeout: number);", None),
+        ("\tconstructor();", None),
+        # Arrow parameter lists, with and without a return-type annotation.
+        ("const f = (a: number, b: number) => a + b;", None),
+        ("const g = (a: A): Either<E, B> => right(a);", None),
     ],
     "invalid": [
         "return TargetFunc<string>(val);",
         "catch (e: any) {",
+        "with (shape) {",  # #2539: with-statement lookalike (statement shape: space before paren)
+        # #2773: bare CALL STATEMENTS at line start. This shape used to match
+        # -- 6133 of this arm's 9159 crucible-corpus hits were call sites, and
+        # `describe(kit);`/`expect(kit);` in the keyword-rosetta shell were two
+        # of them. A call consumes a parameter surface; it does not declare one.
+        "TargetFunc(a, b);",
+        "  describe(kit);",
+        "  expect(kit);",
+        "    super(kind, range);",
+        "\t\tassert(false);",
+        "  this._doSomething(value);",
+        # The same call as the tail of a member chain or an operand.
+        "  isThing(x) && isOther(y);",
+        "  first(a), second(b);",
+        # #2773: an over-reaching arrow arm used to score a parenthesised
+        # EXPRESSION as a parameter list whenever a `=>` turned up later on the
+        # line (384 crucible hits). Only a return-type annotation may sit
+        # between a real parameter list and its `=>`.
+        "  some((type as UnionType).types, t.foo);",
     ],
     "pathological": [
         (
@@ -313,15 +348,109 @@ def test_typescript_args_pathological(payload, expected_name):
     assert_pathological_match(TS_RULES["args"], payload, expected_name, "typescript.args")
 
 
-def test_typescript_args_known_limitation_bare_call_at_line_start():
+def test_typescript_with_statement_excluded_but_with_method_still_counts_regression():
     """
-    Same fundamental ambiguity as func_start's own known-limitation test
-    above, for the `args` rule: a bare call statement at true line start
-    (`TargetFunc(a, b);`) is structurally identical to a bare method
-    signature and is not excluded. Documented, not silently ignored.
+    Regression test for issue #2539 (TypeScript side). TypeScript duplicates
+    javascript's func_start/args class-method branches with its own exclusion
+    lists, and `with` was missing from both. Unlike javascript's plain
+    exclusion-list add, `with` here joins the CONDITIONAL exclusion group
+    (#2276 precedent: excluded only in the spaced statement shape
+    `with (...)`), because `with` is a real, prominent method name in modern
+    code (`Array.prototype.with` ES2023, Temporal's `.with()` -- ubiquitous
+    in `.d.ts` files) that formatters always emit with zero space before the
+    paren -- an unconditional exclusion would have permanently hidden those.
+    """
+    func_start = TS_RULES["func_start"]
+    args = TS_RULES["args"]
+
+    # Statement shape (space before paren) must NOT count.
+    assert not func_start.search("with (shape) {"), "with-statement counted as func_start"
+    assert not args.search("with (shape) {"), "with-statement counted as args"
+
+    # Real `with` members (zero space, per every formatter) must STILL count.
+    m = func_start.search("class Wrapper<T> {\n  with(index: number, value: T): Wrapper<T> {\n")
+    assert m, "a real method named `with` must still count as func_start"
+    dts = "interface PlainDate {\n  with(dateLike: PlainDateLike): PlainDate;\n}"
+    assert func_start.search(dts), "a bodyless `.d.ts` signature named `with` must still count"
+    assert args.search("  with(index: number, value: T): Wrapper<T> {"), (
+        "a real method named `with` must still count for args"
+    )
+
+
+def test_typescript_args_bare_call_at_line_start_no_longer_matches():
+    """
+    #2773. `args` counts the parameters a callable DECLARES
+    (docs/args_rule_contract.md), and until this fix the class-member arm was
+    `^[ \\t]*IDENT(...)` with no declaration anchor at all -- equally the shape
+    of a bare call statement. func_start carries the same ambiguity and keeps
+    it (a func_start match is then validated by `_slice_by_braces`, which drops
+    a call with no body); `args` has no such downstream validation for the
+    FILE-level `struct_args` count, so the rule itself has to decide.
+
+    What follows the parameter list is the discriminator: a declaration is
+    followed by its body `{` or by a `:` return-type annotation, a call
+    statement by `;`, `,`, `)`, `|`, `&` or `.`. Measured against a tree-sitter
+    parse of language-crucible/data/typescript's own code stream, that anchor
+    keeps 2900 of 3026 declarations and drops 6039 of 6133 call sites.
     """
     args = TS_RULES["args"]
-    assert args.search("TargetFunc(a, b);"), "documents current (accepted) behavior: this does match"
+    assert args.search("TargetFunc(a, b);") is None
+    assert args.search("  describe(kit);") is None
+    # A declaration's body brace or return-type annotation still matches.
+    assert args.search("  TargetFunc(a: number, b: number) {") is not None
+    assert args.search("  TargetFunc(a: number, b: number): void;") is not None
+
+
+def test_typescript_args_bodyless_constructor_overload_still_matches():
+    """
+    #2773. A constructor is the one callable that cannot carry a return-type
+    annotation, so a bodyless constructor overload signature ends in a bare `;`
+    -- lexically identical to a call statement, and the only declaration shape
+    the `{`-or-`:` anchor above cannot reach. All 125 declarations that anchor
+    would otherwise drop on the crucible corpus are constructors, so the rule
+    names `constructor` explicitly instead of accepting a bare `;` in general
+    (which would readmit 4906 call statements).
+    """
+    args = TS_RULES["args"]
+    assert args.search("\tconstructor(runner: () => void, timeout: number);") is not None
+    assert args.search("  public constructor(uri: Uri);") is not None
+    # ...but only for `constructor`: any other `;`-terminated member needs the
+    # return-type annotation, and a `;`-terminated call still matches nothing.
+    assert args.search("\tdispose(handle: number): void;") is not None
+    assert args.search("\tdispose(handle);") is None
+    assert args.search("\tconstructorish(a, b);") is None
+
+
+def test_typescript_args_arrow_gap_is_bounded_to_a_return_type():
+    """
+    #2773. The arrow arm's gap between `)` and `=>` was `[^=;{]*` -- unbounded
+    and newline-crossing, so any parenthesised expression matched as long as
+    some `=>` turned up before the next `=`/`;`/`{`. On the crucible corpus
+    that scored 384 casts, `if` conditions and grouped operands as parameter
+    lists. Only a return-type annotation may legally sit there.
+
+    Bounding it also RECOVERS real declarations: the over-long matches used to
+    swallow arrow parameter lists that now match on their own (crucible
+    typescript DECL 10326 -> 10975).
+    """
+    args = TS_RULES["args"]
+    assert args.search("some((type as UnionType).types, t.foo);") is None
+    assert args.search("if (!this._fired)\n  await helper.wait();") is None
+    assert args.search("(a: A, b: B) => c") is not None
+    assert args.search("(a: A): Either<E, B> => right(a)") is not None
+    # A curried arrow's return type is a function type, so the annotation carries its
+    # own parens -- the gap must step over them or this arm matches the INNER list.
+    # fp-ts/Either.ts:1406, the shape that caught an over-strict first spelling.
+    m = args.search(
+        "export const tryCatchK =\n"
+        "  <A extends ReadonlyArray<unknown>, B, E>(\n"
+        "    f: (...a: A) => B,\n"
+        "    onThrow: (error: unknown) => E\n"
+        "  ): ((...a: A) => Either<E, B>) =>\n"
+        "  (...a) =>\n"
+    )
+    assert m is not None
+    assert "onThrow" in m.group(0), "matched the return type's inner list, not the real one"
 
 
 # ==============================================================================

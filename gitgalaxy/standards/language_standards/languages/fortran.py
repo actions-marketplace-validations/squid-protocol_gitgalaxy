@@ -50,13 +50,19 @@ DEFINITION: dict[str, Any] = {
     # UPGRADED: Maps to Family 7 (The Positional Ancients)
     # Rationale: Fixed-format requires Column 1 monitoring ('C' or '*'); Free-format uses '!'.
     "lexical_family": "positional_anchored",
+    # #2540: Fortran resolves module names case-insensitively (`USE A` and
+    # `use a` both bind module a). The dependency DAG's import-token ->
+    # file lookup (network_risk_sensor.py) must case-fold for this
+    # language or uppercase legacy style (`USE A`) never resolves to
+    # `a.f90` and the whole import chain goes invisible.
+    "case_insensitive_imports": True,
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
         # Control flow that forces the CPU to make a decision or jump. High density creates jagged shapes.
         # Includes standard conditional blocks, legacy computed GO TO, and modern SELECT TYPE / SELECT RANK.
         "branch": re.compile(
-            r"\b(IF|ELSEIF|ELSE|DO|WHILE|SELECT\s+CASE|CASE|DEFAULT|WHERE|ELSEWHERE|GO\s*TO|GOTO|SELECT\s+TYPE|SELECT\s+RANK|EXIT|CYCLE)\b|\.AND\.|\.OR\.",
+            r"\b((?<!END[ \t])IF|ELSEIF|ELSE|(?<!END[ \t])DO|SELECT\s+CASE|CASE|DEFAULT|(?<!END[ \t])WHERE|ELSEWHERE|SELECT\s+TYPE|SELECT\s+RANK|EXIT|CYCLE)\b|\.AND\.|\.OR\.",
             re.I,
         ),
         # 2. args (Parameters / Coupling)
@@ -88,7 +94,7 @@ DEFINITION: dict[str, Any] = {
         # Structural boundaries defining straight-line execution and data types.
         # CRITICAL GUARDRAIL: Access modifiers (PUBLIC, PRIVATE, PROTECTED) do not belong here. Explicitly omitted to prevent the Structural Complexity Inflation Bug
         "structural_boundaries": re.compile(
-            r"\b(PROGRAM|MODULE|SUBMODULE|BLOCK\s+DATA|CONTAINS|END\s+(?:PROGRAM|MODULE|SUBROUTINE|FUNCTION|BLOCK|TYPE|ASSOCIATE)|RETURN|IMPLICIT|USE|ASSOCIATE|BLOCK|INTEGER|REAL|COMPLEX|LOGICAL|CHARACTER|DOUBLE\s+PRECISION|CLASS)\b",
+            r"\b(PROGRAM|MODULE|SUBMODULE|BLOCK\s+DATA|CONTAINS|END\s+(?:PROGRAM|MODULE|SUBROUTINE|FUNCTION|BLOCK|TYPE|ASSOCIATE)|RETURN|IMPLICIT|USE|ASSOCIATE|BLOCK|INTEGER|REAL|COMPLEX|LOGICAL|CHARACTER|DOUBLE\s+PRECISION|CLASS|WHILE)\b",
             re.I,
         ),
         # 4. func_start (Executable Logic Anchors)
@@ -200,7 +206,13 @@ DEFINITION: dict[str, Any] = {
         # 8. danger (High-Risk Execution)
         # Extreme tech debt, unconstrained legacy jumps (`GO TO`, `ASSIGN`), and raw terminal output.
         # CRITICAL GUARDRAIL: Terminal prints (`PRINT`, `WRITE(*,...)`) strictly routed here, away from `io` and `telemetry`.
-        "high_risk_execution": re.compile(r"\b(GO\s*TO|GOTO|ASSIGN|RETURN\s+\d+)\b", re.I),
+        # #2878 contract C3: GO TO is a jump and nobody's signal (reverses #2822's hand-off);
+        # ASSIGN rewrites where control goes and RETURN n abandons the caller's flow, both stay;
+        # C1a STOP/ERROR STOP/CALL EXIT|ABORT and C1b CALL SYSTEM/EXECUTE_COMMAND_LINE join.
+        "high_risk_execution": re.compile(
+            r"\b(?:ASSIGN|RETURN\s+\d+|ERROR\s+STOP|STOP|CALL\s+(?:EXIT|ABORT|SYSTEM|EXECUTE_COMMAND_LINE))\b|\bEXECUTE_COMMAND_LINE\s*\(",
+            re.I,
+        ),
         # 9. io (I/O & Network Boundaries)
         # File operations, hardware inquiries, and disk boundaries.
         # Negatively asserts `*` or `6` to ensure raw standard-out terminal prints do not trigger IO.
@@ -213,7 +225,8 @@ DEFINITION: dict[str, Any] = {
         # practice. Split WRITE out of the shared-boundary group; it's already
         # unambiguously delimited by its own literal `(` and trailing `,`.
         "io": re.compile(
-            r"\b(?:OPEN|CLOSE|READ|INQUIRE|REWIND|BACKSPACE|ENDFILE|FLUSH|FORMAT)\b|"
+            # #2841 contract C2: CLOSE is cleanup's hit.
+            r"\b(?:OPEN|READ|INQUIRE|REWIND|BACKSPACE|ENDFILE|FLUSH|FORMAT)\b|"
             r"\bWRITE\s*\(\s*(?!\*|6\b)[^,]+,",
             re.I,
         ),
@@ -242,8 +255,14 @@ DEFINITION: dict[str, Any] = {
         #    requirement so the match can only start at a genuine word
         #    boundary, where the exclusion lookahead actually applies.
         "state_mutation": re.compile(
-            r"(?!\b(?:KIND|LEN|UNIT|FMT|FILE|STATUS|ACTION)\s*=)\b[A-Za-z_][A-Za-z0-9_%\(\)]{0,199}[ \t]*=[^=>]",
-            re.I,
+            # #2765 contract: an assignment STATEMENT writes. Anchoring to the statement
+            # start (optional label) means `INTEGER :: X = 1` (the `::` breaks the match)
+            # and a `KIND=`/`UNIT=` specifier inside a call do not count; a `DO I = 1, N`
+            # header writes its control variable like C's `for (i = 0`.
+            r"^[ \t]*(?:\d{1,5}[ \t]+)?(?!(?:KIND|LEN|UNIT|FMT|FILE|STATUS|ACTION|IOSTAT|ERR|ACCESS|FORM|RECL|IOMSG|STAT|ERRMSG)[ \t]*=)"
+            r"[A-Za-z_]\w*(?:[ \t]*\([^()\n]{0,120}\))?(?:%[A-Za-z_]\w*(?:[ \t]*\([^()\n]{0,120}\))?){0,5}[ \t]*=(?![=>])"
+            r"|^[ \t]*(?:\d{1,5}[ \t]+)?DO[ \t]+(?:\d{1,5}[ \t]*,?[ \t]*)?[A-Za-z_]\w*[ \t]*=",
+            re.I | re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         # Commented-out logic, commented-out structural code. Supports both Fortran 90+ (`!`) and legacy F77 (`C`/`*` in column 1).
@@ -251,7 +270,7 @@ DEFINITION: dict[str, Any] = {
         # 13. doc (Structured Documentation)
         # Documentation meant to be parsed by generators (Doxygen style `!>`, `!<`, or `! @`).
         "doc": re.compile(
-            r"^[Cc*!dD][ \t]*[@><\\]|^[ \t]*![ \t]*(?:Author|Description|Param|Return):",
+            r"^[Cc*!dD][ \t]*[@><\\]|^[ \t]*![ \t]*(?:Description|Param|Return):",
             re.I | re.M,
         ),
         # 14. test (Testing & Assertions)
@@ -279,7 +298,14 @@ DEFINITION: dict[str, Any] = {
         "closures": None,
         # 18. globals (Global / Shared State)
         # Persistent application state across scopes. F77 `COMMON` blocks, `SAVE` variables, and `EXTERNAL` procedures.
-        "globals": re.compile(r"\b(COMMON|SAVE|EXTERNAL)\b", re.I),
+        "globals": re.compile(
+            # #2858 contract: COMMON (shared storage), SAVE (a local whose storage
+            # outlives the call) and a DATA-initialised variable (implicitly SAVEd)
+            # are program-lifetime bindings; EXTERNAL declares a procedure NAME --
+            # linkage, not state (corollary 4; 9 of 16 crucible hits).
+            r"\b(COMMON|SAVE)\b|^[ \t]*DATA[ \t]+[A-Za-z_]",
+            re.I | re.M,
+        ),
         # 19. decorators (Decorators / Annotations)
         # Fortran does not have Python-style decorators, but compiler directives heavily modify block execution behaviors.
         # BUG FIX: the shared trailing `\b` after the `$`-ending alternatives
@@ -308,8 +334,10 @@ DEFINITION: dict[str, Any] = {
         "comprehensions": re.compile(r"\b(?:FORALL|DO\s+CONCURRENT)\b|\[[^\]]+\]|\(\/[^/]+\/\)", re.I),
         # 22. scientific (Numerical / Compute Libraries)
         # Native Fortran superpower: Vectorized matrix operations, tensor reductions, and strict scientific primitive typing.
+        # #2899: intrinsics anchored to their call form -- with re.I, bare `sum`, `exp`,
+        # `mod` etc. matched ordinary variable names (fortran's top bleed, 28/file).
         "scientific": re.compile(
-            r"\b(MATMUL|DOT_PRODUCT|TRANSPOSE|SUM|PRODUCT|MAXVAL|MINVAL|MAXLOC|MINLOC|RESHAPE|SQRT|EXP|LOG|LOG10|SIN|COS|TAN|ASIN|ACOS|ATAN|ATAN2|SINH|COSH|TANH|KIND=|CEILING|FLOOR|MOD|MODULO)\b",
+            r"\b(MATMUL|DOT_PRODUCT|TRANSPOSE|SUM|PRODUCT|MAXVAL|MINVAL|MAXLOC|MINLOC|RESHAPE|SQRT|EXP|LOG|LOG10|SIN|COS|TAN|ASIN|ACOS|ATAN|ATAN2|SINH|COSH|TANH|CEILING|FLOOR|MOD|MODULO)\s*\(|KIND\s*=",
             re.I,
         ),
         # 23. heat_triggers (Metaprogramming & Reflection)
@@ -320,15 +348,21 @@ DEFINITION: dict[str, Any] = {
         ),
         # 24. import (Dependency Inclusions)
         # Dependency linkage across Fortran modules and files.
-        "import": re.compile(r"\b(USE|INCLUDE|IMPORT)\b", re.I),
+        # #2875 contract C5: statement position (`use ysu (option1)` inside a string
+        # literal was counted); C3: `IMPORT` is host association inside an interface
+        # body -- nothing external is bound. `#include` is the preprocessor form.
+        "import": re.compile(
+            r"^[ \t]*(?:USE(?=[ \t]*(?:,|::)|[ \t]+[A-Za-z])|INCLUDE[ \t]*['\"]|#[ \t]*include\b)", re.I | re.M
+        ),
         "_dependency_capture": re.compile(
             r"^[ \t]*(?:USE(?:\s+|\s*(?:,[^:]*)?::\s*)([a-zA-Z0-9_]+)|INCLUDE[ \t\n]*['\"]([^'\"]+)['\"]|SUBMODULE\s*\(\s*([^):]+)[^)]*\))",
             re.IGNORECASE | re.MULTILINE,
         ),
         # 25. ownership (Authorship Metadata)
         # Identifying the developer, maintainer, or copyright holder natively.
+        # #2882 contract: C1 the keyed line tolerates indentation; `Developer:` joins the family; C2 `Copyright` never counted here
         "ownership": re.compile(
-            r"^[cCdD*!][ \t]*(?:Author|Created by|Maintainer|Developer):\s+(.*)",
+            r"^[ \t]*(?:!+|[cCdD*](?=[ \t]))[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -410,10 +444,16 @@ DEFINITION: dict[str, Any] = {
         # Framework code that explicitly bypasses verification.
         "test_skip": None,
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Fortran Specifics) ---
-        "serialization_parsing": re.compile(r"(?i)\b(NAMELIST|READ\s*\(|WRITE\s*\(|FORMAT|OPEN\s*\()\b"),
-        "regex_execution": re.compile(
-            r"(?i)\b(SCAN|INDEX|VERIFY|ADJUSTL|ADJUSTR)\b"
-        ),  # Relies on intrinsic string processing
+        # auth_middleware (#3004): contract-level absence. A numerical language:
+        # no session, credential or privilege vocabulary; OS identity is outside
+        # the language.
+        "auth_middleware": None,
+        # #2898: READ(/WRITE(/OPEN( removed -- formatted record I/O is io's (its rule
+        # already counts them). NAMELIST and FORMAT are fortran's serialization formats.
+        "serialization_parsing": re.compile(r"(?i)\b(NAMELIST|FORMAT)\b"),
+        # #2898: contract-level absence. SCAN/INDEX/VERIFY/ADJUSTL/ADJUSTR are string
+        # intrinsics that take no pattern -- standard fortran has no regex engine.
+        "regex_execution": None,
         "time_date_logic": re.compile(r"(?i)\b(DATE_AND_TIME|SYSTEM_CLOCK|CPU_TIME)\b"),
         # BUG FIX: the shared trailing `\b` made the `OMP_` prefix alternative
         # unreachable -- `OMP_` ends in `_` (a word char), and real OpenMP
@@ -422,5 +462,9 @@ DEFINITION: dict[str, Any] = {
         # word chars). `OMP_` was clearly meant as a prefix match, not an
         # exact-token match -- dropped the trailing boundary for it.
         "ipc_rpc_bridges": re.compile(r"(?i)\b(?:MPI_Init|MPI_Send|MPI_Recv|MPI_Bcast|EXECUTE_COMMAND_LINE)\b|\bOMP_"),
+        # system_config_mutation (#3084): contract-level absence. scientific-
+        # compute domain; no host-configuration vocabulary in the language's own
+        # morphology.
+        "system_config_mutation": None,
     },
 }

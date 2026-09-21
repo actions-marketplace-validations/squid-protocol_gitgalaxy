@@ -8,7 +8,24 @@
 # of this project, or at https://polyformproject.org/licenses/noncommercial/1.0.0/
 # ==============================================================================
 
+import re
 from typing import Any, TypedDict
+
+# #2549: the tail of a markup OPEN TAG, from the end of a handshake trigger
+# (`<script` / `<style`) through its closing `>`. A handshake entry that
+# declares it says "this opening delimiter is HOST syntax": the tag stays in
+# the host document's segment and only the payload after `>` is handed to the
+# embedded language. Without it html's own `func_start` rule -- whose only
+# anchor IS the `<script`/`<style` tag -- could never fire end to end, because
+# the splitter handed the tag itself to JavaScript/CSS before html's rules ran
+# (every corpus html file recorded `func_start = 0` against 9 raw matches).
+#
+# The three alternatives are disjoint on their first character, so the star can
+# never re-partition a prefix: linear time, no backtracking ambiguity, and an
+# attribute value holding a `>` (`<script data-tpl="a>b">`) does not cut the tag
+# short. An unterminated tag simply fails to match, and the caller falls back to
+# the pre-#2549 split point.
+MARKUP_OPEN_TAG_TAIL = r"""(?:"[^"]*"|'[^']*'|[^>"'])*>"""
 
 
 class LensConfig(TypedDict):
@@ -27,7 +44,39 @@ class LensConfig(TypedDict):
 
 
 LENS_CONFIG: LensConfig = {
-    "COLLISION_FREQUENCIES": {".inc", ".h", ".py", ".cshtml", ".c", ".y", ".m"},
+    # #2505: ".map" is bms's (BMS screen maps) but is heavily contested in the
+    # wild (JS source maps, linker maps), so it may never lock on extension
+    # alone -- bms's internal_discriminator / the lexical scan must confirm it.
+    # #2511: ".sql"/".ddl"/".dml" are claimed by BOTH sqlite and db2_sql, so they
+    # may never lock at Tier 1 either -- without these entries the registration-
+    # order overwrite in _calibrate_lookup_maps would silently hand all three to
+    # whichever profile registered last. Routing resolves through db2_sql's
+    # internal_discriminator (Tier 2), mainframe-sibling ecosystem gravity
+    # (Tier 1.5) or the lexical scan (Tier 3).
+    # #2503: ".asm" is claimed by BOTH assembly (x86/ARM) and hlasm (z/OS), so
+    # it may never lock at Tier 1 either -- routing resolves through hlasm's
+    # internal_discriminator (Tier 2: CSECT/DSECT/USING/... in operation-field
+    # position), mainframe-sibling ecosystem gravity (Tier 1.5) or the lexical
+    # scan (Tier 3). ".mac" and ".hlasm" are uncontested and stay Tier 1.
+    # #2504: ".cmd" is claimed by BOTH batch (Windows/OS2) and rexx (z/OS,
+    # OS/2), same mechanism -- rexx's internal_discriminator (a .cmd opening
+    # with `/*` is REXX, the platform loaders' own dispatch rule) resolves it;
+    # ".rexx" and ".exec" are uncontested and stay Tier 1.
+    "COLLISION_FREQUENCIES": {
+        ".inc",
+        ".h",
+        ".py",
+        ".cshtml",
+        ".c",
+        ".y",
+        ".m",
+        ".map",
+        ".sql",
+        ".ddl",
+        ".dml",
+        ".asm",
+        ".cmd",
+    },
     "PROSE_ANCHORS": {
         "README",
         "LICENSE",
@@ -94,12 +143,16 @@ LENS_CONFIG: LensConfig = {
             "end": r"</script>",
             "target": "javascript",
             "pair": None,
+            # #2549: `<script ...>` is html, only its body is JavaScript.
+            "open_delimiter": MARKUP_OPEN_TAG_TAIL,
         },
         {
             "trigger": r"^[ \t]*<style\b",
             "end": r"</style>",
             "target": "css",
             "pair": None,
+            # #2549: `<style ...>` is html, only its body is CSS.
+            "open_delimiter": MARKUP_OPEN_TAG_TAIL,
         },
         {
             # #1198: same drift #1183 fixed for <script>/<style> -- this
@@ -129,3 +182,39 @@ LENS_CONFIG: LensConfig = {
         "TIER_4_OUTLIER_MARGIN": 1.3,
     },
 }
+
+
+# ==============================================================================
+# THE COMPILED HANDSHAKE REGISTRY -- one source, every partitioner (#2848)
+# ==============================================================================
+# Three consumers used to compile HANDSHAKE_REGISTRY themselves --
+# `detector.StructuralExtractor` (`re.I | re.M`), `prism.Prism` (`re.I`) and
+# `language_lens._detect_hybrids` (`re.I`) -- and the flags drifted twice on
+# the same three patterns. #1183 fixed the anchor half in the detector; #2848
+# found the flag half: every trigger is `^`-anchored, so WITHOUT `re.M` a
+# partitioner only fires on a file whose very first byte opens the block. In
+# every real file the embedded segment was never formed, and the host
+# language's comment rules ran over the JavaScript/CSS/asm body -- html's
+# `<!-- -->` rules over a `//` comment, so commented-out code counted as
+# executable risk and `doc_loc` (derived as active lines minus coding_loc) lost
+# the line to code.
+#
+# The registry is compiled ONCE here, beside the patterns it compiles, and
+# imported. Compiled patterns are immutable and thread-safe, so every consumer
+# shares these objects rather than paying for its own copies. A consumer that
+# needs different flags must state why in its own code; the default is that a
+# handshake means the same thing to every partitioner that reads it.
+#
+# `open_delimiter` is `None` for a paired-bracket handshake (#2549) and keeps
+# `re.I` alone deliberately: it is `.match()`ed at an exact offset, never
+# searched, so a line anchor would be meaningless to it.
+COMPILED_HANDSHAKE_REGISTRY: list[dict[str, Any]] = [
+    {
+        "trigger": re.compile(h["trigger"], re.I | re.M),
+        "end": re.compile(h["end"], re.I | re.M),
+        "target": h["target"],
+        "pair": h["pair"],
+        "open_delimiter": (re.compile(h["open_delimiter"], re.I) if h.get("open_delimiter") else None),
+    }
+    for h in LENS_CONFIG["HANDSHAKE_REGISTRY"]
+]

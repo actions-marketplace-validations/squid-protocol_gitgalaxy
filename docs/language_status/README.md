@@ -55,9 +55,9 @@ surface) and took jcl from 4th-worst of 46 to mid-pack. Write this section via t
 keyword-rosetta repo's `rosetta-language-sweep` skill once a language's rosetta issue gets a real
 sweep; the section template is in the `language-status` skill.
 
-## Signature-bearing languages (46)
+## Signature-bearing languages (47)
 
-`LANGUAGE_DEFINITIONS` recognizes 59 languages/formats; these 46 have at least one non-`None`
+`LANGUAGE_DEFINITIONS` recognizes 61 languages/formats; these 48 have at least one non-`None`
 structural-signature rule (`func_start`/`branch`/`io`/etc.) — the ones a per-language status doc
 in this folder is actually for. "Rules" is wired-keys/total-keys in that language's `rules` dict.
 "Extraction tests" / "Strict tests" are live `pytest --collect-only` counts for
@@ -79,12 +79,14 @@ epic #813), not that no cases exist.
 | **[csharp](csharp.md)** | production | standard_block | 51/52 | 61 | 106 | **written** |
 | **[css](css.md)** | production | standard_block | 30/48 | 18 | 74 | **written** |
 | dart | production | standard_block | 51/52 | 91 | 86 | not written |
+| **[db2_sql](db2_sql.md)** | production | multi_style_dash | 43/53 | | 141 | **written** (#2511) |
 | dockerfile | production | line_exclusive | 43/52 | 34 | 86 | [dockerfile.md](dockerfile.md) |
 | embedded_python | production | line_exclusive | 51/52 | 64 | 107 | not written |
 | **[fortran](fortran.md)** | production | positional_anchored | 45/52 | 35 | 101 | **written** |
 | go | production | standard_block | 51/52 | 47 | 84 | not written |
 | **[groovy](groovy.md)** | production | standard_block | 44/48 | 53 | 91 | **written** |
 | haskell | production | recursive_block_haskell | 52/52 | 48 | 97 | not written |
+| **[hlasm](hlasm.md)** | production | positional_anchored | 44/54 | | 145 | **written** (#2503) |
 | html | production | block_exclusive | 39/48 | 91 | 123 | not written |
 | **[java](java.md)** | production | standard_block | 50/52 | 70 | 91 | **written** |
 | **[javascript](javascript.md)** | production | standard_block | 61/64 | 53 | 73 | **written** |
@@ -99,8 +101,10 @@ epic #813), not that no cases exist.
 | objective-c | production | standard_block | 52/52 | 95 | 83 | not written |
 | perl | production | line_exclusive | 52/52 | 32 | 69 | not written |
 | php | production | standard_block | 51/52 | 4* | 84 | not written |
+| **[pli](pli.md)** | production | standard_block | 46/54 | 54 | 158 | **written** (#2502) |
 | powershell | production | embedded_syntax | 50/52 | 68 | 85 | not written |
 | **[python](python.md)** | production | line_exclusive | 61/64 | 60 | 92 | **written** |
+| **[rexx](rexx.md)** | production | recursive_block_rexx | 35/53 | | 97 | **written** (#2504) |
 | ruby | production | line_exclusive | 51/52 | 4* | 66 | not written |
 | rust | production | recursive_block | 52/52 | 51 | 68 | not written |
 | scala | production | recursive_block | 51/52 | 63 | 90 | not written |

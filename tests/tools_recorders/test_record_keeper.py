@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from gitgalaxy.recorders.record_keeper import RecordKeeper
+from gitgalaxy.standards.analysis_lens import SURFACE_FAMILIES
 
 
 @pytest.fixture
@@ -35,6 +36,7 @@ def mock_pipeline_state():
             "lock_tier": 0,
             "total_loc": 200,
             "coding_loc": 150,
+            "doc_loc": 30,
             "file_impact": 45.5,
             "raw_imports": ["src/db/models.py"],
             "telemetry": {
@@ -61,6 +63,9 @@ def mock_pipeline_state():
                     "is_agentic_black_hole": True,  # Maps to agentic_isolation_risk
                     "hallucination_zone": False,
                 },
+                "ai_appsec": {
+                    "over_permissioned_agent": True,  # Maps to appsec_god_mode
+                },
             },
             "is_ml_threat": True,
             "equations": {
@@ -81,6 +86,9 @@ def mock_pipeline_state():
                     "docstring": "Handles incoming API requests.",
                     "calls_out_to": ["validate_token"],
                     "hit_vector": {"high_risk_execution": 1, "io": 2},
+                    # #2908 Phase 2: per-unit is_public/is_documented.
+                    "is_public": True,
+                    "is_documented": False,
                 }
             ],
         }
@@ -153,6 +161,13 @@ def test_record_keeper_schema_creation(keeper, mock_pipeline_state, tmp_path):
     assert "risk_tech_debt" in columns  # Dynamically generated from RISK_SCHEMA
     assert "state_danger" in columns  # Mapped dynamically from SIGNAL_SCHEMA -> SHORT_KEY_MAP
 
+    # #2908 Phase 2: per-unit is_public/is_documented columns
+    # (docs/risk_documentation_contract.md).
+    cursor.execute("PRAGMA table_info(function_data)")
+    func_columns = {row[1] for row in cursor.fetchall()}
+    assert "is_public" in func_columns
+    assert "is_documented" in func_columns
+
     conn.close()
 
 
@@ -185,6 +200,7 @@ def test_record_keeper_data_insertion(keeper, mock_pipeline_state, tmp_path):
     assert file_row["ai_threat_class"] == "Botnet / DDoS"
     assert file_row["ai_threat_score"] == 95.5
     assert file_row["agentic_isolation_risk"] == 1
+    assert file_row["appsec_god_mode"] == 1
     # #366: is_malware reads file_data["is_ml_threat"] (security_auditor.py's
     # real output key), not the never-produced "is_malware".
     assert file_row["is_malware"] == 1
@@ -223,6 +239,10 @@ def test_record_keeper_data_insertion(keeper, mock_pipeline_state, tmp_path):
 
     # Verify the specific signal mapped properly in the function table
     assert func_row["arch_io"] == 2  # The hit_vector value for io inside the function dict
+
+    # #2908 Phase 2: per-unit is_public/is_documented, persisted as 0/1.
+    assert func_row["is_public"] == 1
+    assert func_row["is_documented"] == 0
 
     # 4. Verify Excluded Artifacts
     cursor.execute("SELECT * FROM excluded_artifacts")
@@ -334,3 +354,475 @@ def test_record_keeper_empty_state(keeper, tmp_path):
     assert cursor.fetchone()[0] == 1  # The repo row should exist, just filled with 0s
 
     conn.close()
+
+
+def test_record_keeper_persists_doc_loc(keeper, mock_pipeline_state, tmp_path):
+    """#2625: prism's real doc_loc (non-blank, non-code lines) must round-trip
+    into file_data. Before this column existed, consumers re-derived doc mass
+    as total_loc - coding_loc, silently counting every BLANK line as
+    documentation (total_loc is blank-inclusive, coding_loc is not)."""
+    db_path = tmp_path / "test_doc_loc.sqlite"
+    parsed, unparsable, summary, session = mock_pipeline_state
+
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT total_loc, coding_loc, doc_loc FROM file_data").fetchone()
+    conn.close()
+
+    assert row["doc_loc"] == 30, "doc_loc must persist prism's value verbatim"
+    # The old blank-contaminated proxy and the honest column must be
+    # independently readable -- 200-150=50 != 30 proves the column is NOT
+    # just the subtraction re-derived.
+    assert row["total_loc"] - row["coding_loc"] == 50
+
+
+# ==============================================================================
+# #2536: RAW PRE-ADJUSTMENT HIT_VECTOR PERSISTENCE
+# galaxyscope.py's Contextual Baseline Fix folds unreferenced_by_name into api for
+# any imported file BEFORE the hit_vector is built, so arch_api /
+# state_unreferenced only ever carry the adjusted values. The raw
+# pre-adjustment counts must round-trip via file_data["raw_pre_adjustment"]
+# into the additive raw_arch_api / raw_state_unreferenced columns.
+#
+# #2729 asked for the split between the two to be explicit somewhere the test
+# surface can see it, because `api` in the risk equations is not the `api`
+# rule. These tests are the recorder half of that: they pin the round-trip
+# only. What the ADJUSTED value should be is galaxyscope.py's decision and is
+# pinned in tests/core_engine/test_galaxyscope.py; how much of it the api rule
+# already declared is detector.py's and is pinned in test_detector.py
+# (`api_declared_orphans`, #2731). Do not re-derive the conversion here from
+# the raw columns -- see the note on the arithmetic in
+# test_raw_columns_persist_pre_adjustment_values.
+# ==============================================================================
+@pytest.fixture
+def baseline_keeper():
+    """RecordKeeper whose signal schema contains the two keys the Contextual
+    Baseline Fix rewrites, so both the adjusted columns and the raw columns
+    are observable side by side."""
+    mock_schemas = {
+        "RISK_SCHEMA": ["tech_debt"],
+        "SIGNAL_SCHEMA": ["api", "unreferenced_by_name"],
+    }
+    with patch("gitgalaxy.recorders.record_keeper.RECORDING_SCHEMAS", mock_schemas):
+        return RecordKeeper()
+
+
+def _baseline_state(hit_vector, raw_pre_adjustment):
+    """Minimal pipeline state for the baseline_keeper's 2-signal schema."""
+    file_entry = {
+        "path": "src/lib.py",
+        "lang_id": "python",
+        "risk_vector": [0.0],
+        "hit_vector": hit_vector,
+    }
+    if raw_pre_adjustment is not None:
+        file_entry["raw_pre_adjustment"] = raw_pre_adjustment
+    session = {
+        "target": "TestProject",
+        "git_audit": {"commit_hash": "a1b2c3d4", "latest_commit_date": "2026-06-18T10:00:00Z"},
+    }
+    return [file_entry], [], {}, session
+
+
+def _fetch_raw_row(db_path):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT arch_api, state_unreferenced, raw_arch_api, raw_state_unreferenced FROM file_data"
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def test_raw_columns_persist_pre_adjustment_values(baseline_keeper, tmp_path):
+    """An imported file with uncalled defs: the Contextual Baseline Fix folded
+    the raw orphans into api (2 -> 5), so the adjusted hit_vector is [5, 0] --
+    but the raw snapshot must survive verbatim alongside it, which is the only
+    thing that makes the rule's own count recoverable downstream.
+
+    #2729/#2731 correction: `adjusted == raw_api + raw_orphans` is NOT an
+    invariant of the engine and this test never proved it was one -- both
+    numbers are fed in as literals here. Since #2731 (shipped in #2734) the
+    conversion credits `orphans - api_declared_orphans`, so a file whose api
+    rule already declared some of its orphans records an adjusted value BELOW
+    that sum; total overlap (every public function uncalled, the library case)
+    makes it `raw_api` exactly. This fixture is the no-overlap case, which is
+    why 2 + 3 == 5 holds in it. Asserting the sum as a general law here would
+    re-introduce the double count as an expectation -- the arithmetic is
+    galaxyscope.py's, and test_galaxyscope.py's
+    test_contextual_baseline_fix_* own it."""
+    db_path = tmp_path / "test_raw_adjusted.sqlite"
+    parsed, unparsable, summary, session = _baseline_state(
+        hit_vector=[5, 0], raw_pre_adjustment={"api": 2, "unreferenced_by_name": 3}
+    )
+
+    baseline_keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    row = _fetch_raw_row(db_path)
+    assert row["arch_api"] == 5, "Adjusted api must persist unchanged (no behavior change to scoring)"
+    assert row["state_unreferenced"] == 0, "Adjusted unreferenced_by_name must persist unchanged"
+    assert row["raw_arch_api"] == 2, "Raw pre-adjustment api was not preserved"
+    assert row["raw_state_unreferenced"] == 3, "Raw pre-adjustment unreferenced_by_name was not preserved"
+    # The point of the raw columns: the conversion is recoverable as
+    # adjusted - raw, WITHOUT assuming it equals the raw orphan count.
+    # keyword-rosetta's gate reads exactly this subtraction as
+    # `api_orphan_credit` (gitgalaxy#2729).
+    assert row["arch_api"] - row["raw_arch_api"] == 3, "the converted-orphan credit is not recoverable"
+
+
+def test_raw_columns_recover_a_partial_conversion_credit(baseline_keeper, tmp_path):
+    """#2731's shape, which the sum-based assertion above used to exclude by
+    construction: three orphans, two of them ALREADY declared public by the
+    language's api rule, so the fix credits only the third. Adjusted api is
+    raw 4 + 1 = 5, not raw 4 + orphans 3 = 7 -- and the credit the corpus gate
+    reads (adjusted - raw) is 1, the number of orphans that were genuinely new
+    surface. Recording the raw column is what keeps those two readings
+    distinguishable at all; before #2536 only the 5 survived."""
+    db_path = tmp_path / "test_raw_partial.sqlite"
+    parsed, unparsable, summary, session = _baseline_state(
+        hit_vector=[5, 0], raw_pre_adjustment={"api": 4, "unreferenced_by_name": 3}
+    )
+
+    baseline_keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    row = _fetch_raw_row(db_path)
+    assert row["raw_arch_api"] == 4
+    assert row["raw_state_unreferenced"] == 3
+    assert row["arch_api"] == 5, "the adjusted value must round-trip as given, partial credit included"
+    assert row["arch_api"] - row["raw_arch_api"] == 1, "partial conversion credit was not recoverable"
+    assert row["arch_api"] != row["raw_arch_api"] + row["raw_state_unreferenced"], (
+        "a partial credit must NOT satisfy the pre-#2731 sum -- that sum was the double count"
+    )
+
+
+def test_raw_columns_equal_adjusted_for_untouched_file(baseline_keeper, tmp_path):
+    """An un-imported file (popularity == 0) never gets adjusted -- galaxyscope
+    still snapshots unconditionally, so raw == adjusted."""
+    db_path = tmp_path / "test_raw_untouched.sqlite"
+    parsed, unparsable, summary, session = _baseline_state(
+        hit_vector=[1, 4], raw_pre_adjustment={"api": 1, "unreferenced_by_name": 4}
+    )
+
+    baseline_keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    row = _fetch_raw_row(db_path)
+    assert row["raw_arch_api"] == row["arch_api"] == 1
+    assert row["raw_state_unreferenced"] == row["state_unreferenced"] == 4
+
+
+def test_raw_columns_fall_back_to_adjusted_without_snapshot(baseline_keeper, tmp_path):
+    """A producer that ships no raw_pre_adjustment (synthetic leak/model nodes)
+    must land raw == adjusted, never a fake zero."""
+    db_path = tmp_path / "test_raw_fallback.sqlite"
+    parsed, unparsable, summary, session = _baseline_state(hit_vector=[7, 2], raw_pre_adjustment=None)
+
+    baseline_keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    row = _fetch_raw_row(db_path)
+    assert row["raw_arch_api"] == 7, "Fallback must mirror the adjusted arch_api slot"
+    assert row["raw_state_unreferenced"] == 2, "Fallback must mirror the adjusted state_unreferenced slot"
+
+
+def test_raw_columns_migration_on_legacy_db(baseline_keeper, tmp_path):
+    """#2536: recording into a pre-raw-columns database must auto-heal the
+    schema (same doc_loc / is_zero_dependency_mode ALTER TABLE precedent)
+    instead of failing the INSERT with a column-count mismatch."""
+    db_path = tmp_path / "legacy_raw.sqlite"
+    parsed, unparsable, summary, session = _baseline_state(
+        hit_vector=[5, 0], raw_pre_adjustment={"api": 2, "unreferenced_by_name": 3}
+    )
+
+    # First mission builds the modern schema; drop both raw columns to
+    # simulate a legacy (pre-#2536) database.
+    baseline_keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE file_data DROP COLUMN raw_arch_api")
+    conn.execute("ALTER TABLE file_data DROP COLUMN raw_state_unreferenced")
+    conn.commit()
+    conn.close()
+
+    # Second mission against the legacy-shaped DB must migrate and insert.
+    baseline_keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    row = _fetch_raw_row(db_path)
+    assert row["raw_arch_api"] == 2
+    assert row["raw_state_unreferenced"] == 3
+
+
+def test_record_keeper_doc_loc_migration_on_legacy_db(keeper, mock_pipeline_state, tmp_path):
+    """#2625: recording into a pre-doc_loc database must auto-heal the schema
+    (same is_zero_dependency_mode ALTER TABLE precedent) instead of failing
+    the INSERT with a column-count mismatch."""
+    db_path = tmp_path / "legacy.sqlite"
+    parsed, unparsable, summary, session = mock_pipeline_state
+
+    # First mission builds the modern schema; drop doc_loc to simulate a
+    # legacy (pre-#2625) database. DROP COLUMN keeps class_data/function_data
+    # foreign keys intact, unlike a rename-and-rebuild.
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE file_data DROP COLUMN doc_loc")
+    conn.commit()
+    conn.close()
+
+    # Second mission against the legacy-shaped DB must migrate and insert.
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT doc_loc FROM file_data ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    assert row["doc_loc"] == 30, "post-migration insert must carry the real doc_loc"
+
+
+def test_record_keeper_is_public_is_documented_migration_on_legacy_db(keeper, mock_pipeline_state, tmp_path):
+    """#2908 Phase 2: recording into a pre-is_public/is_documented database
+    must auto-heal the schema (same doc_loc / is_zero_dependency_mode ALTER
+    TABLE precedent) instead of failing the INSERT with a column-count
+    mismatch."""
+    db_path = tmp_path / "legacy_is_public.sqlite"
+    parsed, unparsable, summary, session = mock_pipeline_state
+
+    # First mission builds the modern schema; drop both new function_data
+    # columns to simulate a legacy (pre-#2908 Phase 2) database. DROP COLUMN
+    # keeps the file_id foreign key intact, unlike a rename-and-rebuild.
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE function_data DROP COLUMN is_public")
+    conn.execute("ALTER TABLE function_data DROP COLUMN is_documented")
+    conn.commit()
+    conn.close()
+
+    # Second mission against the legacy-shaped DB must migrate and insert.
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT is_public, is_documented FROM function_data ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    assert row["is_public"] == 1, "post-migration insert must carry the real is_public"
+    assert row["is_documented"] == 0, "post-migration insert must carry the real is_documented"
+
+
+# ==============================================================================
+# gitgalaxy#2994: MEASUREMENT-TIER COLUMNS (fam_*/pct_fam_*/pct_vec_*/rel_*)
+# ==============================================================================
+def test_record_keeper_tier_columns_present(keeper, mock_pipeline_state, tmp_path):
+    """Every SURFACE_FAMILIES key gets a fam_<name> INTEGER and pct_fam_<name>
+    REAL column; every (mocked) RISK_SCHEMA slug gets a pct_vec_<slug> REAL
+    column; the two relations get rel_guard_balance/rel_alloc_cleanup. Uses
+    the real SURFACE_FAMILIES (not patched by the `keeper` fixture, unlike
+    RISK_SCHEMA/SIGNAL_SCHEMA) since it's a standalone top-level constant."""
+    db_path = tmp_path / "test_tier_schema.sqlite"
+    parsed, unparsable, summary, session = mock_pipeline_state
+
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    conn = sqlite3.connect(db_path)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(file_data)")}
+    conn.close()
+
+    for fam in SURFACE_FAMILIES:
+        assert f"fam_{fam}" in columns, f"missing fam_{fam} column"
+        assert f"pct_fam_{fam}" in columns, f"missing pct_fam_{fam} column"
+
+    for slug in keeper.RISK_SCHEMA:  # the fixture's mocked 3-slug RISK_SCHEMA
+        assert f"pct_vec_{slug}" in columns, f"missing pct_vec_{slug} column"
+
+    assert "rel_guard_balance" in columns
+    assert "rel_alloc_cleanup" in columns
+
+    # No collision between the new tier columns and any pre-existing column.
+    new_cols = (
+        {f"fam_{f}" for f in SURFACE_FAMILIES}
+        | {f"pct_fam_{f}" for f in SURFACE_FAMILIES}
+        | {f"pct_vec_{s}" for s in keeper.RISK_SCHEMA}
+        | {"rel_guard_balance", "rel_alloc_cleanup"}
+    )
+    assert new_cols <= columns
+
+
+def test_record_keeper_persists_surface_family_telemetry(keeper, mock_pipeline_state, tmp_path):
+    """Tier 1/2/3 telemetry (calculate_risk_vector's surface_families/
+    surface_percentiles/surface_relations) must round-trip verbatim into the
+    fam_*/pct_fam_*/pct_vec_*/rel_* columns via tel.get(...)."""
+    db_path = tmp_path / "test_tier_data.sqlite"
+    parsed, unparsable, summary, session = mock_pipeline_state
+
+    parsed[0]["telemetry"]["surface_families"] = {"guards": 7, "danger": 2, "memory": 3, "cleanup": 5}
+    parsed[0]["telemetry"]["surface_percentiles"] = {
+        "fam": {"guards": 87.5, "danger": 12.5},
+        "vec": {"tech_debt": 62.5, "cognitive_load": 0.0, "secrets_risk": 100.0},
+    }
+    parsed[0]["telemetry"]["surface_relations"] = {
+        "guard_balance_ratio": 2.3333,
+        "alloc_cleanup_pairing": 1.25,
+    }
+
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT fam_guards, fam_danger, pct_fam_guards, pct_fam_danger, "
+        "pct_vec_tech_debt, pct_vec_cognitive_load, pct_vec_secrets_risk, "
+        "rel_guard_balance, rel_alloc_cleanup FROM file_data WHERE file_name='router.py'"
+    ).fetchone()
+    conn.close()
+
+    assert row["fam_guards"] == 7
+    assert row["fam_danger"] == 2
+    assert row["pct_fam_guards"] == 87.5
+    assert row["pct_fam_danger"] == 12.5
+    assert row["pct_vec_tech_debt"] == 62.5
+    assert row["pct_vec_cognitive_load"] == 0.0
+    assert row["pct_vec_secrets_risk"] == 100.0
+    assert row["rel_guard_balance"] == 2.3333
+    assert row["rel_alloc_cleanup"] == 1.25
+
+
+def test_record_keeper_surface_family_telemetry_defaults_when_absent(keeper, mock_pipeline_state, tmp_path):
+    """A file whose telemetry never got surface_families/surface_percentiles/
+    surface_relations (e.g. calculate_risk_vector's critical-leak/minified/
+    literature early-return paths, which don't compute them) must insert a
+    clean row with 0/0.0 defaults instead of raising."""
+    db_path = tmp_path / "test_tier_defaults.sqlite"
+    parsed, unparsable, summary, session = mock_pipeline_state
+    # mock_pipeline_state's telemetry deliberately has none of the tier keys.
+
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT fam_guards, pct_fam_guards, pct_vec_tech_debt, rel_guard_balance, rel_alloc_cleanup "
+        "FROM file_data WHERE file_name='router.py'"
+    ).fetchone()
+    conn.close()
+
+    assert row["fam_guards"] == 0
+    assert row["pct_fam_guards"] == 0.0
+    assert row["pct_vec_tech_debt"] == 0.0
+    assert row["rel_guard_balance"] == 0.0
+    assert row["rel_alloc_cleanup"] == 0.0
+
+
+def test_guardrail_columns_null_when_phase_skipped(keeper, mock_pipeline_state, tmp_path):
+    """gitgalaxy#1178: Phase 5 is opt-in, so on a default scan (no
+    --ai-guardrails) the ai_guardrails/ai_appsec telemetry keys are never
+    written. The recorder must insert a clean row with NULL ("not evaluated")
+    for all five guardrail columns -- NOT 0, which is reserved for "evaluated,
+    no risk found"."""
+    db_path = tmp_path / "test_guardrails_skipped.sqlite"
+    parsed, unparsable, summary, session = mock_pipeline_state
+    parsed[0]["telemetry"].pop("ai_guardrails", None)
+    parsed[0]["telemetry"].pop("ai_appsec", None)
+
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT agentic_isolation_risk, requires_hitl, appsec_god_mode, hallucination_zone, "
+        "silent_mutation_risk FROM file_data WHERE file_name='router.py'"
+    ).fetchone()
+    conn.close()
+
+    assert row["agentic_isolation_risk"] is None
+    assert row["requires_hitl"] is None
+    assert row["appsec_god_mode"] is None
+    assert row["hallucination_zone"] is None
+    assert row["silent_mutation_risk"] is None
+
+
+def test_guardrail_columns_zero_when_phase_ran_clean(keeper, mock_pipeline_state, tmp_path):
+    """The counterpart to the NULL test: when Phase 5 DID run and found
+    nothing (keys present, all-false report), the columns must record real
+    0s, keeping "evaluated clean" distinguishable from "never evaluated"."""
+    db_path = tmp_path / "test_guardrails_clean.sqlite"
+    parsed, unparsable, summary, session = mock_pipeline_state
+    parsed[0]["telemetry"]["ai_guardrails"] = {}
+    parsed[0]["telemetry"]["ai_appsec"] = {}
+
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT agentic_isolation_risk, requires_hitl, appsec_god_mode, hallucination_zone, "
+        "silent_mutation_risk FROM file_data WHERE file_name='router.py'"
+    ).fetchone()
+    conn.close()
+
+    assert row["agentic_isolation_risk"] == 0
+    assert row["requires_hitl"] == 0
+    assert row["appsec_god_mode"] == 0
+    assert row["hallucination_zone"] == 0
+    assert row["silent_mutation_risk"] == 0
+
+
+def test_record_keeper_tier_columns_migration_on_legacy_db(keeper, mock_pipeline_state, tmp_path):
+    """gitgalaxy#2994: recording into a pre-reform database (missing the
+    fam_*/pct_fam_*/pct_vec_*/rel_* columns) must auto-heal the schema via
+    the new `_ensure_columns` helper (same doc_loc / is_public / is_documented
+    / is_zero_dependency_mode ALTER TABLE precedent) instead of failing the
+    INSERT with a column-count mismatch."""
+    db_path = tmp_path / "legacy_tier.sqlite"
+    parsed, unparsable, summary, session = mock_pipeline_state
+    parsed[0]["telemetry"]["surface_families"] = {"guards": 9}
+    parsed[0]["telemetry"]["surface_relations"] = {"guard_balance_ratio": 4.5}
+
+    # First mission builds the modern schema; drop a representative sample of
+    # the new columns (one from each of the four groups) to simulate a
+    # legacy (pre-#2994) database. DROP COLUMN keeps class_data/function_data
+    # foreign keys intact, unlike a rename-and-rebuild.
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE file_data DROP COLUMN fam_guards")
+    conn.execute("ALTER TABLE file_data DROP COLUMN pct_fam_guards")
+    conn.execute("ALTER TABLE file_data DROP COLUMN pct_vec_tech_debt")
+    conn.execute("ALTER TABLE file_data DROP COLUMN rel_guard_balance")
+    conn.commit()
+    conn.close()
+
+    # Second mission against the legacy-shaped DB must migrate and insert.
+    keeper.record_mission(parsed, unparsable, summary, session, str(db_path))
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT fam_guards, rel_guard_balance FROM file_data ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    assert row["fam_guards"] == 9, "post-migration insert must carry the real fam_guards"
+    assert row["rel_guard_balance"] == 4.5, "post-migration insert must carry the real rel_guard_balance"
+
+
+def test_ensure_columns_helper_is_idempotent(tmp_path):
+    """Direct unit test of `_ensure_columns`: healing the same columns twice
+    must not raise (the guarded "duplicate column name" branch), and must
+    leave the schema unchanged the second time."""
+    from gitgalaxy.recorders.record_keeper import _ensure_columns
+
+    db_path = tmp_path / "ensure_columns.sqlite"
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE probe (id INTEGER PRIMARY KEY, x TEXT)")
+    conn.commit()
+
+    col_defs = ["fam_guards INTEGER", "pct_fam_guards REAL", "rel_guard_balance REAL"]
+    _ensure_columns(cursor, "probe", col_defs)
+    conn.commit()
+    first = sorted(row[1] for row in cursor.execute("PRAGMA table_info(probe)"))
+
+    _ensure_columns(cursor, "probe", col_defs)  # must not raise
+    conn.commit()
+    second = sorted(row[1] for row in cursor.execute("PRAGMA table_info(probe)"))
+
+    conn.close()
+    assert first == second
+    assert "fam_guards" in first
+    assert "pct_fam_guards" in first
+    assert "rel_guard_balance" in first

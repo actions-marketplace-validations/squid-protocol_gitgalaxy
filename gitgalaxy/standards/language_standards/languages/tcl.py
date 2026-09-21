@@ -36,7 +36,7 @@ DEFINITION: dict[str, Any] = {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch (Control Flow / Branching)
         # Tcl control flow keywords.
-        "branch": re.compile(r"\b(?:if|elseif|else|switch|while|for|foreach|catch|try|trap|finally)\b"),
+        "branch": re.compile(r"\b(?:if|elseif|else|switch|while|for|foreach)\b"),
         # 2. args (Parameters / Coupling)
         # Safely captures the parameter list `{...}` immediately following a proc name.
         "args": re.compile(
@@ -80,13 +80,42 @@ DEFINITION: dict[str, Any] = {
         "safety_bypasses": re.compile(r"\b(?:eval|uplevel|upvar)\b"),
         # 8. danger (High-Risk Execution / System Calls)
         # OS command execution and process termination.
-        "high_risk_execution": re.compile(r"\b(?:exec|exit)\b|file[ \t]+delete[ \t]+-force"),
+        # #2878 contract C2: hyphen-guarded (`ports_deactivate_no-exec`); C4 `file delete -force`
+        # is a path deletion (cleanup's question, #2843).
+        "high_risk_execution": re.compile(r"(?<![-\w])(?:exec|exit)(?![-\w])"),
         # 9. io (I/O & Network Boundaries)
         # File system, sockets, and configuration. (Excludes puts which is mapped to print_hits).
-        "io": re.compile(r"\b(?:open|close|read|gets|socket|fconfigure|file|source|vfs::)\b"),
+        "io": re.compile(
+            # #2841 contract: C2 -- `source` is import's hit, `close` is cleanup's;
+            # C1 -- everyday words fire only in command position (line start or
+            # after `[`), `file` only with a filesystem subcommand.
+            r"(?:^[ \t]*|\[)(?:open|read|gets|socket|fconfigure)\b"
+            r"|\bvfs::"
+            r"|\bfile[ \t]+(?:exists|tail|mkdir|delete|rename|copy|size|isfile|isdirectory|dirname|join|normalize|stat|atime|mtime)\b",
+            re.M,
+        ),
         # 10. api (Public Surface Area)
         # Exposing packages or namespace exports.
         "api": re.compile(r"^[ \t]*(?:package[ \t]+provide|namespace[ \t]+export)\b", re.M),
+        # #2774: the ORPHAN-CENSUS EXEMPTION. `_is_orphan` is a textual
+        # name-recurrence test, so naming a function in an export statement --
+        # the one place a library is *guaranteed* to name a function it never
+        # calls itself -- counted as a use and cleared its orphan flag. Measured
+        # on keyword-rosetta/data/shell: 3 orphans per file without the export
+        # lines, 0 with them. Five languages publish a FUNCTION (rather than a
+        # variable) by naming it, and all five sat at `raw_state_unreferenced`
+        # 0.25 against a 2.50 median because of it.
+        #
+        # This is deliberately NOT the `api` rule, though it overlaps it. `api`
+        # matches broad visibility MODIFIERS in most languages (javascript's is
+        # a bare `export`, java's a bare `public`), so discounting every line it
+        # matched would silently swallow a genuine call in
+        # `export const x = foo();`. This rule instead captures the exported
+        # NAME, and only that capture's own span is discounted -- so a language
+        # opts in by declaring it, and the other 41 are unchanged by
+        # construction. Leading `_` keeps it out of `coding_analysis`'s rule
+        # loop and the counts schema, the same way `_scope_filters` does.
+        "_visibility_export": re.compile(r"^[ \t]*namespace[ \t]+export[ \t]+([a-zA-Z_]\w*)", re.M),
         # 11. flux (State Mutation)
         # Variable state mutations.
         "state_mutation": re.compile(
@@ -120,7 +149,10 @@ DEFINITION: dict[str, Any] = {
         # precedes it with `$`, also non-word -- `\b` between two
         # non-word chars can never fire, so `::env` never matched.
         # Pulled out with no leading `\b` (self-delimiting on `::`).
-        "globals": re.compile(r"\bglobal\b|::env\b|upvar[ \t]+#0"),
+        # #2859: `global NAME…` is the statement form; `$global` is an ordinary
+        # variable read, so the `(?<!\$)` guard keeps the command and drops the
+        # sigil'd identifier an ordinary reference cannot be a declaration.
+        "globals": re.compile(r"(?<!\$)\bglobal\b|::env\b|upvar[ \t]+#0"),
         # 19. decorators
         "decorators": None,
         # 20. generics
@@ -143,8 +175,9 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership (Authorship Metadata)
+        # #2882 contract: C2 `Copyright:` out
         "ownership": re.compile(
-            r"^[ \t]*#[ \t]*(?:Author|Created by|Maintainer|Copyright):\s+(.*)",
+            r"^[ \t]*(?:#+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.I | re.M,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -187,10 +220,16 @@ DEFINITION: dict[str, Any] = {
         # Tcl lacks `const`, but setting a trace to prevent writes is the Tcl idiom for freezing.
         "immutability_locks": re.compile(r"\btrace[ \t]+add[ \t]+variable[ \t]+[a-zA-Z0-9_:]+[ \t]+write\b"),
         # 46. cleanup (Resource Cleanup / Teardown)
-        "cleanup": re.compile(r'\b(?:close|unset)\b|rename[ \t]+[a-zA-Z0-9_:]+[ \t]+""'),
+        "cleanup": re.compile(
+            r'\b(?:close|unset)\b|\bfile[ \t]+delete\b|rename[ \t]+[a-zA-Z0-9_:]+[ \t]+""'
+        ),  # #2888/#2843: file delete destroys external state
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # Internal namespaces and private `_` prefixed procs.
-        "encapsulation": re.compile(r"\bnamespace[ \t]+eval\b|^[ \t]*proc[ \t]+_[a-zA-Z0-9_:]+", re.M),
+        # #2766: contract-level absence. `namespace eval` defines a namespace
+        # boundary (structure, not a per-name visibility marker) and the `proc _x`
+        # underscore is convention without probe incidence; tcl names remain
+        # reachable via qualified paths.
+        "encapsulation": None,
         # 48. listeners (Event Listeners / Observers)
         "listeners": re.compile(r"\b(?:bind|fileevent)\b"),
         # 49. test_skip (Bypassed Tests / Ignored Specs)

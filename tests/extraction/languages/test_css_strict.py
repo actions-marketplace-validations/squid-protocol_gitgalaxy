@@ -20,7 +20,7 @@ _LANGUAGES_DIR = str(Path(__file__).resolve().parent)
 if _LANGUAGES_DIR not in sys.path:
     sys.path.insert(0, _LANGUAGES_DIR)
 
-from _strict_harness import _best_of_timing, assert_redos_immune  # noqa: E402 # type: ignore
+from _strict_harness import assert_redos_immune  # noqa: E402 # type: ignore
 
 # NOTE: this test was originally grouped under a shared "cross-language sweep"
 # section in tests/core_engine/test_language_standards_strict.py (before that file
@@ -98,7 +98,6 @@ CSS_RULES = LANGUAGE_DEFINITIONS["css"]["rules"]
 _CSS_SIMPLE_CASES = [
     # (signature, positive snippet, text expected to NOT match / None to skip)
     ("branch", "@media (min-width: 768px) {", ".foo { color: red; }"),
-    ("args", "width: calc(100% - 10px);", "width: 100%;"),
     ("structural_boundaries", "@keyframes spin {", ".foo {"),
     ("func_start", "@media (min-width: 768px) {", ".foo {"),
     ("class_start", ".my-class {", "body {"),
@@ -106,6 +105,7 @@ _CSS_SIMPLE_CASES = [
     ("safety_bypasses", "* { box-sizing: border-box; }", ".foo { color: red; }"),
     ("high_risk_execution", "width: expression(body.scrollTop);", "width: 100%;"),
     ("api", ":root { --main-color: blue; }", ".foo { color: blue; }"),
+    ("io", "background-image: url('hero.png');", "color: red;"),
     ("dead_code", "/* .old-class { display: none; } */", ".live-class { display: block; }"),
     ("doc", "/** @param --color The theme color */", "/* just a note */"),
     ("test", "[data-testid='submit'] { color: red; }", ".foo { color: red; }"),
@@ -123,7 +123,7 @@ _CSS_SIMPLE_CASES = [
     ("panics_and_aborts", "all: unset;", "all: inherit;"),
     ("thread_sleeps", "transition-delay: 200ms;", "transition-duration: 200ms;"),
     ("immutability_locks", "color: red !important;", "color: red;"),
-    ("encapsulation", "::part(header) {", ".foo {}"),
+    # encapsulation is None since #2766 -- style isolation is not name visibility.
     ("listeners", "animation-timeline: scroll();", ".foo {}"),
     ("test_skip", "[data-skip] { display: none; }", ".foo {}"),
     # --- DEEP / ADVERSARIAL CASES FOR HIGH-AMBIGUITY SIGNATURES ---
@@ -134,11 +134,19 @@ _CSS_SIMPLE_CASES = [
     ("branch", "div:not(.foo) {", None),
     ("branch", "@starting-style { opacity: 0; }", None),
     ("branch", "@media print {", ".has-error { color: red; }"),
-    ("args", "width: calc(100% - var(--x, calc(20px + 10%)));", "width: min-content;"),
-    ("args", "background: color-mix(in srgb, var(--bg-color) 50%, white);", "--calc-value: 10px;"),
-    ("args", "clamp(0.5rem, calc(1rem + 2vw), 1.5rem)", ".min-width-class { }"),
-    ("args", "color: lch(from var(--color) l c h / calc(alpha * 0.8));", None),
-    ("args", 'background: url("data:image/svg+xml;utf8,<svg...</svg>");', None),
+    ("io", "  src: url(icomoon.woff2) format('woff2');", "@import url('base.css');"),
+    (
+        "io",
+        "background: #fff url(/img/refresh.svg) 5px 3px no-repeat;",
+        'background: url("data:image/svg+xml,%3Csvg/%3E");',
+    ),
+    ("io", "--icon-token: url('../img/logo.svg');", '--icon-token: url("data:image/png;base64,iVBOR");'),
+    (
+        "io",
+        "src: local('Open Sans'), local('OpenSans'), url('OpenSans.ttf') format('truetype');",
+        "clip-path: url(#clip0);",
+    ),
+    ("io", "cursor: url(grab.cur), pointer;", "mask-image: url( #mask );"),
     ("func_start", "@media screen and (min-width: 900px), \\n print {", "@import url('foo.css');"),
     ("func_start", "  @keyframes slide-in {", 'content: "@media";'),
     ("func_start", "@supports not (display: grid) {", None),
@@ -193,25 +201,135 @@ def test_css_dependency_capture_extracts_import_path():
     assert m2 and m2.group(1) == "theme.css"
 
 
-def test_css_args_and_scientific_nested_call_regression():
+# ==============================================================================
+# Issue #2752: css `io` was `None`; url() resource fetches were invisible
+# ==============================================================================
+# `io` was wired to None under the rationale that a `url()`/`@import` fetch
+# "does not block a computational thread". html's own `io` rule counts
+# `src=`/`href=`/`<img>`/`<iframe>` -- the same non-blocking, paint-time
+# loads -- so blocking-ness is not what separates io from not-io; a resource
+# boundary is. The three exclusions below are what the old caution actually
+# bought, and each is pinned here.
+
+
+def test_css_io_counts_resource_fetching_declarations():
+    """The positive surface: a declaration whose value loads an external file."""
+    io = CSS_RULES["io"]
+    assert io is not None, "css io was re-wired to None; #2752 made it a rule"
+    for positive in (
+        "background-image: url('hero.png');",
+        "background:#fff url(/img/refresh.svg) 5px 3px no-repeat;",
+        "  src: url('icomoon.eot?h6xgdm#iefix') format('embedded-opentype');",
+        "list-style-image: url(bullet.svg);",
+        "border-image-source: url(../frame.png);",
+        "--brand-logo: url('../img/logo.svg');",
+        "background : url(spaced-colon.png);",
+        "BACKGROUND-IMAGE: URL(UPPER.PNG);",
+    ):
+        assert io.search(positive), f"css io missed a real resource fetch: {positive!r}"
+
+
+def test_css_io_does_not_re_count_the_import_already_counted_twice():
+    """
+    Exclusion 1 (keyword-rosetta ledger `css-import-url-io-triple-overlap`):
+    `@import url("a.css")` already produces `import` + `_dependency_capture`.
+    io is anchored on a declaration's `:`, and an at-rule prelude has none, so
+    it stays at those hits rather than a third. (It was a TRIPLE overlap until
+    #2893 made `args` a stated absence -- the `url(` arm was the third.)
+    """
+    io = CSS_RULES["io"]
+    for at_rule in (
+        '@import url("a.css");',
+        "@import url('base.css') layer(base);",
+        '@import "theme.css";',
+    ):
+        assert not io.search(at_rule), f"css io double-counted an @import: {at_rule!r}"
+        assert CSS_RULES["import"].search(at_rule), "sanity: import must still own the @import"
+
+    # ... and `@` is excluded from the value span, so a preceding declaration's
+    # colon cannot bridge forward into the at-rule prelude either.
+    assert not io.search('color: red\n@import url("a.css")')
+
+
+def test_css_io_excludes_data_uris_and_in_document_fragments():
+    """
+    Exclusions 2 and 3. A `data:` URI is an inline payload and a `url(#id)`
+    is a same-document reference -- neither crosses an I/O boundary. 59 of
+    language-crucible's 117 `url(` tokens are data URIs, so this is the
+    majority construct, not an edge case.
+    """
+    io = CSS_RULES["io"]
+    for inline in (
+        'background-image: url("data:image/svg+xml,%3Csvg/%3E");',
+        "--bs-form-switch-bg: url(data:image/svg+xml,%3csvg%3e);",
+        'background: url("data:image/png;base64,iVBORw0KGgo=");',
+        "clip-path: url(#clip0_6958);",
+        "mask-image: url( '#mask' );",
+        "filter: url(#blur);",
+    ):
+        assert not io.search(inline), f"css io hallucinated a fetch on an inline payload: {inline!r}"
+
+
+def test_css_io_does_not_walk_into_an_inlined_svg_payload():
+    """
+    The trap the `%`/`<>` value-span exclusions exist for: a
+    `data:image/svg+xml` value is an entire SVG document inlined as text,
+    carrying its OWN `url(#...)` references and `xmlns='http:`-shaped
+    colons. Without the guard, the scan resumes inside the payload and
+    scores one "fetch" per embedded icon -- measured 70 hits instead of 14
+    across language-crucible's css corpus, 50 of them from this one file
+    shape. Both the percent-escaped and the raw inlining styles are covered.
+    """
+    io = CSS_RULES["io"]
+    escaped = (
+        "background-image: url(\"data:image/svg+xml,%3Csvg width='1000' fill='none' "
+        "xmlns='http://www.w3.org/2000/svg'%3E%3Cg clip-path='url(%23clip0_6958)'%3E%3C/g%3E%3C/svg%3E\");"
+    )
+    raw = (
+        'background-image: url(\'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg">'
+        '<g fill="url(#grad)"/></svg>\');'
+    )
+    assert not io.search(escaped), "css io walked into a percent-escaped SVG data URI"
+    assert not io.search(raw), "css io walked into a raw SVG data URI"
+
+    # the guard must not cost the fetch that follows one in the next declaration
+    assert io.search(escaped + "\nbackground-image: url(../img/real.png);")
+
+
+def test_css_io_property_anchor_is_a_lookbehind_not_a_match_redos_regression():
+    """
+    Rule 14 regression. Spelling the property anchor as a match --
+    `[-a-zA-Z_][-\\w]*[ \\t]*:` -- puts an unbounded `[-\\w]*` adjacent to a
+    required `:`, so every identifier character becomes a start position
+    that backtracks the entire identifier run. Measured quadratic before
+    the fix (1.3s / 5.5s / 13.5s / 54s at 10k / 20k / 40k / 80k chars); the
+    fixed-width lookbehind the rule ships is linear on the same inputs.
+    """
+    # #2901: a scale-relative check on the PRE-FIX pattern
+    #     r"[-a-zA-Z_][-\w]*[ \t]*:[^;{}@%<>]{0,200}?\burl\s*\(", re.I
+    # used to run here, asserting it scaled ~quadratically over a payload
+    # doubling. Removed: it timed a regex this repo no longer ships, and a
+    # ratio between two sub-100ms samples is inside the scheduling noise of
+    # a shared CI runner -- this family of asserts went red on macOS for
+    # PRs that touched none of it. The measured pre-fix numbers are kept in
+    # the docstring above; the shipped pattern's immunity is asserted below
+    # as an ABSOLUTE bound inside an isolated process, which is stable.
+    assert_redos_immune(CSS_RULES["io"], "background:" + "a" * 100000, timeout_sec=3.0)
+    assert_redos_immune(CSS_RULES["io"], "background:" + "a" * 100000 + "url(data:x)", timeout_sec=3.0)
+    assert_redos_immune(CSS_RULES["io"], "x:" * 50000, timeout_sec=3.0)
+    assert CSS_RULES["io"].search("background-image: url(real.png);")
+
+
+def test_css_scientific_nested_call_regression():
     """
     Regression test for a real bug (Rule 11): `[^)]*` cannot represent even
     one level of nesting. Modern CSS math functions nest constantly
-    (`calc(var(--x) + 1px)`, `round(var(--x), 1px)`) -- confirmed the old
-    patterns truncated at the first *inner* `)` instead of the true closing
-    one.
+    (`round(var(--x), 1px)`) -- confirmed the old pattern truncated at the
+    first *inner* `)` instead of the true closing one.
+
+    This covered `args` too until #2893 made css `args` a stated absence; the
+    `scientific` half is still live and keeps the pin.
     """
-    old_args = re.compile(
-        r"\b(?:calc|clamp|min|max|var|env|url|rgba?|hsla?|lch|oklch|color-mix|light-dark)\s*\([^)]*\)", re.I
-    )
-    nested = "calc(var(--x) + 1px)"
-    old_m = old_args.search(nested)
-    assert old_m and old_m.group(0) != nested, "sanity check: old pattern must reproduce the truncation"
-
-    args = CSS_RULES["args"]
-    m = args.search(nested)
-    assert m and m.group(0) == nested, f"nested calc(var(...)) truncated: {m.group(0) if m else None!r}"
-
     old_sci = re.compile(
         r"\b(?:sin|cos|tan|asin|acos|atan|atan2|hypot|abs|sign|mod|rem|round|pow|sqrt|exp|log)\s*\([^)]*\)", re.I
     )
@@ -224,14 +342,40 @@ def test_css_args_and_scientific_nested_call_regression():
     assert m2 and m2.group(0) == nested_sci, f"nested round(var(...)) truncated: {m2.group(0) if m2 else None!r}"
 
     # non-nested forms must still match cleanly
-    assert args.search("calc(100% - 10px)").group(0) == "calc(100% - 10px)"
     assert scientific.search("sqrt(100px)").group(0) == "sqrt(100px)"
 
 
-def test_css_args_and_scientific_nested_call_redos_immunity():
-    assert_redos_immune(CSS_RULES["args"], "calc(" + "(" * 20000, timeout_sec=3.0)
+def test_css_scientific_nested_call_redos_immunity():
     assert_redos_immune(CSS_RULES["scientific"], "sqrt(" + "(" * 20000, timeout_sec=3.0)
-    assert CSS_RULES["args"].search("calc(100% - 10px)")
+
+
+# ==============================================================================
+# Issue #2893: css `args` is a stated absence -- CSS declares no callable
+# ==============================================================================
+# The mirror image of the #2752 `io` pin above. `args` matched CSS value-function
+# CALLS (calc|var|url|rgba|clamp|...), which count contract corollary 3 forbids
+# coexisting with the absence answer inside one signal: "the language records a
+# contract-level absence (`None` rule + a ledgered `intended-morphology` entry)
+# rather than a manufactured construct." Same shape as solidity's `io: None`.
+
+
+def test_css_args_is_a_stated_absence():
+    """CSS declares no callable, so it declares no parameter surface."""
+    assert CSS_RULES["args"] is None, "css args was re-wired to a rule; #2893 made it a stated absence"
+
+    # The coupling the old rule approximated is owned by the rules whose
+    # contracts actually name it -- this is why the absence loses no real
+    # measurement (see the rule comment in languages/css.py for the counts).
+    assert CSS_RULES["api"].search(":root { --main-color: blue; }"), "api owns the custom-property declaration"
+    assert CSS_RULES["safety"].search("color: var(--x, red);"), "safety owns the guarded var() read"
+    assert CSS_RULES["io"].search("background-image: url('hero.png');"), "io owns the resource fetch"
+
+    # REOPEN CONDITION: .scss/.less DO declare parameters. The absence stands
+    # only while no preprocessor dialect is in either corpus; if one lands,
+    # write the declaration-form rule instead of extending this pin.
+    assert ".scss" in LANGUAGE_DEFINITIONS["css"]["extensions"], (
+        "css no longer claims .scss -- re-read the reopen condition in languages/css.py"
+    )
 
 
 def test_css_class_start_lookahead_redos_regression():
@@ -252,20 +396,15 @@ def test_css_class_start_lookahead_redos_regression():
     everything it did) -- post-fix scaling at n=2000/8000/32000 is
     0.0001s/0.0004s/0.0016s, clean ~2x per doubling (linear).
     """
-    old_pattern = re.compile(r"^[ \t]*(\.[a-zA-Z_][\w-]*|#[a-zA-Z_][\w-]*)(?=[ \t,>+~:]*[^{]*\{)", re.M)
-
-    # Scale-relative sanity check (not an absolute wall-clock threshold,
-    # which is flaky across CI hardware of varying speed): a doubling of
-    # payload size should cost ~4x on the quadratic OLD pattern, vs ~2x for
-    # linear. This is the same discipline used everywhere else in this
-    # epic's ReDoS scaling sweeps.
-    small_duration = _best_of_timing(old_pattern, ".foo" + (" ,>+~:" * 1000))
-    large_duration = _best_of_timing(old_pattern, ".foo" + (" ,>+~:" * 2000))
-    ratio = large_duration / small_duration if small_duration > 0 else 0
-    assert ratio > 2.2, (
-        f"sanity check: old pattern was expected to show quadratic (~4x) scaling on a payload "
-        f"doubling, but only scaled {ratio:.2f}x ({small_duration:.4f}s -> {large_duration:.4f}s)"
-    )
+    # #2901: a scale-relative check on the PRE-FIX pattern
+    #     r"^[ \t]*(\.[a-zA-Z_][\w-]*|#[a-zA-Z_][\w-]*)(?=[ \t,>+~:]*[^{]*\{)", re.M
+    # used to run here, asserting it scaled ~quadratically over a payload
+    # doubling. Removed: it timed a regex this repo no longer ships, and a
+    # ratio between two sub-100ms samples is inside the scheduling noise of
+    # a shared CI runner -- this family of asserts went red on macOS for
+    # PRs that touched none of it. The measured pre-fix numbers are kept in
+    # the docstring above; the shipped pattern's immunity is asserted below
+    # as an ABSOLUTE bound inside an isolated process, which is stable.
 
     class_start = CSS_RULES["class_start"]
     assert_redos_immune(class_start, ".foo" + (" ,>+~:" * 200000), timeout_sec=3.0)
@@ -284,19 +423,15 @@ def test_css_spec_exposure_redos_regression():
     bracket before writing this test; bounded `\\d+` to `\\d{1,10}` and
     `[^\\]]*` to `{0,300}`.
     """
-    old_pattern = re.compile(r"\[(?:\s*SPEC\s*-\s*\d+|spec|audit)[^\]]*\]|\bfigma\.com/file/", re.I)
-
-    # Scale-relative sanity check (not an absolute wall-clock threshold,
-    # which is flaky across CI hardware of varying speed): a doubling of
-    # payload size should cost ~4x on the quadratic OLD pattern, vs ~2x for
-    # linear.
-    small_duration = _best_of_timing(old_pattern, "[SPEC-" + "1" * 8000)
-    large_duration = _best_of_timing(old_pattern, "[SPEC-" + "1" * 16000)
-    ratio = large_duration / small_duration if small_duration > 0 else 0
-    assert ratio > 2.2, (
-        f"sanity check: old pattern was expected to show quadratic (~4x) scaling on a payload "
-        f"doubling, but only scaled {ratio:.2f}x ({small_duration:.4f}s -> {large_duration:.4f}s)"
-    )
+    # #2901: a scale-relative check on the PRE-FIX pattern
+    #     r"\[(?:\s*SPEC\s*-\s*\d+|spec|audit)[^\]]*\]|\bfigma\.com/file/", re.I
+    # used to run here, asserting it scaled ~quadratically over a payload
+    # doubling. Removed: it timed a regex this repo no longer ships, and a
+    # ratio between two sub-100ms samples is inside the scheduling noise of
+    # a shared CI runner -- this family of asserts went red on macOS for
+    # PRs that touched none of it. The measured pre-fix numbers are kept in
+    # the docstring above; the shipped pattern's immunity is asserted below
+    # as an ABSOLUTE bound inside an isolated process, which is stable.
 
     spec_exposure = CSS_RULES["spec_exposure"]
     assert_redos_immune(spec_exposure, "[SPEC-" + "1" * 100000, timeout_sec=3.0)
@@ -359,10 +494,14 @@ def test_css_encapsulation_and_structural_boundaries_scope_intentional_double_cl
     structural at-rule boundary AND an explicit encapsulation/scoping
     mechanism -- both readings are correct.
     """
+    # #2766 retired the encapsulation half of this dual: @scope is style/DOM
+    # isolation, not a marker excluding a NAME from a public surface -- css has no
+    # name-visibility construct, so the rule is a contract-level absence and
+    # @scope is structural_boundaries' alone.
     encapsulation = CSS_RULES["encapsulation"]
     structural_boundaries = CSS_RULES["structural_boundaries"]
     scope_rule = "@scope (.card) to (.content) {"
-    assert encapsulation.search(scope_rule)
+    assert encapsulation is None
     assert structural_boundaries.search(scope_rule)
 
 

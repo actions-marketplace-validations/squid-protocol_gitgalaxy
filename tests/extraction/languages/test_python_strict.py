@@ -35,7 +35,7 @@ _PY_SIMPLE_CASES = [
     ("io", "with open('f.txt') as f:\n    pass", "opened = True"),
     ("io", "os.path.join(a, b)", "os.environ.get('X')"),
     ("io", "sys.stdin.read()", "sys.argv[0]"),
-    ("state_mutation", "self.value = 1", "print(self.value)"),
+    ("state_mutation", "x = 1", "foo(x=1)"),  # #2817: plain reassignment counts; kwarg does not
     ("dead_code", "# def old_unused_function():", "# just a note"),
     ("doc", '"""A module docstring."""', '"a regular string"'),
     ("concurrency", "async def f():\n    await g()", "def f(): g()"),
@@ -71,7 +71,7 @@ _PY_SIMPLE_CASES = [
     ("bitwise_ops", "x = a << 2", "result = base ** exponent"),
     ("closures", "f = lambda x: x + 1", "def f(x):\n    return x + 1"),
     ("comprehensions", "[x**2 for x in range(10)]", "for x in range(10):\n    print(x)"),
-    ("cryptography", "import bcrypt", "import hashlib"),
+    ("cryptography", "import hashlib", "import os"),  # 2898: stdlib crypto modules now count
     ("dl_frameworks", "import torch", "import sklearn"),
     ("encapsulation", "self._private_value = 1", "self.public_value = 1"),
     (
@@ -91,36 +91,31 @@ _PY_SIMPLE_CASES = [
     ("test", "def test_addition():\n    assert 1 + 1 == 2", "def calculate_addition(a, b):\n    return a + b"),
     ("test", "unittest.TestCase", "assert isinstance(value, int)"),
     ("vectorized_math", "result = A @ B", "result = a * b"),
-
     # === DEEP/ADVERSARIAL CASES FOR HIGH-AMBIGUITY SIGNATURES ===
     # branch (match/case, walrus, strings/suffixes)
     ("branch", "if (x := 1):", "iffy = True"),
     ("branch", "match x:\n    case 1:", "def case_func():"),
     ("branch", "while True:", "while_loop = False"),
-    ("branch", "with open('f.txt') as f:", "without = True"),
+    ("structural_boundaries", "with open('f.txt') as f:", "without = True"),  # 2833: with is resource scope, not a branch
     ("branch", "for i in range(10):", "format_string"),
-
     # args (generics, newlines, edge-case lambdas)
     ("args", "def foo[T, U](x, y):", "define_foo = 1"),
     ("args", "def foo(\n    a,\n    b\n):", "definition = True"),
     ("args", "lambda: 1", "lambda_function = True"),
     ("args", "lambda x, y=1: x + y", "lambda_function_2 = True"),
     ("args", "async def _private_func(x):", "async_def_func = False"),
-
     # func_start (async, generics, newlines, decorators)
     ("func_start", "    def foo():", "def_func_not_anchor = True"),
     ("func_start", "async def foo():", "async_def = False"),
     ("func_start", "def foo[T, U](x):", "def_foo_T_U = 1"),
     ("func_start", "@decorator\ndef foo():", "def_not_here = False"),
     ("func_start", "def _private_method(self):", "_private = True"),
-
     # class_start (generics, multiline bases)
     ("class_start", "class Foo(Generic[T]):", "class_not_start = False"),
     ("class_start", "class Foo(\n    Base1,\n    Base2\n):", "class_not = False"),
     ("class_start", "class Foo[T, U](Base):", "class_T = False"),
     ("class_start", "class Foo:", "classy = False"),
     ("class_start", "class _Private:", "PrivateClass = False"),
-
     # structural_boundaries (keywords, encapsulation bypass)
     ("structural_boundaries", "await asyncio.sleep(1)", "awaiting = True"),
     ("structural_boundaries", "type Point = tuple[float, float]", "typedef = True"),
@@ -249,7 +244,6 @@ def test_python_class_start_captures_name_and_bases():
     assert m3.group(2) == "Generic[T]"
 
 
-
 def test_python_api_excludes_underscore_prefixed_definitions():
     """api captures implicit-public root defs/classes; a leading underscore is explicitly private."""
     pattern = PY_RULES["api"]
@@ -335,6 +329,28 @@ def test_python_explicit_casts_vs_pointers_no_overlap():
 
 
 def test_python_globals_builtin_call_boundary_regression():
+    """The `(` boundary still fires for `globals()`; `locals()` left the rule
+    with the #2858 contract (corollary 5: a reflective handle on the LOCAL
+    namespace is nobody's global) and the `global x` statement joined it."""
     r = LANGUAGE_DEFINITIONS["python"]["rules"]
     assert r["globals"].search("x = globals()")
-    assert r["globals"].search("y = locals()")
+    assert not r["globals"].search("y = locals()")
+    assert r["globals"].search("    global state")
+
+
+def test_python_doc_docstring_counts_once_regression():
+    """
+    #2658: the doc rule matched opening and closing docstring delimiters
+    independently with no pairing, so one docstring counted doc=2. Match
+    the full delimited span as a single bounded non-greedy hit instead.
+    """
+    doc = PY_RULES["doc"]
+
+    assert len(doc.findall('"""one docstring"""')) == 1, "a single docstring must count once, not twice"
+    assert len(doc.findall("'''one docstring'''")) == 1, "a single '''-delimited docstring must count once, not twice"
+
+    two = '"""first"""\ndef f():\n    """second"""\n'
+    assert len(doc.findall(two)) == 2, "two separate docstrings must count as 2"
+
+    # An unterminated delimiter at EOF must not hang or falsely count.
+    assert_redos_immune(doc, '"""' + "x" * 200000, timeout_sec=3.0)

@@ -65,9 +65,7 @@ DEFINITION: dict[str, Any] = {
     "rules": {
         # 1. branch (Control Flow / Branching)
         # Decisions and logical jumps. EXCLUDES raise/throw (bailout_hits).
-        "branch": re.compile(
-            r"\b(if|unless|elsif|else|case|when|in|for|while|until|begin|rescue|ensure|break|next|redo|retry)\b|&&|\|\||\?|=>"
-        ),
+        "branch": re.compile(r"\b(if|unless|elsif|else|case|when|in|for|while|until)\b|&&|\|\||(?<!\w)\?"),
         # 2. args (Parameters / Coupling)
         # Parameter blocks of methods, lambdas, and blocks. Bounded to prevent ReDoS.
         # #1209: parameter-list span wrapped in its own capture group in
@@ -87,7 +85,7 @@ DEFINITION: dict[str, Any] = {
         # 3. linear (Sequential Boundaries)
         # Structural boundaries. EXCLUDES: Access modifiers (encapsulation) and const (freeze_hits).
         "structural_boundaries": re.compile(
-            r"\b(class|module|def|yield|return|super|alias|undef|require|require_relative|include|extend|prepend|attr_reader|attr_writer|attr_accessor|Data\.define)\b"
+            r"\b(class|module|def|yield|return|super|alias|undef|require|require_relative|include|extend|prepend|attr_reader|attr_writer|attr_accessor|Data\.define|begin|retry)\b"
         ),
         # 4. func_start (Executable Logic Anchors)
         # ONLY executable logic blocks. EXCLUDES class/module definitions.
@@ -121,15 +119,36 @@ DEFINITION: dict[str, Any] = {
         ),
         # 8. danger (High-Risk Execution / System Calls)
         # Process killers and shell execution. EXCLUDES puts (Phase 5).
-        "high_risk_execution": re.compile(r"\b(abort|exit|exit!|system|exec|spawn|fork)\b|`[^`]+`|IO\.popen"),
+        # #2878 contract C2: a backtick command is one line and not the `$\`` prematch variable
+        # (one spanned three lines in the crucible); Process.kill and %x() join (C1a/C1b).
+        "high_risk_execution": re.compile(
+            r"\b(abort|exit|system|exec|spawn|fork|Process\.kill)\b|(?<!\$)`[^`\n]+`|IO\.popen|%x[\[({]"
+        ),
         # 9. io (I/O & Network Boundaries)
         "io": re.compile(
             r"\b(File|Dir|IO|Net::HTTP|URI\.open|Socket|TCPSocket|FileUtils|ActiveRecord::Base|find|where|create|update|destroy)\b"
         ),
         # 10. api (Public Surface Area)
         # Implicit public defaults (undercased defs) + explicit module functions.
+        # BUG FIX #2730 (api contract): a top-level `def` in Ruby becomes a
+        # PRIVATE method on Object, so the declaration alone publishes
+        # nothing; the idiom that publishes one by name is `public :name`
+        # (and `public_class_method :name` for singleton methods). Neither
+        # was reachable -- `module_function` was the only per-method export
+        # form the rule could see.
         "api": re.compile(
-            r'\b(module_function)\b|^[ \t]*(?:get|post|put|patch|delete|resources?)\s+[:\'"]',
+            r'\b(module_function)\b|^[ \t]*(?:get|post|put|patch|delete|resources?)\s+[:\'"]|'
+            r'^[ \t]*public(?:_class_method)?[ \t]+[:&\'"]',
+            re.M,
+        ),
+        # #2774: the ORPHAN-CENSUS EXEMPTION -- see the matching note in
+        # shell.py. This rule captures the exported NAME (not the visibility
+        # modifier the `api` rule matches), and `_is_orphan` discounts only that
+        # capture's own span, so naming a function in an export statement stops
+        # counting as a use. Leading `_` keeps it out of `coding_analysis`'s
+        # rule loop and the counts schema, the same way `_scope_filters` does.
+        "_visibility_export": re.compile(
+            r"^[ \t]*(?:module_function|public(?:_class_method)?|private|protected)[ \t]+:([a-zA-Z_]\w*[?!=]?)",
             re.M,
         ),
         # 11. flux (State Mutation)
@@ -141,9 +160,22 @@ DEFINITION: dict[str, Any] = {
         # newline, another `.method`) is never a word character. None
         # of Ruby's canonical in-place-mutation methods ever matched.
         "state_mutation": re.compile(
-            r"@[a-zA-Z_]\w*\s*(?:\+|-|\*|/)?=|@@[a-zA-Z_]\w*\s*(?:\+|-|\*|/)?="
-            r"|\b(?:push|pop|shift|unshift|delete|clear)\b|<<"
-            r"|\bmerge!|\bupdate!|\bgsub!|\bmap!|\bselect!|\breject!"
+            # #2765 contract: an instance/class-variable write, an in-place mutator on a
+            # receiver (`.push(` -- a bare `def delete` is a declaration, corollary 1),
+            # a bang method, or `<<` append (`class << self` opens a singleton class and
+            # `<<~EOS` a heredoc: neither writes).
+            # #2817: a plain local re-assignment (`x = v`, `obj.attr = v`, `x[i] = v`)
+            # now counts too. Anchored like lua/js (statement start + lvalue with
+            # `.attr`/`[idx]` tails) with `[ \t]+=` requiring a space before `=`; the
+            # lvalue is lowercase-initial so a `CONST = 1` constant assignment stays
+            # excluded (that is freeze_hits, not flux), and `(?![=~>])` drops `==`,
+            # `=~` and the `=>` hash rocket. Needs re.M for the `^` anchor.
+            r"(?:^|;)[ \t]*[a-z_]\w*(?:\.[a-zA-Z_]\w*|\[[^\]\n]{0,80}\])*[ \t]+=(?![=~>])(?![^\n(]{0,300},[ \t]*$)"
+            r"|@@?[a-zA-Z_]\w*\s*(?:\+|-|\*|/|\|\||&&)?=(?![=~>])"
+            r"|\.(?:push|pop|shift|unshift|delete|delete_at|delete_if|clear|concat|insert|store|replace|prepend|append)\b(?![?!])"
+            r"|(?<!class)(?<!class )[ \t]<<(?![~\-]?[A-Z_\"'])"
+            r"|\b(?:merge!|update!|gsub!|sub!|map!|select!|reject!|sort!|sort_by!|uniq!|compact!|flatten!|reverse!|strip!|chomp!|squeeze!|slice!|shuffle!)",
+            re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
         "dead_code": re.compile(r"#[ \t]*(?:def|class|module|if|unless|while|puts|p)\b"),
@@ -154,8 +186,23 @@ DEFINITION: dict[str, Any] = {
             re.M | re.I,
         ),
         # 14. test (Testing & Assertions)
+        # #2853 contract C3: the bare menu (`context`, `before`, `after`, `setup`,
+        # `let`, `subject`, `assert[a-z_]*` matching the noun `assertions`) fired on
+        # ordinary prose/comments. Anchor every everyday word to its rspec/minitest
+        # form: describe/context to a description string or `do`, it/specify to a
+        # description string, before/after to a hook call/`do`/`:each`/`:all`,
+        # let/subject to `(`/`{`, expect to `(`, minitest assert/refute to the
+        # `assert_<name>` or `assert(` call form, and setup/teardown to a `def`.
+        # Ruby has no runtime `assert` keyword, so `assert*` stays test's (C1 n/a).
         "test": re.compile(
-            r'\b(describe|context|expect|assert[a-zA-Z_]*|refute[a-zA-Z_]*|setup|teardown|before|after|let|subject)\b|\b(?:it|test)\s+[\'"]'
+            r"\bRSpec\b"
+            r"|\b(?:describe|context)\s*(?:['\"(]|do\b)"
+            r"|\b(?:it|specify)\s+['\"]"
+            r"|\b(?:before|after)\s*(?:\(|do\b|:each|:all)"
+            r"|\b(?:let|subject)\s*(?:\(|\{)"
+            r"|\bexpect\s*\("
+            r"|\b(?:assert|refute)(?:_\w+|\s*\()"
+            r"|\bdef[ \t]+(?:setup|teardown)\b"
         ),
         # --- PHASE 3: ARCHITECTURE & DOMAIN SENSORS ---
         # 15. concurrency (Asynchronous Execution)
@@ -228,7 +275,11 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership (Authorship Metadata)
-        "ownership": re.compile(r"#\s*(?:Author|Created by|Maintainer|Copyright):\s+(.*)", re.I),
+        # #2882 contract: C2 `Copyright:` out; YARD @author joins
+        "ownership": re.compile(
+            r"^[ \t]*(?:#+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt (Annotated Debt / TODOs)
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -296,6 +347,18 @@ DEFINITION: dict[str, Any] = {
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"\b(skip|xit|xdescribe|mock|stub|double)\b"),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Ruby Specifics) ---
+        # auth_middleware (#3004): devise's filter registration and session query,
+        # cancancan's ability query, pundit's authorize call, and the credential
+        # check. The `!`/`?` suffixes and the `[@:]` argument anchor keep plain
+        # identifiers and definitions out.
+        "auth_middleware": re.compile(
+            r"\bbefore_action[ \t]+:authenticate_\w+!?"
+            r"|\bauthenticate_\w+!"
+            r"|\buser_signed_in\?"
+            r"|\bcan\?[ \t]*\(?[ \t]*:"
+            r"|\bauthorize[ \t]+[@:]\w"
+            r"|\.valid_password\?\("
+        ),
         "serialization_parsing": re.compile(r"\b(JSON\.parse|YAML\.load|Marshal\.load|Nokogiri::(?:XML|HTML))\b"),
         "regex_execution": re.compile(r"\b(Regexp\.new)\b|\.(match|scan|gsub|sub)\b|=~"),
         "time_date_logic": re.compile(r"\b(Time\.now|Date\.today|DateTime\.now|sleep)\b"),
@@ -303,5 +366,9 @@ DEFINITION: dict[str, Any] = {
         # ends on non-word characters (`%` / `{`) -- the shared \b
         # boundaries could never fire for either. Neither ever matched.
         "ipc_rpc_bridges": re.compile(r"\b(?:Open3|IO\.popen|Net::HTTP|TCPSocket)\b|\bsystem\s*\(|%x\{"),
+        # system_config_mutation (#3084): contract-level absence. no dedicated
+        # config-mutation primitive; host config is file I/O or backtick command
+        # text (their owners').
+        "system_config_mutation": None,
     },
 }

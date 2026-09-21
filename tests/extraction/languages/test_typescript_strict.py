@@ -45,7 +45,7 @@ _TYPESCRIPT_SIMPLE_CASES = [
     ("high_risk_execution", "eval(code)", "const x = 1;"),
     ("io", "fetch(url)", "const x = 1;"),
     ("api", "export function foo() {}", "const x = 1;"),
-    ("state_mutation", "let x = 1;", "const x = 1;"),
+    ("state_mutation", "x = 1;", "let x = 1;"),  # #2765: a declaration is not a write
     ("dead_code", "// if (x) foo();", "// just a note"),
     ("doc", "/** doc */", "// just a note"),
     ("test", "it('works', () => {})", "myRegex.test('x')"),
@@ -64,9 +64,9 @@ _TYPESCRIPT_SIMPLE_CASES = [
     ("fragile_debt", "// HACK: workaround", "// clean"),
     ("spec_exposure", "[SPEC-123]", "// just a note"),
     ("ssr_boundaries", "getServerSideProps", "const x = 1;"),
-    ("events", "emit('event')", "const x = 1;"),
+    ("events", "bus.emit('event')", "function emit(node) {"),  # 2899: method-call anchored
     ("dependency_injection", "@Injectable()", "const x = 1;"),
-    ("memory_alloc", "new Foo()", "const x = 1;"),
+    ("memory_alloc", "new ArrayBuffer(8)", "new Foo()"),  # 2898: unmanaged only
     ("telemetry", "logger.info('msg')", "console.log('msg')"),
     ("debug_prints", "console.log('msg')", "logger.info('msg')"),
     ("explicit_casts", "x as Foo", "const x = 1;"),
@@ -74,7 +74,11 @@ _TYPESCRIPT_SIMPLE_CASES = [
     ("thread_sleeps", "setTimeout(fn, 100)", "const x = 1;"),
     ("bitwise_ops", "x << 2", "const x = 1;"),
     ("sync_locks", "mutex.lock()", "const x = 1;"),
-    ("immutability_locks", "const x = 1;", "let x = 1;"),
+    (
+        "immutability_locks",
+        "readonly id: string;",
+        "const x = 1;",
+    ),  # #2772 C1: `const` is the ordinary binding; readonly is the added modifier
     ("cleanup", "dispose()", "const x = 1;"),
     ("encapsulation", "private foo", "public foo"),
     ("listeners", "addEventListener('click', fn)", "const x = 1;"),
@@ -92,36 +96,31 @@ _TYPESCRIPT_SIMPLE_CASES = [
     ("llm_vector_store", "import { Client } from 'chromadb';", "const x = 1;"),
     ("ml_traditional", "import x from 'sklearn';", "const x = 1;"),
     ("dl_frameworks", "import * as tf from 'tensorflow';", "const x = 1;"),
-
     # --- ADVERSARIAL CASES FOR HIGH-AMBIGUITY SIGNATURES ---
     ("branch", "const result = (a ?? b) || c && d ? e : f;", None),
     ("branch", "switch(x){case 1:break;default:}", None),
-    ("branch", "try{await foo()}catch(e){finally{}}", None),
+    ("branch", "switch (kind) {", "try{await foo()}catch(e){finally{}}"),  # 2822 corollary 1
     ("branch", "}else if(x){", None),
     ("branch", "for  ( let i = 0 ; i < 10 ; i++ )", None),
     ("branch", "do{foo()}while(x);", None),
-
     ("args", "  #myPrivateMethod<T extends Record<string, any>>(a: T, b: number) {", "  return (a + b);"),
     ("args", "const f = (x: { a: string, b: number }): void => {", "  throw (a);"),
     ("args", "public get [Symbol.iterator]() {", "  yield (x);"),
     ("args", "public async *myGenerator<T>(arg: T) {", "  await (p);"),
     ("args", "  *gen(a: number) {", "  typeof (x);"),
     ("args", "export function foo \n <T> \n (x: T) {", "void (0);"),
-
     ("func_start", "export const myFunc: React.FC<Props> = (props) => {", "type MyFunc = (a: number) => void;"),
     ("func_start", "public async *myGenerator<T>(arg: T) {", "  return foo();"),
     ("func_start", "const f = function <T>(x: T) {", "  typeof foo();"),
     ("func_start", "  #myPrivateMethod(a: number) {", None),
     ("func_start", "  [Symbol.iterator]() {", None),
     ("func_start", "  *  myGenerator () {", None),
-
     ("structural_boundaries", "export const a = 1;", "const a = b >= c;"),
     ("structural_boundaries", "class Foo implements Bar {", None),
     ("structural_boundaries", "const a = b satisfies T;", None),
     ("structural_boundaries", "using a = new Disposable();", None),
     ("structural_boundaries", "declare module A {}", None),
     ("structural_boundaries", "import type { A } from 'b';", None),
-
     ("class_start", "export abstract class Foo<T extends U> extends Bar<T> {", None),
     ("class_start", "export class Foo<T extends Record<K, V>> extends Bar<T> {", None),
     ("class_start", "class Foo <T> implements A, B {", None),
@@ -187,8 +186,9 @@ def test_typescript_state_mutation_boundary_regression():
     assert state_mutation.search("mySet.delete();")
     assert state_mutation.search("mySet.add(item);")
     # already-working forms must still work
-    assert state_mutation.search("let x = 1;")
     assert state_mutation.search("myMap.set(1, 2);")
+    # #2765: `let x = 1;` declares -- it is no longer a write (see the contract test module)
+    assert not state_mutation.search("let x = 1;")
 
 
 def test_typescript_dead_code_comment_style_completeness_regression():
@@ -390,8 +390,8 @@ def test_typescript_intentional_double_classification_sweep():
     - `Atomics.wait(...)` -> sync_locks (coordination) + thread_sleeps
       (blocks the calling agent)
     - `new RegExp(x)` -> memory_alloc (object instantiation) + regex_execution
-    - `mySet.delete(x)` -> cleanup (bare `delete` keyword) + state_mutation
-      (`.delete(` method call) -- same token, two real signatures
+    - `mySet.delete(x)` -> state_mutation alone since #2888 (the cleanup
+      half of the old dual is retired: one token, one owner)
     - `private foo() {}` -> args (captures the whole signature) +
       encapsulation (private modifier)
     """
@@ -415,13 +415,20 @@ def test_typescript_intentional_double_classification_sweep():
     assert TYPESCRIPT_RULES["sync_locks"].search(atomics_wait)
     assert TYPESCRIPT_RULES["thread_sleeps"].search(atomics_wait)
 
+    # #2898 retires the memory_alloc half of this dual: the registry reads
+    # memory_alloc as UNMANAGED allocation only (java/kotlin/scala/dart precedent),
+    # so a managed object construction is regex_execution's alone.
     new_regexp = "new RegExp(x)"
-    assert TYPESCRIPT_RULES["memory_alloc"].search(new_regexp)
+    assert not TYPESCRIPT_RULES["memory_alloc"].search(new_regexp)
     assert TYPESCRIPT_RULES["regex_execution"].search(new_regexp)
 
+    # #2888 retires the cleanup half of the `.delete(` dual: the container
+    # mutator is state_mutation's token alone (#2765's family); cleanup keeps
+    # the release verbs in call form.
     set_delete = "mySet.delete(x);"
-    assert TYPESCRIPT_RULES["cleanup"].search(set_delete)
+    assert not TYPESCRIPT_RULES["cleanup"].search(set_delete)
     assert TYPESCRIPT_RULES["state_mutation"].search(set_delete)
+    assert TYPESCRIPT_RULES["cleanup"].search("subscription.dispose();")
 
     private_method = "private foo(x: number) {"
     assert TYPESCRIPT_RULES["args"].search(private_method)
@@ -450,3 +457,63 @@ def test_typescript_redos_immunity_sweep():
     assert TYPESCRIPT_RULES["func_start"].search("function foo() {}")
     assert TYPESCRIPT_RULES["class_start"].search("class Foo {}")
     assert TYPESCRIPT_RULES["spec_exposure"].search("[SPEC-123]")
+
+
+def test_typescript_doc_block_counts_once_regression():
+    """
+    #2672: `/\\*\\*` and the JSDoc/TSDoc tags (`@param`, `@return`, ...)
+    were independent alternatives, so one doc block counted doc
+    proportional to its tag density -- the #2658 shape. Off-corpus only
+    (the rosetta corpus plants one of {marker, tag} for typescript, so this
+    does not move the corpus). Pair the block into a single bounded
+    (0,15000 chars) non-greedy span so it counts once, regardless of how
+    many tags it carries.
+    """
+    doc = TYPESCRIPT_RULES["doc"]
+
+    block = "/**\n * @param x in\n * @return out\n */\n"
+    assert len(doc.findall(block)) == 1, "a single doc block must count once, not once per tag"
+
+    two_blocks = "/**\n * @param x in\n */\nfunction f() {}\n/**\n * @return out\n */\n"
+    assert len(doc.findall(two_blocks)) == 2, "two separate doc blocks must still count as 2"
+
+
+def test_typescript_doc_bare_tag_outside_block_still_counts_regression():
+    """#2672: a doc tag outside any doc block must still count."""
+    doc = TYPESCRIPT_RULES["doc"]
+    assert doc.search("@callback leftover outside any doc block")
+    assert doc.search("@typedef leftover outside any doc block")
+
+
+def test_typescript_doc_block_redos_immune_regression():
+    """#2672 ReDoS probe: an unterminated `/**` must fail closed quickly, not hang."""
+    assert_redos_immune(TYPESCRIPT_RULES["doc"], "/**" + "x" * 200000, timeout_sec=3.0)
+
+
+def test_typescript_api_contract_2730():
+    """
+    #2730: the api rule's stated contract is *a declaration that makes a
+    named function or type visible outside this file* (see
+    docs/api_rule_contract.md). Two failure directions are in scope: a
+    declaration the rule cannot see, and a token the rule counts where no
+    declaration exists.
+
+    A bare `public` matched the string `"public"` in a compiler that parses
+    the keyword.
+
+    Every case below was verified against the real compiled rule before
+    being written down (AGENTS.md rule 3).
+    """
+    api = TYPESCRIPT_RULES["api"]
+
+    # Declarations that publish a name -- must match.
+    assert api.search("public dispose(): void {"), "public method"
+    assert api.search("public expression: Expression,"), "parameter property"
+    assert api.search("export function f() {}"), "export (kept)"
+
+    # Not declarations -- must not match.
+    assert not api.search('return "public";'), "keyword in a string literal"
+    assert not api.search('case "public":'), "keyword in a switch case"
+
+    # ReDoS detonation on a modifier run that never reaches a declaration.
+    assert_redos_immune(api, "public " + "static " * 20000 + "@", timeout_sec=3.0)

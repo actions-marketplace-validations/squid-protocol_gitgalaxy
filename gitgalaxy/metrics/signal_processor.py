@@ -15,10 +15,14 @@ import logging
 import math
 import re
 import statistics
+from collections.abc import Mapping
 from typing import Any, Optional, TypedDict
 
+from gitgalaxy.core.spatial_correlation import WEIGHTED_SIGNALS, weighted_view
+from gitgalaxy.metrics import archetype_classifier
 from gitgalaxy.standards import analysis_lens
 from gitgalaxy.standards import analysis_lens as config
+from gitgalaxy.standards.fidelity_table import FIDELITY_TABLE
 
 
 class DirectoryGroupData(TypedDict):
@@ -28,6 +32,41 @@ class DirectoryGroupData(TypedDict):
     count: int
     mass: float
     risks: list[float]
+
+
+# ==============================================================================
+# ARCHETYPE FEATURE FILTER (#1158 dimensional guard, hoisted in #2985)
+# ==============================================================================
+# The K-Means archetype classifier's live feature vector is NOT one slot per
+# SIGNAL_SCHEMA name: these four are dropped outright (formatting noise and two
+# domain sensors that swamped the distance metric), and so is every "sec_"
+# security-lens observer -- the lens re-counts signals the structural rules
+# already contribute, so including them double-weights those axes.
+#
+# This filter is what makes appending a "sec_" name to SIGNAL_SCHEMA free: the
+# vector's width is unchanged, so it still matches the pre-trained
+# SCALER_MEDIANS/SCALER_IQRS/centroids and _classify_archetype's strict
+# length check (which refuses to classify at all on a mismatch) keeps passing.
+# Appending a NON-sec_ name widens the vector and invalidates those models.
+# Hoisted out of _calculate_exposures' inline literal so the dimension test in
+# tests/core_engine/test_signal_processor.py derives the width from the same
+# rule the engine applies, instead of hard-coding a count that silently rots.
+ARCHETYPE_EXCLUDED_SIGNALS = frozenset(
+    {
+        "indent_tabs",
+        "indent_spaces",
+        "hardware_bridge",
+        "cryptography",
+    }
+)
+
+# The 7 engineered features appended to the per-signal densities below.
+ARCHETYPE_ENGINEERED_FEATURES = 7
+
+
+def is_archetype_feature(signal_key: str) -> bool:
+    """Does this SIGNAL_SCHEMA name occupy a slot in the archetype feature vector?"""
+    return signal_key not in ARCHETYPE_EXCLUDED_SIGNALS and not signal_key.startswith("sec_")
 
 
 # ==============================================================================
@@ -61,6 +100,26 @@ class SignalProcessor:
     # The 18-Point Risk Exposure Schema
     RISK_SCHEMA = config.RECORDING_SCHEMAS.get("RISK_SCHEMA", [])
 
+    # gitgalaxy#2991: canonical new-name -> legacy risk_* mapping (display-layer
+    # only; RISK_SCHEMA and every DB column/JSON key above are unchanged). Not
+    # consumed by this module's own output today -- signal_processor computes
+    # the risk_vector, it doesn't render it -- but bound here alongside
+    # RISK_SCHEMA so it travels with the schema wherever this class is
+    # imported from, rather than each renderer re-deriving it independently.
+    VECTOR_NAMES = config.RECORDING_SCHEMAS.get("VECTOR_NAMES", {})
+
+    # gitgalaxy#2994: Tier-1 declarative family map (analysis_lens.py section
+    # 7b), bound here alongside RISK_SCHEMA/SIGNAL_SCHEMA so it travels with
+    # the schema wherever this class is imported from. Not part of
+    # RECORDING_SCHEMAS -- it's a standalone top-level constant, same pattern
+    # as ENGINE_CONSTANTS/APERTURE_CONFIG below.
+    SURFACE_FAMILIES = getattr(config, "SURFACE_FAMILIES", {})
+
+    # gitgalaxy#3111/#3114: display-layer presentation roles, bound here for
+    # the same travel-with-the-schema reason as SURFACE_FAMILIES above.
+    OPTIONAL_VECTORS = getattr(config, "OPTIONAL_VECTORS", {})
+    CONTEXT_VECTORS = getattr(config, "CONTEXT_VECTORS", {})
+
     def __init__(
         self,
         aperture_config: Optional[dict[str, Any]] = None,
@@ -77,6 +136,10 @@ class SignalProcessor:
         self.logger.debug("Initializing Universal Exposure Framework...")
         self.config = aperture_config or {}
 
+        # #3111: resolved once here rather than per file -- calculate_risk_vector
+        # runs on every artifact in the scan.
+        self.spec_alignment_enabled = bool(self.config.get(self.OPTIONAL_VECTORS.get("spec_match", ""), False))
+
         # ======================================================================
         # 🧠 FETCH PRE-TRAINED INFERENCE MODELS (Global & Local)
         # ======================================================================
@@ -86,7 +149,7 @@ class SignalProcessor:
         self.SCALER_IQRS = inference_model.get("SCALER_IQRS", [1.0] * 100)
 
         # Dynamically grab whichever ARCHETYPES_K key exists (e.g. ARCHETYPES_K9)
-        arch_key = next((k for k in inference_model.keys() if k.startswith("ARCHETYPES_K")), None)
+        arch_key = next((k for k in inference_model if k.startswith("ARCHETYPES_K")), None)
         self.GLOBAL_ARCHETYPES = inference_model.get(arch_key, {}) if arch_key else {}
 
         # ---> NEW: Fetch Language-Specific Clustering Models <---
@@ -96,16 +159,14 @@ class SignalProcessor:
         physics = getattr(config, "ENGINE_CONSTANTS", {})
         self.WEIGHT_RISK = physics.get("WEIGHT_RISK", 2.5)
         self.WEIGHT_DEFENSE = physics.get("WEIGHT_DEFENSE", 1.0)
-        self.TIER_VARS = physics.get(
-            "TIER_VARS",
-            {
-                "tier1": {"fc": 1.0, "irc": 0},
-                "tier2": {"fc": 0.85, "irc": 2},
-                "tier3": {"fc": 0.60, "irc": 5},
-            },
-        )
+        # Per-language scoring constants (#2716 / #2718): Irc/Ot come from the
+        # language-strictness table, the per-signal Fidelity Coefficient from the
+        # corpus-generated fidelity table. See _language_constants().
+        self.FIDELITY_SIGNALS = ("safety", "test", "doc", "ownership")
         self.MASSIVE_FILE_THRESHOLD = physics.get("MASSIVE_FILE_THRESHOLD", 300)
         self.TESTING_RISK_FLOOR = physics.get("TESTING_RISK_FLOOR", 15.0)
+        # Evidence-mass floor (#2655) -- see _mass_loc().
+        self.EVIDENCE_MASS_FLOOR = float(physics.get("EVIDENCE_MASS_FLOOR", 50))
 
         # Fetch Path Modifiers & Asset Masks
         self.path_modifiers = getattr(config, "PATH_MODIFIERS", {})
@@ -198,8 +259,13 @@ class SignalProcessor:
         they'd re-score every file in the corpus rather than just flagging real anomalies. Only a
         genuine ecosystem mismatch (e.g. C hiding in a JS directory) returns a penalty.
         """
-        # Default multipliers if no specific context rules apply
-        multipliers = {"memory": 1.0, "state_mutation": 1.0, "injection": 1.0}
+        # Default multipliers if no specific context rules apply. Only keys with a
+        # downstream consumer are returned: `memory` (-> _calc_safety attack_hits) and
+        # `state_mutation` (-> _calc_state_flux via mp_map). An `injection` key was
+        # dropped in #3099 -- ECOSYSTEM_MISMATCH_WEIGHTS never set it and there is no
+        # injection consumer here; per #3022/#1020 injection is a structural signal, not
+        # a scorable risk we amplify.
+        multipliers = {"memory": 1.0, "state_mutation": 1.0}
 
         file_lang = file_lang.lower()
         folder_lang = folder_lang.lower() if folder_lang else file_lang
@@ -272,11 +338,6 @@ class SignalProcessor:
                 total_loc = max(int(meta.get("total_loc", loc)), 1)
             except (ValueError, TypeError):
                 total_loc = loc
-
-            try:
-                doc_lines = int(meta.get("doc_loc", 0))
-            except (ValueError, TypeError):
-                doc_lines = 0
 
             lang_id = meta.get("lang_id", "undeterminable")
 
@@ -448,6 +509,19 @@ class SignalProcessor:
                     blanket_risk_vector[self.RISK_SCHEMA.index("churn")] = min(raw_churn_freq * 10, 100.0)
                 if "documentation" in self.RISK_SCHEMA:
                     blanket_risk_vector[self.RISK_SCHEMA.index("documentation")] = 0.0  # <-- The Fix! 0% Risk.
+                # #2978: a hardcoded credential in a markdown/plaintext file is a real
+                # leak even though the surrounding prose carries none of this override's
+                # other risk dimensions (no logic entropy, no authorship centralization).
+                # Mirrors the CRITICAL SECRETS EXPOSURE OVERRIDE above by carving
+                # secrets_risk out of the blanket zero, but reuses the normal graduated
+                # _calc_secrets_risk formula (same one json/yaml/csv now get via the
+                # standard path below) instead of a flat spike -- mp_map isn't computed
+                # yet at this point in the function, so this passes the same 1.0 default
+                # mp_map.get("secrets", 1.0) itself falls back to.
+                if "secrets_risk" in self.RISK_SCHEMA:
+                    secrets_score = self._calc_secrets_risk(loc, raw_signals, 1.0)
+                    if secrets_score:
+                        blanket_risk_vector[self.RISK_SCHEMA.index("secrets_risk")] = secrets_score
 
                 return {
                     "risk_vector": blanket_risk_vector,
@@ -479,10 +553,7 @@ class SignalProcessor:
             # ==================================================================
             # 1. ACTIVE SIGNAL PROCESSING ENGINE (For normal executable code)
             # ==================================================================
-            tier = self._get_tier(lang_id)
-            fc = self.TIER_VARS[tier]["fc"]
-            irc = self.TIER_VARS[tier]["irc"]
-            ot = self.TIER_VARS[tier].get("ot", 1.0)
+            irc, ot, fid = self._language_constants(lang_id)
 
             # Environmental Context (Path-based overrides)
             mp_map = self._get_locational_multipliers(rel_path)
@@ -496,10 +567,22 @@ class SignalProcessor:
                 mp_map.setdefault(mp_key, mp_value)
 
             self.logger.debug(
-                f"[{rel_path}] Structural Calc | Lang: {lang_id} (Fc: {fc:.2f}, Irc: {irc}, Ot: {ot:.2f})"
+                f"[{rel_path}] Structural Calc | Lang: {lang_id} (Irc: {irc}, Ot: {ot:.2f}, "
+                f"Fc: {', '.join(f'{k}={v:.2f}' for k, v in fid.items())})"
             )
 
             hit_vector = [raw_signals.get(key, 0) for key in self.SIGNAL_SCHEMA]
+
+            # ---> THE WEIGHTED VIEW (#2813, contract roadmap Phase 2 / D1) <---
+            # `raw_signals` is what the rules counted, and that is what hit_vector,
+            # every recorder and the corpus record. The proximity weights the
+            # correlation pass used to add into those counts in place (x3
+            # cascading flux, the silencer dampener, the race / exfiltration / RCE
+            # amplifiers) are applied HERE, once, from the per-file tally, so every
+            # formula below reads exactly the figure it always read while the
+            # recorded count is a count.
+            proximity_tally = self._proximity_tally(meta)
+            signals = self._weighted(raw_signals, proximity_tally)
 
             # ------------------------------------------------------------------
             # 1. TEMPORAL PRE-PROCESSING (Raw Extraction)
@@ -508,14 +591,14 @@ class SignalProcessor:
             stability_score, raw_churn_freq = self._calc_raw_temporal_signals(temporal_data)
 
             # ------------------------------------------------------------------
-            # 1.5 BUILD THE ML VECTOR & CLASSIFY ARCHETYPE
+            # 1.5 FUNCTION-LEVEL ARCHETYPE CLASSIFICATION
+            # (file/local archetypes are classified in record_keeper post-assembly)
             # ------------------------------------------------------------------
-            cfr = meta.get("control_flow_ratio", 0.0)
 
             # ---> NEW: THE ENCAPSULATION RATIO <---
             # How much of the file's data is safely locked inside functions?
-            total_vars = raw_signals.get("core_var_decl", 0)
-            global_vars = raw_signals.get("globals", 0)
+            total_vars = signals.get("core_var_decl", 0)
+            global_vars = signals.get("globals", 0)
 
             if total_vars == 0 and global_vars == 0:
                 encapsulation_ratio = 1.0  # Safe by default if no state exists
@@ -523,53 +606,50 @@ class SignalProcessor:
                 # 1.0 = Perfect (0 globals). 0.0 = Terrible (All globals).
                 encapsulation_ratio = max(0.0, 1.0 - (global_vars / max(total_vars + global_vars, 1)))
 
-            logic_loc = max(int(round(meta.get("coding_loc", 0) * cfr)), 1)
-            safe_denom = max(logic_loc, meta.get("coding_loc", 1))
-
             # ---> START FUNCTION-LEVEL ML CLASSIFICATION <---
             functions = meta.get("functions", [])
-            max_func_comp = 0
-            avg_func_args = 0.0
             func_gini = 0.0
 
+            # Rosetta-governed function-archetype model (k=14). The classifier below
+            # builds the 38-D vector (5 geometry + 33 per-LOC DNA densities) in
+            # FEATURE_NAMES order from each function's hit_vector (via DNA_SOURCES),
+            # caps + log1p the densities, RobustScales, applies FEATURE_WEIGHTS, and
+            # takes the nearest centroid -> cluster_names[idx]. Kept in lockstep with
+            # gitgalaxy-population-analyses/kmeans_clustering (FUNCTION_ARCHETYPES.md);
+            # changing the feature contract requires a golden-master regeneration.
             func_ml_brain = getattr(analysis_lens, "GENERAL_FUNCTION_INFERENCE_MODEL", {})
             f_medians = func_ml_brain.get("SCALER_MEDIANS", [])
             f_iqrs = func_ml_brain.get("SCALER_IQRS", [])
-            f_arch_key = next((k for k in func_ml_brain.keys() if k.startswith("ARCHETYPES_K")), None)
-            f_centroids = func_ml_brain.get(f_arch_key, {}) if f_arch_key else {}
-
-            # Bulletproof fallback names if the model dictionary forgets them
-            f_names = func_ml_brain.get(
-                "cluster_names",
-                [
-                    "Utility/Helper",
-                    "Data Router",
-                    "State Mutator",
-                    "God Function",
-                    "Math Engine",
-                    "I/O Bridge",
-                    "Constructor",
-                    "Callback/Event",
-                    "API Endpoint",
-                    "Validator",
-                    "Renderer",
-                    "Loop Processor",
-                ],
-            )
+            f_feature_names = func_ml_brain.get("FEATURE_NAMES", [])
+            f_weights = func_ml_brain.get("FEATURE_WEIGHTS", [1.0] * len(f_feature_names))
+            f_caps = func_ml_brain.get("CAP_VALUES", {})
+            f_dna_sources = func_ml_brain.get("DNA_SOURCES", {})
+            f_names = func_ml_brain.get("cluster_names", [])
+            f_arch_key = next((k for k in func_ml_brain if k.startswith("ARCHETYPES_K")), None)
+            # Centroids as an ordered list aligned with cluster_names.
+            f_centroid_list = list(func_ml_brain.get(f_arch_key, {}).values()) if f_arch_key else []
 
             # ---> NEW: DIAGNOSTIC ML LOGGING <---
-            if functions and not f_centroids:
+            if functions and not (f_centroid_list and f_feature_names):
                 self.logger.warning(
-                    f"⚠️ FUNCTION ML SILENT BYPASS: Brain loaded? {bool(func_ml_brain)} | Centroids: {len(f_centroids)} | Arch Key: {f_arch_key}"
+                    f"⚠️ FUNCTION ML SILENT BYPASS: Brain loaded? {bool(func_ml_brain)} | Centroids: {len(f_centroid_list)} | Features: {len(f_feature_names)}"
                 )
 
-            if functions:
-                complexities = [f.get("branch", 0) for f in functions]
-                max_func_comp = max(complexities)
-                avg_func_args = sum([f.get("args", 0) for f in functions]) / len(functions)
+            # #2691: the slicer emits a synthetic bucket ("__global_context__" and
+            # friends) to hold a file's top-level statements, and it was counted as
+            # a function here -- so every per-function AVERAGE was taken over a
+            # population containing things that are not functions. Measured on the
+            # keyword-rosetta control corpus, five languages reported 16 functions
+            # against 13 planted, diluting each descriptor by ~3/16. The buckets
+            # keep their signals at file level (see file_mass below, which still
+            # sums every slice's impact); they are excluded only from the
+            # population that per-function statistics describe.
+            real_functions = [f for f in functions if not f.get("is_synthetic_slice")]
+            if real_functions:
+                complexities = [f.get("branch", 0) for f in real_functions]
 
                 # 1. Z-Scores Mathematics
-                func_count = len(functions)
+                func_count = len(real_functions)
                 mean_comp = statistics.mean(complexities) if func_count > 0 else 0.0
                 std_comp = statistics.pstdev(complexities) if func_count > 1 else 0.0
 
@@ -579,41 +659,56 @@ class SignalProcessor:
                     z_val = (c - mean_comp) / std_comp if std_comp > 0 else 0.0
                     s["z_score"] = round(z_val, 3)
 
-                    # 2. Archetype Euclidean Classification
+                    # 2. Archetype classification (rosetta-governed 38-D vector).
+                    # Build geometry + per-LOC DNA densities in FEATURE_NAMES order
+                    # from this function's hit_vector, cap + log1p densities,
+                    # RobustScale, apply FEATURE_WEIGHTS, then nearest centroid.
                     s["archetype"] = "Unclassified"
-                    if f_centroids:  # <--- REMOVED f_features STRICT REQUIREMENT
-                        raw_vec = [
-                            float(s.get("branch", 0)),
-                            float(s.get("loc", 0)),
-                            float(s.get("args", 0)),
-                            float(s.get("keyword_density", 0.0)),
-                            float(s.get("control_flow_ratio", s.get("cf_ratio", 0.0))),
-                        ]
+                    if f_centroid_list and f_feature_names:
+                        hv = s.get("hit_vector", {})
+                        loc_f = float(s.get("loc", 0))
+                        denom = loc_f if loc_f > 0 else 1.0
+                        comp_f = float(s.get("branch", 0))  # engine stores branch as complexity
 
                         scaled_vec = []
-                        for i, val in enumerate(raw_vec):
+                        for i, fname in enumerate(f_feature_names):
+                            if fname == "log_loc":
+                                v = math.log1p(loc_f)
+                            elif fname == "log_complexity":
+                                v = math.log1p(comp_f)
+                            elif fname == "log_args":
+                                v = math.log1p(float(s.get("args", 0)))
+                            elif fname == "keyword_density":
+                                v = float(s.get("keyword_density", 0.0))
+                            elif fname == "func_internal_density":
+                                v = comp_f / denom
+                            elif fname.startswith("log_density_"):
+                                col = fname[len("log_density_") :]
+                                hk = f_dna_sources.get(col, col)
+                                raw = (float(hv.get(hk, 0)) / denom) * 100.0
+                                cap = f_caps.get(col)
+                                if cap is not None and raw > cap:
+                                    raw = cap
+                                v = math.log1p(raw)
+                            else:
+                                v = 0.0
                             med = f_medians[i] if i < len(f_medians) else 0.0
                             iqr = f_iqrs[i] if i < len(f_iqrs) and f_iqrs[i] > 0 else 1.0
-                            scaled_vec.append((val - med) / iqr)
+                            w = f_weights[i] if i < len(f_weights) else 1.0
+                            scaled_vec.append(((v - med) / iqr) * w)
 
-                        # Route through the shared classifier instead of a second,
-                        # hand-rolled distance loop so function- and file-level
-                        # classification can't drift apart (#1157). The helper
-                        # refuses to compare vectors of different lengths, so a
-                        # stale model (62-dim scalers/centroids vs. the 5-dim
-                        # live vector) leaves the function "Unclassified" rather
-                        # than emitting a silently-truncated label.
-                        best_key, _, _ = self._classify_archetype(scaled_vec, f_centroids)
-                        if best_key == "Unclassified":
-                            s["archetype"] = "Unclassified"
-                        else:
-                            try:
-                                # If the key is numbered like "Cluster 0", extract the 0
-                                c_idx = int(str(best_key).split(" ")[-1])
-                                s["archetype"] = f_names[c_idx] if c_idx < len(f_names) else best_key
-                            except ValueError:
-                                # If the key is already the name (e.g., "Interfaces"), use it directly!
-                                s["archetype"] = str(best_key)
+                        best_idx, best_dist = -1, None
+                        for ci, centroid in enumerate(f_centroid_list):
+                            if len(centroid) != len(scaled_vec):
+                                continue  # length guard (stale model) -> leaves Unclassified
+                            d = 0.0
+                            for a, b in zip(scaled_vec, centroid):
+                                diff = a - b
+                                d += diff * diff
+                            if best_dist is None or d < best_dist:
+                                best_dist, best_idx = d, ci
+                        if best_idx >= 0:
+                            s["archetype"] = f_names[best_idx] if best_idx < len(f_names) else f"Cluster {best_idx}"
 
                 # 3. Calculate Structural Inequality (Gini)
                 if len(complexities) > 1 and sum(complexities) > 0:
@@ -625,81 +720,35 @@ class SignalProcessor:
                     )
             # ---> END FUNCTION-LEVEL ML CLASSIFICATION <---
 
-            raw_imports_count = len(meta.get("raw_imports", []))
+            # Per-file function-archetype mix (count per archetype), surfaced in the
+            # audit + LLM reports so the deterministic output carries the function
+            # taxonomy, not just the scan DB. Sorted by count for stable report output.
+            _mix: dict[str, int] = {}
+            for _s in real_functions:
+                _a = _s.get("archetype", "Unclassified")
+                _mix[_a] = _mix.get(_a, 0) + 1
+            function_archetype_mix = dict(sorted(_mix.items(), key=lambda kv: (-kv[1], kv[0])))
+
             popularity = meta.get("popularity", 0)
 
-            log_logic_loc = math.log1p(logic_loc)
-            log_imports_out = math.log1p(raw_imports_count)
-            log_popularity_in = math.log1p(popularity)
-            log_max_func_comp = math.log1p(max_func_comp)
-            log_avg_func_args = math.log1p(avg_func_args)
-            log_churn = math.log1p(raw_churn_freq)
+            # #ENGINE-PARITY: the file (global macro-species) and per-language
+            # (local micro-species) archetypes are now classified from the FULLY-
+            # assembled metrics in record_keeper (mirroring offline
+            # apply_file_clusters) and written back into this telemetry dict before
+            # the recorders read it. The old raw_vector built here used a hardcoded
+            # feature set that silently drifted from the trainer -- the v2.8.0
+            # file_cluster "Unclassified"/mismatch bug. These are placeholders that
+            # record_keeper overwrites once every file metric + the function->file
+            # composition rollup are available.
+            global_archetype = "Unclassified"
+            global_drift = 0.0
+            arch_fingerprint: dict[str, float] = {}
 
-            raw_vector = []
-            for key in self.SIGNAL_SCHEMA:
-                # ---> THE DIMENSIONAL FIX: Ignore hardware_bridge and cryptography <---
-                if key in {
-                    "indent_tabs",
-                    "indent_spaces",
-                    "hardware_bridge",
-                    "cryptography",
-                } or key.startswith("sec_"):
-                    continue
-                raw_hit = raw_signals.get(key, 0)
-                raw_density = (raw_hit / safe_denom) * 100.0
-                raw_vector.append(math.log1p(raw_density))
-
-            raw_vector.extend(
-                [
-                    cfr,
-                    log_logic_loc,
-                    log_imports_out,
-                    log_popularity_in,
-                    log_max_func_comp,
-                    log_avg_func_args,
-                    log_churn,
-                ]
-            )
-
-            # ------------------------------------------------------------------
-            # 1.6 BIAXIAL ANOMALY DETECTION (Global vs Local)
-            # ------------------------------------------------------------------
-            # A) GLOBAL MACRO-SPECIES
-            scaled_vector_global = []
-            for i, val in enumerate(raw_vector):
-                median = self.SCALER_MEDIANS[i] if i < len(self.SCALER_MEDIANS) else 0.0
-                safe_iqr = self.SCALER_IQRS[i] if i < len(self.SCALER_IQRS) and self.SCALER_IQRS[i] > 0 else 1.0
-                scaled_vector_global.append((val - median) / safe_iqr)
-
-            global_archetype, global_drift, arch_fingerprint = self._classify_archetype(
-                scaled_vector_global, self.GLOBAL_ARCHETYPES
-            )
-
-            # B) LOCAL MICRO-SPECIES
+            # B) LOCAL MICRO-SPECIES -- classified in record_keeper from the
+            # per-language self-describing brain (see above); placeholders here.
             local_archetype = None
             local_drift = 0.0
             local_fingerprint: dict[str, float] = {}
-
-            lang_brain = self.LANGUAGE_INFERENCE_MODELS.get(lang_id.lower())
-            if lang_brain:
-                lang_medians = lang_brain.get("SCALER_MEDIANS", [])
-                lang_iqrs = lang_brain.get("SCALER_IQRS", [])
-
-                # Find the dynamic K-key (e.g., ARCHETYPES_K11)
-                arch_key = next((k for k in lang_brain.keys() if k.startswith("ARCHETYPES_K")), None)
-                lang_archetypes = lang_brain.get(arch_key, {}) if arch_key else {}
-
-                if lang_medians and lang_iqrs and lang_archetypes:
-                    scaled_vector_local = []
-                    for i, val in enumerate(raw_vector):
-                        median = lang_medians[i] if i < len(lang_medians) else self.SCALER_MEDIANS[i]
-                        iqr = lang_iqrs[i] if i < len(lang_iqrs) else self.SCALER_IQRS[i]
-                        safe_iqr = iqr if iqr > 0 else 1.0
-                        scaled_vector_local.append((val - median) / safe_iqr)
-
-                    local_archetype, local_drift, local_fingerprint = self._classify_archetype(
-                        scaled_vector_local, lang_archetypes
-                    )
 
             # ------------------------------------------------------------------
             # 2. CORE RISK EXPOSURE CALCULATIONS
@@ -707,18 +756,16 @@ class SignalProcessor:
             # The OOM Bomb heuristic has been phased out of the probabilistic model.
             # Spatial correlation is now handled natively upstream in detector.py.
 
-            cog_score, cog_raw = self._calc_cog_load(loc, raw_signals, irc, fc, mp_map.get("cog", 1.0), func_gini)
-            saf_score = self._calc_safety(
-                loc, raw_signals, irc, fc, mp_map.get("safety", 1.0), mp_map.get("memory", 1.0)
-            )
-            debt_score = self._calc_tech_debt(loc, raw_signals, irc, mp_map.get("debt", 1.0))
+            cog_score, cog_raw = self._calc_cog_load(loc, signals, fid, mp_map.get("cog", 1.0), func_gini)
+            saf_score = self._calc_safety(loc, signals, irc, fid, mp_map.get("safety", 1.0), mp_map.get("memory", 1.0))
+            debt_score = self._calc_tech_debt(loc, signals, irc, mp_map.get("debt", 1.0))
 
             test_score = self._calc_verification(
                 loc,
                 meta.get("is_protected", False),
-                raw_signals,
+                signals,
                 ot,
-                fc,
+                fid,
                 mp_map.get("test", 1.0),
                 functions,
                 meta.get("test_coverage_map", {}),
@@ -726,42 +773,46 @@ class SignalProcessor:
                 popularity=popularity,
             )
 
-            # Calculate Silo Risk early for the Documentation N-Dimensional Math
-            silo_exposure = self._calculate_silo_risk(meta.get("authors", {}))
-
+            # #2908 Phase 3: the per-unit coverage ratio reads the units and the
+            # umbrella, nothing else -- loc/doc_loc/fid/mp/popularity/silo left
+            # the equation (D4; docs/risk_documentation_contract.md §3).
             doc_score = self._calc_documentation(
-                loc,
-                doc_lines,
-                raw_signals,
-                fc,
-                irc,
-                mp_map.get("doc", 1.0),
                 functions,
                 doc_umbrella=ghost_meta.get("doc_umbrella", 0.0),
-                popularity=popularity,
-                silo_exposure=silo_exposure,
             )
-            spec_score = self._calc_spec_alignment(raw_signals, mp_map.get("spec", 1.0))
+            # #3111: spec alignment is opt-in (default OFF -- see
+            # analysis_lens.OPTIONAL_VECTORS for why). Not computed when
+            # disabled; the slot stays 0.0 so the vector keeps its dense
+            # numeric contract for the ~25 positional consumers (DB columns,
+            # gpu_recorder's int(v * 10), network_risk_sensor's multiply), the
+            # same representation the engine already uses for the history
+            # vectors it ablates. Nothing renders it -- every display surface
+            # consults inactive_vectors() -- so the 0.0 is never shown as a
+            # measurement.
+            spec_score = (
+                self._calc_spec_alignment(signals, mp_map.get("spec", 1.0)) if self.spec_alignment_enabled else 0.0
+            )
 
-            bureaucracy_dampener = min(loc / 15.0, 1.0)
-            test_score *= bureaucracy_dampener
-            doc_score *= bureaucracy_dampener
-            spec_score *= bureaucracy_dampener
+            # The old `bureaucracy_dampener = min(loc / 15, 1)` that scaled the
+            # doc/test/spec scores of sub-15-LOC files is gone (#2655): it stacked a
+            # second, linear length dependence on top of the per-LOC density one.
+            # The evidence-mass floor inside each equation is now the only
+            # small-file mechanism.
 
             exposure_vector = {
                 "cognitive_load": cog_score,
                 "safety_score": saf_score,
                 "tech_debt": debt_score,
                 "verification": test_score,
-                "api_exposure": self._calc_api_exposure(raw_signals, total_loc, popularity),
-                "concurrency": self._calc_concurrency(loc, raw_signals, irc, mp_map.get("async", 1.0)),
-                "state_flux": self._calc_state_flux(loc, raw_signals, irc, mp_map.get("state_mutation", 1.0)),
-                "dead_code": self._calc_graveyard(total_loc, raw_signals, mp_map.get("dead", 1.0)),
+                "api_exposure": self._calc_api_exposure(signals, total_loc, popularity),
+                "concurrency": self._calc_concurrency(loc, signals, mp_map.get("async", 1.0)),
+                "state_flux": self._calc_state_flux(loc, signals, mp_map.get("state_mutation", 1.0)),
+                "dead_code": self._calc_graveyard(total_loc, signals, mp_map.get("dead", 1.0)),
                 "spec_match": spec_score,
                 "stability": stability_score,
                 "churn": 0.0,
                 "documentation": doc_score,
-                "secrets_risk": self._calc_secrets_risk(loc, raw_signals, mp_map.get("secrets", 1.0)),
+                "secrets_risk": self._calc_secrets_risk(loc, signals, mp_map.get("secrets", 1.0)),
             }
 
             # ==================================================================
@@ -782,7 +833,7 @@ class SignalProcessor:
             # 4. CALCULATE FILE IMPACT (Structural Magnitude)
             # ------------------------------------------------------------------
             functions = meta.get("functions", [])
-            func_start = raw_signals.get("func_start", 0)
+            func_start = signals.get("func_start", 0)
 
             if functions:
                 sum_function_impacts = sum(f.get("impact", 0) for f in functions)
@@ -791,8 +842,8 @@ class SignalProcessor:
                     temp_branches = 0
                     temp_args = 0
                 else:
-                    temp_branches = raw_signals.get("branch", 0)
-                    temp_args = raw_signals.get("args", 0)
+                    temp_branches = signals.get("branch", 0)
+                    temp_args = signals.get("args", 0)
 
                 temp_signals = temp_branches + temp_args
                 temp_effective_loc = min(loc, (temp_signals + 1) * 10)
@@ -800,9 +851,9 @@ class SignalProcessor:
 
                 sum_function_impacts = ((temp_branches + 1) * temp_arg_multiplier + (0.05 * temp_effective_loc)) * 10
 
-            api_exposure = raw_signals.get("api", 0)
-            concurrency = raw_signals.get("concurrency", 0)
-            flux = raw_signals.get("state_mutation", 0)
+            api_exposure = signals.get("api", 0)
+            concurrency = signals.get("concurrency", 0)
+            flux = signals.get("state_mutation", 0)
 
             file_mass = sum_function_impacts + api_exposure + concurrency + flux + (loc / 50.0)
 
@@ -826,20 +877,75 @@ class SignalProcessor:
                 "local_archetype": local_archetype,
                 "local_drift": local_drift,
                 "local_fingerprint": local_fingerprint,
+                "function_archetype_mix": function_archetype_mix,
                 "densities": {"cog_raw": round(cog_raw, 3)},
+                # Evidence-mass flag (#2655): consumers can tell a count-regime score
+                # (file below the floor, scored as if it were `evidence_mass` lines
+                # long) from a density-regime one.
+                "evidence_mass": self._mass_loc(loc),
+                "mass_floored": loc < self.EVIDENCE_MASS_FLOOR,
                 "raw_churn_freq": raw_churn_freq,
                 "func_complexity_gini": func_gini,
                 "ownership_entropy": ownership_score,
                 "author_distribution": silo_exposure,
                 "ownership": dominant_author,
-                "indentation_style": self._calc_indentation_style(raw_signals),
+                "indentation_style": self._calc_indentation_style(signals),
                 "domain_context": ghost_meta,
-                "mitigation_telemetry": meta.get("mitigations", []),
+                # The proximity tally (#2813): the detector's per-file dict, which the
+                # audit / LLM recorders render as "Contextual Mitigations &
+                # Amplifications". It used to carry the galaxyscope:ignore list here
+                # instead, so the tally never reached the report; the suppressions
+                # are folded in as 1-tallies, the shape the recorders already accept.
+                "mitigation_telemetry": {
+                    **dict.fromkeys(mitigations, 1),
+                    **proximity_tally,
+                },
+                # The weighted figures the recorded counts used to carry, under their
+                # own key (#2813 item 3) so user-facing numbers change name, not meaning.
+                "weighted_signals": {
+                    key: signals[key] for key in WEIGHTED_SIGNALS if signals.get(key, 0) != raw_signals.get(key, 0)
+                },
                 "threat_locations": meta.get("threat_locations", {}),
             }
 
             if mp_map:
                 telemetry_payload["multipliers"] = mp_map
+
+            # ==================================================================
+            # TIER 1/3 -- SURFACE FAMILIES & RELATIONS (gitgalaxy#2994)
+            # ==================================================================
+            # Summed from raw_signals, NOT the mitigation-suppressed
+            # exposure_vector assembled above (:784-788 in this method) -- these
+            # are "raw truth by construction": a file whose legacy
+            # risk_safety_score got zeroed by an inline `galaxyscope:ignore`
+            # can still show a nonzero `guards` family total. See
+            # analysis_lens.SURFACE_FAMILIES / SURFACE_FAMILY_EXEMPT and the
+            # suppression-interplay test in test_signal_processor.py.
+            #
+            # Additive only: risk_vector/hit_vector/file_impact above are
+            # unchanged, and this key is new -- it does not touch the
+            # golden-mastered audit_recorder output (that reads risk_vector/
+            # hit_vector/file_impact, not telemetry["surface_families"]).
+            surface_families = {
+                family: sum(raw_signals.get(member, 0) for member in members)
+                for family, members in self.SURFACE_FAMILIES.items()
+            }
+            guards_total = surface_families.get("guards", 0)
+            danger_total = surface_families.get("danger", 0)
+            memory_total = surface_families.get("memory", 0)
+            cleanup_total = surface_families.get("cleanup", 0)
+            surface_relations = {
+                # Mechanism story: defensive constructs per unit of danger
+                # surface, +1 in the denominator so a danger-free file (the
+                # common case) doesn't divide by zero or spike to infinity.
+                "guard_balance_ratio": round(guards_total / (danger_total + 1), 4),
+                # Mechanism story: cleanup (free/close/dispose) per unit of
+                # manual allocation surface -- the X-H1 feature from the
+                # temporal-crucible validation record.
+                "alloc_cleanup_pairing": round(cleanup_total / (memory_total + 1), 4),
+            }
+            telemetry_payload["surface_families"] = surface_families
+            telemetry_payload["surface_relations"] = surface_relations
 
             return {
                 "risk_vector": risk_vector_ordered,
@@ -871,6 +977,16 @@ class SignalProcessor:
 
         # Execute Pass 2: Temporal Normalization across the Universe
         self._normalize_temporal_metrics(parsed_files)
+
+        # gitgalaxy#2994 Tier 2: snapshot percentiles MUST run AFTER temporal
+        # normalization above -- `_normalize_temporal_metrics` rewrites
+        # `risk_vector[churn_idx]` in place (:1275 in that method), and the
+        # percentile pass ranks the legacy-vector series off `risk_vector`
+        # directly. Reordering this ahead of normalization would rank every
+        # file's churn against its pre-normalization (raw, unnormalized)
+        # value instead -- see the churn-ordering regression test in
+        # test_signal_processor.py.
+        self._compute_snapshot_percentiles(parsed_files)
 
         total_files = len(parsed_files) + len(unparsable_files)
         if total_files == 0:
@@ -1111,23 +1227,27 @@ class SignalProcessor:
                 net_mets = primary_ai_node.get("telemetry", {}).get("network_metrics", {})
 
                 role = net_mets.get("ecosystem_role", "Unknown")
-                pr = net_mets.get("normalized_blast_radius") or 0.0
-                btw = net_mets.get("betweenness_score") or 0.0
+                # #3027: None = not computed (betweenness past its #3038 work
+                # budget, or a failed computation). An insight that needs the metric is
+                # skipped, never inferred from a placeholder -- a 0.0 blast
+                # radius used to yield a false "Containment (Low Risk)" verdict.
+                pr = net_mets.get("normalized_blast_radius")
+                btw = net_mets.get("betweenness_score")
 
                 ai_topology["insights"].append(
                     f"Structural Posture: The primary AI integration acts as a '{role}' within the repository."
                 )
 
-                if pr > 1.0:
+                if pr is not None and pr > 1.0:
                     ai_topology["insights"].append(
                         f"Systemic Risk (High): The AI components are deeply embedded with a massive Dependency Blast Radius (PageRank: {pr}). Hallucinations or prompt injections here will cascade catastrophically across the system."
                     )
-                elif pr < 0.2:
+                elif pr is not None and pr < 0.2:
                     ai_topology["insights"].append(
                         "Containment (Low Risk): The AI components are safely isolated at the edge of the network with a minimal dependency blast radius."
                     )
 
-                if btw > 0.05:
+                if btw is not None and btw > 0.05:
                     ai_topology["insights"].append(
                         "Cognitive Choke Point: The AI sits on the shortest path between major system domains (High Betweenness). It is acting as an intelligent router, filter, or mandatory data transformer."
                     )
@@ -1141,50 +1261,38 @@ class SignalProcessor:
                 "Deep Learning": dl_total,
             }
 
-        # --- NEW: Ecosystem Baseline Clustering (Global Repository Archetype) ---
-        repo_model = getattr(config, "GENERAL_REPO_INFERENCE_MODEL", None)
+        # ---> FILE + REPO COMPOSITION ARCHETYPES <---
+        # Runs here (global synthesis, post-network) so pagerank/blast_radius are
+        # available. Assign each file its composition archetype (function stoichiometry
+        # + structure + graph role), then aggregate into a repo archetype.
+        _arch_drift: dict = {}
+        for _f in parsed_files:
+            _fa, _fz = archetype_classifier.classify_file(_f, drift=_arch_drift)
+            if _fa is not None:
+                _tel = _f.setdefault("telemetry", {})
+                _tel["composition_file_archetype"] = _fa
+                _tel["composition_file_z"] = _fz
+        # Quantile-range parity canary (#3125): warn if scanned feature values fell
+        # systematically outside the brain's trained range (scale/semantic drift).
+        for _msg in archetype_classifier.quantile_drift_diagnostics(_arch_drift):
+            self.logger.warning("Archetype parity: %s", _msg)
+        repo_composition_archetype, repo_composition_z = archetype_classifier.classify_repo(parsed_files)
+        file_composition_distribution: dict[str, int] = {}
+        for _f in parsed_files:
+            _fa = (_f.get("telemetry", {}) or {}).get("composition_file_archetype")
+            if _fa:
+                file_composition_distribution[_fa] = file_composition_distribution.get(_fa, 0) + 1
+        file_composition_distribution = dict(
+            sorted(file_composition_distribution.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+
+        # #1159: the ecosystem baseline is the composition repo archetype. The old
+        # K-Means repo model ran before file archetypes were assigned, so every repo
+        # scored an all-zero vector and landed in "Cluster 3".
         repo_macro_data = {
-            "name": "Unclassified",
-            "id": -1,
-            "z_score": 0.0,
-            "raw_drift": 0.0,
+            "name": repo_composition_archetype or "Unclassified",
+            "z_score": repo_composition_z,
         }
-
-        if repo_model and parsed_files:
-            # Rebuild the ratios based purely on the K-Means features
-            feature_counts = {feat: archetype_counts.get(feat, 0) for feat in repo_model["features"]}
-            live_ratios = [feature_counts[feat] / len(parsed_files) for feat in repo_model["features"]]
-
-            distances = []
-            for i in range(repo_model["k_clusters"]):
-                centroid = repo_model["centroids"][f"Cluster {i}"]
-                dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(live_ratios, centroid)))
-                distances.append(dist)
-
-            assigned_idx = distances.index(min(distances))
-            raw_drift = distances[assigned_idx]
-
-            z_params = repo_model["z_score_params"][f"Cluster {assigned_idx}"]
-            z_score = (raw_drift - z_params["mean"]) / z_params["std"]
-
-            cluster_names = repo_model.get(
-                "cluster_names",
-                [f"Cluster {i}" for i in range(repo_model["k_clusters"])],
-            )
-
-            repo_macro_data = {
-                "name": cluster_names[assigned_idx],
-                "id": assigned_idx,
-                "z_score": round(z_score, 3),
-                "raw_drift": round(raw_drift, 3),
-            }
-
-            # Inject into parsed_files so security_auditor and gpu_recorder have it in RAM
-            for f in parsed_files:
-                f["telemetry"]["ecosystem_baseline_cluster"] = assigned_idx
-                f["telemetry"]["ecosystem_z_score"] = repo_macro_data["z_score"]
-                for i, d in enumerate(distances):
-                    f["telemetry"][f"dist_to_{i}"] = d
 
         return {
             "summary": {
@@ -1194,6 +1302,9 @@ class SignalProcessor:
                 "dominant_language": self._get_dominant_lang(lang_comp),
                 "volatility_index": volatility_idx,
                 "Percent_Visible": round((1 - darkness_ratio) * 100, 1),
+                "repo_composition_archetype": repo_composition_archetype,
+                "repo_composition_z": repo_composition_z,
+                "file_composition_distribution": file_composition_distribution,
             },
             "repo_macro_species": repo_macro_data,
             "unparsable_files": {
@@ -1241,6 +1352,101 @@ class SignalProcessor:
             # Inject Churn directly into the correct Risk Vector index
             if "risk_vector" in file_data and len(file_data["risk_vector"]) > idx:
                 file_data["risk_vector"][idx] = round(final_churn, 2)
+
+    def _compute_snapshot_percentiles(self, parsed_files: list[dict[str, Any]]) -> None:
+        """[TIER 2, gitgalaxy#2994] Snapshot percentiles -- the honest 0-100.
+
+        Ranks each file's 22 Tier-1 surface-family sums (telemetry
+        ["surface_families"], written by calculate_risk_vector) and its 13
+        RISK_SCHEMA legacy-vector values (risk_vector, POST-churn-
+        normalization -- see the call site in summarize_galaxy_metrics, which
+        invokes this method IMMEDIATELY AFTER _normalize_temporal_metrics so
+        churn is already rewritten before ranking) against every other file
+        in THIS scan/snapshot. "Percentile 87" means literally "87th
+        percentile of this surface in this repo" -- true by construction,
+        unlike the legacy sigmoid scores this tier supersedes for display.
+        Legacy risk_vector values themselves are read-only here, never
+        modified.
+
+        Hazen plotting-position formula: pct = (avg_rank - 0.5) / N * 100,
+        rounded to 2dp. Ties share the MEAN of the ranks they would occupy
+        (standard "average rank" tie-breaking), so two files with identical
+        values get identical percentiles.
+
+        An all-zero series (every file measures 0 on that surface) reads as
+        0.0 for EVERY file -- not the 50.0 an average-rank computation would
+        otherwise give a tied field of zeroes. Naively ranking would
+        misrepresent "nobody has this signal in this repo" as "the median
+        file has it," which is exactly backwards for an absent surface.
+
+        A single-file snapshot (N=1) reads 50.0 for a series it actually
+        has (nothing to rank against => true middle), but 0.0 for a series
+        it measures zero on -- the all-zero rule takes precedence at every N.
+
+        Writes `telemetry["surface_percentiles"] = {"fam": {...}, "vec":
+        {...}}` on every parsed file, in place -- mirroring
+        `_normalize_temporal_metrics`'s own in-place style. The return value
+        of `summarize_galaxy_metrics` (the golden-mastered audit JSON) is
+        untouched; this only ever writes per-file telemetry.
+        """
+        n = len(parsed_files)
+        if n == 0:
+            return
+
+        fam_names = list(self.SURFACE_FAMILIES.keys())
+        vec_names = list(self.RISK_SCHEMA)
+
+        def _percentiles_for(values: list[float]) -> list[float]:
+            count = len(values)
+            if count == 0:
+                return []
+            if all(v == 0 for v in values):
+                # Absent signal must not read as median 50 (see docstring).
+                # This check deliberately PRECEDES the N=1 case: a
+                # single-file snapshot with zero of a surface still has
+                # NONE of it -- 0.0, never 50.0.
+                return [0.0] * count
+            if count == 1:
+                # One file, nonzero value: nothing to rank against --
+                # "true middle" is the only honest value.
+                return [50.0]
+
+            # Average-rank (Hazen) ranking: sort ascending, then give every
+            # value in a tied run the MEAN of the 1-based ranks it spans.
+            order = sorted(range(count), key=lambda i: values[i])
+            ranks = [0.0] * count
+            i = 0
+            while i < count:
+                j = i
+                while j + 1 < count and values[order[j + 1]] == values[order[i]]:
+                    j += 1
+                avg_rank = (i + 1 + j + 1) / 2.0  # 1-based rank span [i+1, j+1]
+                for k in range(i, j + 1):
+                    ranks[order[k]] = avg_rank
+                i = j + 1
+
+            return [round((r - 0.5) / count * 100.0, 2) for r in ranks]
+
+        fam_percentiles: dict[str, list[float]] = {}
+        for fam in fam_names:
+            values = [float(f.get("telemetry", {}).get("surface_families", {}).get(fam, 0)) for f in parsed_files]
+            fam_percentiles[fam] = _percentiles_for(values)
+
+        vec_percentiles: dict[str, list[float]] = {}
+        for slug in vec_names:
+            idx = self.RISK_SCHEMA.index(slug)
+            values = [
+                float(f["risk_vector"][idx]) if "risk_vector" in f and len(f["risk_vector"]) > idx else 0.0
+                for f in parsed_files
+            ]
+            vec_percentiles[slug] = _percentiles_for(values)
+
+        for i, file_data in enumerate(parsed_files):
+            telemetry = file_data.setdefault("telemetry", {})
+            telemetry["surface_percentiles"] = {
+                "fam": {fam: fam_percentiles[fam][i] for fam in fam_names},
+                "vec": {slug: vec_percentiles[slug][i] for slug in vec_names},
+            }
 
     # ==========================================================================
     # FORENSIC EQUATIONS (The Structural Models)
@@ -1314,46 +1520,81 @@ class SignalProcessor:
             return "Spaces"
         return f"Mixed ({space_ratio:.1f}% Spaces / {100 - space_ratio:.1f}% Tabs)"
 
+    def _mass_loc(self, loc: int) -> float:
+        """
+        Evidence-mass floor (#2655): the denominator every per-file density equation
+        divides by. Below EVIDENCE_MASS_FLOOR coding lines a file is scored on its
+        COUNTS -- a 2-hit file is a 2-hit file whether it is 5 or 49 lines long -- so
+        identical intent scores identically regardless of file length. At or above
+        the floor this is the identity, so the density regime is untouched.
+
+        This is the per-file analog of the mass-weighted averaging the directory scope
+        already applies, and it replaced six independent small-file guards (the <15
+        cognitive-load cliff, the loc/15 bureaucracy dampener, the unbounded irc/loc
+        floor, ...) that each fired on a different LOC range and fought each other.
+        """
+        return max(float(loc), 1.0, self.EVIDENCE_MASS_FLOOR)
+
+    @staticmethod
+    def _proximity_tally(meta: Mapping[str, Any]) -> dict[str, int]:
+        """The detector's per-file proximity tally (`mitigation_telemetry`: mitigated_danger,
+        amplified_cascading_flux, ...) as a dict of ints, or empty when the file never went
+        through the correlation pass (minified / inert / synthetic stars)."""
+        tally = meta.get("mitigation_telemetry")
+        if not isinstance(tally, Mapping):
+            return {}
+        return {k: int(v) for k, v in tally.items() if isinstance(v, (int, float))}
+
+    @staticmethod
+    def _weighted(raw_signals: Mapping[str, int], mitigations: Mapping[str, int]) -> dict[str, int]:
+        """The score layer's view of the recorded counts (#2813, D1): `raw_signals` with each
+        signal in core.spatial_correlation.PROXIMITY_WEIGHTS replaced by its weighted_count()
+        -- exactly what the recorded count carried before the proximity weights moved out of
+        it. Every `_calc_*` formula reads this; nothing here is ever recorded as a count."""
+        return weighted_view(raw_signals, mitigations)
+
+    @staticmethod
+    def _dynamism(raw_signals: Mapping[str, int]) -> int:
+        """Runtime-decided behaviour a regex cannot follow, counted in THIS file (#2719):
+        reflection, metaprogramming and dynamic dispatch (`reflection_metaprogramming` --
+        getattr, Reflect/Proxy, method_missing, AUTOLOAD, Class.forName, transmute,
+        macro_rules!). One definition, read by every equation that used to read the
+        per-language `irc` as a stand-in for it.
+
+        `high_risk_execution` is deliberately NOT part of it: across the registry that
+        signal is the safety attack vocabulary -- panic!/todo!, os.Exit/log.Fatal,
+        System.exit, STOP RUN, rm -rf/sudo -- and carries eval/exec only in the
+        dynamic languages. It is already read at 4x by _calc_safety, where it belongs.
+        Pointer arithmetic, macros and type bypasses are visible constructs with their
+        own meaning and stay in their own equations."""
+        return int(raw_signals.get("reflection_metaprogramming", 0))
+
     def _calc_cog_load(
         self,
         loc: int,
         raw_signals: dict[str, int],
-        irc: int,
-        fc: float,
+        fid: Mapping[str, float],
         mp: float,
         func_gini: float = 0.0,
     ) -> tuple[float, float]:
-        safe_loc = max(loc, 1)
         t = self.risk_tuning.get("cognitive_load", {})
+        mass_loc = self._mass_loc(loc)
 
-        if safe_loc < 15:
-            total_density = sum(
-                [
-                    raw_signals.get(k, 0)
-                    for k in [
-                        "branch",
-                        "state_mutation",
-                        "concurrency",
-                        "reflection_metaprogramming",
-                    ]
-                ]
-            ) / safe_loc + (irc / safe_loc)
-            # A provably empty tiny file (<=2 LOC, zero signal in every
-            # category) gets a true zero rather than the small-file floor
-            # below -- there's no statistical-noise argument for treating a
-            # near-blank stub as risky.
-            if safe_loc <= 2 and total_density == 0:
-                return 0.0, total_density
-            return 5.0, total_density
-
+        # No decision density means no cognitive load, at ANY length. This used to
+        # apply only above 50 LOC (files of 15-50 lines computed a flux-only density
+        # and files under 15 were forced to a flat 5.0), which put a cliff at 15 and
+        # a discontinuity at 50/51 for the same branchless file (#2655). The old
+        # "provably empty tiny file scores a true zero" carve-out is a special case.
         branches = raw_signals.get("branch", 0)
-        if branches == 0 and safe_loc > 50:
+        if branches == 0:
             return 0.0, 0.0
 
-        branch_density = branches / safe_loc
-        flux_density = raw_signals.get("state_mutation", 0) / safe_loc
-        concurrency_density = raw_signals.get("concurrency", 0) / safe_loc
-        heat_density = raw_signals.get("reflection_metaprogramming", 0) / safe_loc
+        branch_density = branches / mass_loc
+        flux_density = raw_signals.get("state_mutation", 0) / mass_loc
+        concurrency_density = raw_signals.get("concurrency", 0) / mass_loc
+        # Runtime-decided behaviour a reader cannot follow, per file -- one definition
+        # shared with _calc_documentation (#2719).
+        heat_density = self._dynamism(raw_signals) / mass_loc
 
         clamped_branch = min(branch_density * 1.0, t.get("branch_clamp", 0.5))
         clamped_flux = min(flux_density * t.get("flux_mult", 2.0), t.get("flux_clamp", 0.75))
@@ -1366,7 +1607,10 @@ class SignalProcessor:
         if func_gini > 0.7:
             gini_multiplier = 1.0 + (func_gini * 0.5)
 
-        total_density = (clamped_branch + clamped_flux + heavy_logic + (irc / safe_loc)) * gini_multiplier
+        # The flat per-language `irc / mass_loc` pseudo-hit is gone (#2719): what it
+        # stood in for -- code a reader cannot follow -- is now measured per file in
+        # heat_density above.
+        total_density = (clamped_branch + clamped_flux + heavy_logic) * gini_multiplier
 
         try:
             raw_score = 100.0 / (
@@ -1375,15 +1619,21 @@ class SignalProcessor:
         except OverflowError:
             raw_score = 100.0 if total_density > t.get("sigmoid_offset", 0.75) else 0.0
 
-        doc_coverage = (raw_signals.get("doc", 0) * t.get("doc_mult", 10.0)) / safe_loc
-        cooling = max(0.5, 1.0 - (doc_coverage * fc))
+        doc_coverage = (raw_signals.get("doc", 0) * t.get("doc_mult", 10.0)) / mass_loc
+        cooling = max(0.5, 1.0 - (doc_coverage * fid.get("doc", 1.0)))
 
         return min(raw_score * cooling * mp, 100.0), total_density
 
     def _calc_safety(
-        self, loc: int, raw_signals: dict[str, int], irc: int, fc: float, mp: float, mem_mp: float = 1.0
+        self,
+        loc: int,
+        raw_signals: dict[str, int],
+        irc: int,
+        fid: Mapping[str, float],
+        mp: float,
+        mem_mp: float = 1.0,
     ) -> float:
-        safe_loc = max(loc, 1)
+        mass_loc = self._mass_loc(loc)
         t = self.risk_tuning.get("safety", {})
 
         attack_hits = (
@@ -1391,23 +1641,26 @@ class SignalProcessor:
             + (raw_signals.get("safety_bypasses", 0) * t.get("safety_neg_weight", 1.5))
             + (raw_signals.get("state_mutation", 0) * t.get("flux_weight", 0.5))
         )
+        # Each defence signal is credited at its own measured fidelity (#2718): a rule
+        # that fires 3 times on 2 planted constructs credits each hit at 2/3.
         defense_hits = (
-            (raw_signals.get("safety", 0) * self.WEIGHT_DEFENSE)
-            + (raw_signals.get("test", 0) * t.get("test_weight", 0.5))
-            + (raw_signals.get("doc", 0) * t.get("doc_weight", 0.1))
+            (raw_signals.get("safety", 0) * self.WEIGHT_DEFENSE * fid.get("safety", 1.0))
+            + (raw_signals.get("test", 0) * t.get("test_weight", 0.5) * fid.get("test", 1.0))
+            + (raw_signals.get("doc", 0) * t.get("doc_weight", 0.1) * fid.get("doc", 1.0))
         )
 
         if attack_hits == 0:
             return 0.0
 
-        smoothed_loc = safe_loc + t.get("laplace_smoothing", 20.0)
-        # Tier2/tier3 languages (fc < 1.0) get a proportional discount on the
-        # attack signal rather than a flat subtraction: a flat subtraction of
-        # a value larger than net_exposure's typical range wipes out small-
-        # but-real attack density instead of merely tempering it (#1055).
-        systems_buffer_ratio = t.get("systems_buffer_ratio", 0.75) if fc < 1.0 else 1.0
-        attack = ((attack_hits + irc) / smoothed_loc) * mp * mem_mp * systems_buffer_ratio
-        defense = (defense_hits / smoothed_loc) * fc
+        # Laplace padding is kept ON TOP of the evidence-mass floor so that files at
+        # or above the floor score exactly as before (#2655).
+        smoothed_loc = mass_loc + t.get("laplace_smoothing", 20.0)
+        # The #1055 `systems_buffer_ratio` (a 0.75 attack discount for every non-tier-1
+        # language) is gone (#2717): keyed on `fc < 1.0` it made tier-2/3 files score
+        # SAFER than tier 1 above 6/15 attack-weighted hits. The over-firing it was
+        # compensating for is now scaled at the source by the per-signal fidelity.
+        attack = ((attack_hits + irc) / smoothed_loc) * mp * mem_mp
+        defense = defense_hits / smoothed_loc
 
         net_exposure = attack - defense
 
@@ -1416,7 +1669,7 @@ class SignalProcessor:
         except OverflowError:
             score = 100.0 if net_exposure > 0 else 0.0
 
-        danger_density = (raw_signals.get("high_risk_execution", 0) + raw_signals.get("safety_bypasses", 0)) / safe_loc
+        danger_density = (raw_signals.get("high_risk_execution", 0) + raw_signals.get("safety_bypasses", 0)) / mass_loc
         if danger_density > t.get("vulnerability_density_min", 0.03) and attack > defense:
             floor = min(
                 t.get("breach_floor_max", 80.0),
@@ -1432,7 +1685,7 @@ class SignalProcessor:
         bad_debt = raw_signals.get("fragile_debt", 0)
 
         # --- NEW: UNTRACKED COMPLEXITY (SLOP) ---
-        orphans = raw_signals.get("orphaned_logic", 0)
+        orphans = raw_signals.get("unreferenced_by_name", 0)
         duplicates = raw_signals.get("duplicate_logic", 0)
 
         if good_debt == 0 and bad_debt == 0 and orphans == 0 and duplicates == 0:
@@ -1452,7 +1705,7 @@ class SignalProcessor:
         if slop_stress > 0 and (good_debt > 0 or bad_debt > 0):
             stress *= 1.5
 
-        density = (stress / max(loc, 1)) * 100.0
+        density = (stress / self._mass_loc(loc)) * 100.0
         threshold = t.get("threshold", 5.0)
 
         try:
@@ -1464,73 +1717,55 @@ class SignalProcessor:
 
     def _calc_documentation(
         self,
-        loc: int,
-        doc_loc: int,
-        raw_signals: dict[str, int],
-        fc: float,
-        irc: int,
-        mp: float,
         functions: Optional[list[dict[str, Any]]] = None,
         doc_umbrella: float = 0.0,
-        popularity: int = 0,
-        silo_exposure: float = 0.0,
     ) -> float:
+        """The #2908 score contract (docs/risk_documentation_contract.md §1): of the
+        units extracted from a file, the weight-share a reader cannot recover from
+        documentation. A ratio over units, never a density over lines -- no LOC
+        term, no sigmoid, no fidelity/strictness/popularity/silo/path multiplier.
+
+            weight(u)  = (public_weight if public(u) else 1) + reflection_hits(u)
+            exposed(u) = weight(u) if not documented(u) else 0
+            score      = 100 x sum(exposed) / sum(weight) x (1 - umbrella_shield x doc_umbrella)
+
+        `is_public` / `is_documented` are the Phase-2 per-unit attributes
+        (detector.py: the union of api-header match, export list and healed
+        orphans; the header-anchored `doc` match). Reflection is the unit's own
+        `reflection_metaprogramming` count (#2719, kept where it belongs).
+        A file with no extracted units emits 0.0; the reporting layer infers
+        `n/a` from the unit count (D6), the convention the corpus tooling
+        already uses for rule absence.
+        """
         t = self.risk_tuning.get("documentation", {})
+        public_weight = t.get("public_weight", 2.0)
+        umbrella_shield = t.get("umbrella_shield", 0.5)
 
-        # 1. THE DEFENSE (The Knowledge Shield)
-        # GuideStar Umbrella projection: 1.0 shield = 50 lines of virtual documentation
-        umbrella_defense = doc_umbrella * 50.0
+        # "Extracted units" is the FUNCTION POPULATION (#2691/#2792), not the
+        # slicer's synthetic buckets (`__global_context__`, sqlite's
+        # `CREATE_Statement`): a bucket's count scales with statement volume,
+        # not with the program, and it is excluded from `function_data` -- so
+        # reading it here would both re-import a slicer artifact as a unit
+        # (sqlite a/b/c read 100 instead of the declared n/a) and make the
+        # score irreproducible from its recorded inputs.
+        units = [f for f in functions or [] if not f.get("is_synthetic_slice")]
 
-        defense_hits = (
-            (raw_signals.get("doc", 0) * t.get("doc_weight", 1.0))
-            + (raw_signals.get("ownership", 0) * t.get("ownership_weight", 0.5))
-            + (doc_loc * t.get("doc_loc_weight", 0.33))
-            + umbrella_defense
-        ) * fc
+        total_weight = 0.0
+        exposed_weight = 0.0
+        for func in units:
+            reflection = int(func.get("hit_vector", {}).get("reflection_metaprogramming", 0))
+            weight = (public_weight if func.get("is_public") else 1.0) + reflection
+            total_weight += weight
+            if not func.get("is_documented"):
+                exposed_weight += weight
 
-        # 2. THE RISK (Opaque Execution Risk)
-        opaque_execution = 0.0
-        api_exposure = raw_signals.get("api", 0) * 2.0
-
-        if functions:
-            for func in functions:
-                impact = func.get("impact", 0.0)
-
-                # If a load-bearing block lacks a semantic tether
-                if impact > 50.0 and not func.get("docstring"):
-                    opaque_execution += 5.0 + math.log1p(impact)
-
-        # Add Implicit Risk Correction (Maintenance Overhead) to the risk
-        risk_hits = opaque_execution + api_exposure + irc
-
-        if risk_hits == 0:
+        if total_weight == 0:
             return 0.0
 
-        # 3. UNIVERSAL DENSITY EQUATION
-        # Small-file smoothing (mirrors _calc_safety's laplace_smoothing): without
-        # it, irc's flat additive contribution to risk_hits dominates density at
-        # tiny files, since it's divided by raw loc instead of a padded floor.
-        net_exposure = max(0.0, risk_hits - (defense_hits / 2.0))
-        smoothed_loc = max(loc, 1) + t.get("loc_smoothing", 20.0)
-        density = (net_exposure / smoothed_loc) * 100.0
-
-        # 4. THE MULTIPLIERS (Dependency Blast Radius & Authorship Centralization)
-        # Undocumented code is exponentially more dangerous if it is highly
-        # integrated (popularity) or siloed to a single developer.
-        network_multiplier = 1.0 + (popularity / 10.0)
-        silo_multiplier = 1.0 + (silo_exposure / 200.0)
-
-        final_multiplier = network_multiplier * silo_multiplier * mp
-
-        threshold = t.get("threshold_base", 10.0)
-
-        try:
-            # We use a negative slope because high density = high risk exposure
-            raw_risk = 100.0 / (1.0 + math.exp(-t.get("sigmoid_slope", 0.2) * (density - threshold)))
-        except OverflowError:
-            raw_risk = 100.0 if density > threshold else 0.0
-
-        return min(raw_risk * final_multiplier, 100.0)
+        # The one file-level defence that survives: a folder README/GuideStar
+        # umbrella genuinely documents every unit in the folder a little.
+        shield = max(0.0, 1.0 - umbrella_shield * doc_umbrella)
+        return min(100.0 * (exposed_weight / total_weight) * shield, 100.0)
 
     def _calc_verification(
         self,
@@ -1538,7 +1773,7 @@ class SignalProcessor:
         is_protected: bool,
         raw_signals: dict[str, int],
         ot: float,
-        fc: float,
+        fid: Mapping[str, float],
         mp: float,
         functions: list[dict[str, Any]],
         test_coverage_map: dict[str, list[dict[str, Any]]],
@@ -1570,7 +1805,9 @@ class SignalProcessor:
                 safety = float(hit_vector.get("safety", 0))
                 bypassed = float(hit_vector.get("test_skip", 0))
 
-                internal_defenses = (verification + safety - (bypassed * 2.0)) * fc
+                internal_defenses = (
+                    verification * fid.get("test", 1.0) + safety * fid.get("safety", 1.0) - (bypassed * 2.0)
+                )
                 base_impact = max(func_impact - internal_defenses, 0.0)
 
                 # Step B: The Defensive Ratio (Effective Mass)
@@ -1606,7 +1843,7 @@ class SignalProcessor:
 
         # Step D: Executable Density Normalization & Ecosystem Modifiers
         # Apply the Opacity Tax (ot) directly to the density
-        raw_density = (total_untested_impact / max(loc, 1)) * ot
+        raw_density = (total_untested_impact / self._mass_loc(loc)) * ot
 
         # The GuideStar Umbrella (Dampener)
         # umbrella_bonus is max 50.0. If bonus is 50, dampener is 0.5.
@@ -1643,7 +1880,9 @@ class SignalProcessor:
 
         t = self.risk_tuning.get("dead_code", {})
         deprecated_lines = hits * t.get("hit_mult", 3.0)
-        density = (deprecated_lines / max(total_loc, t.get("safe_mass_floor", 50.0))) * 100.0
+        # Graveyard had its own mass floor before #2655 generalised the idea; the
+        # tuning key still wins if set, otherwise the shared floor applies.
+        density = (deprecated_lines / max(total_loc, t.get("safe_mass_floor", self.EVIDENCE_MASS_FLOOR))) * 100.0
 
         threshold = t.get("threshold_base", 10.0) / max(mp, 0.1)
         try:
@@ -1671,13 +1910,14 @@ class SignalProcessor:
         # If a file exposes 50 APIs but has 0 inbound network edges, it is an isolated node.
         # We dampen the risk. If it has massive popularity, we amplify it.
         network_multiplier = 1.0
-        if popularity == 0:
+        if popularity == 0:  # noqa: SIM108 -- block form keeps the inline 80%-reduction rationale readable
             network_multiplier = 0.2  # 80% reduction for orphaned APIs
         else:
             network_multiplier = min(1.0 + (math.log1p(popularity) / 5.0), 2.0)
 
-        # LOGARITHMIC MASS CORRECTION
-        volume_weight = math.log1p(api_hits) / math.log1p(max(total_loc, 10))
+        # LOGARITHMIC MASS CORRECTION -- floored at the evidence mass (#2655) so six
+        # public functions score the same whether they sit in 13 or 49 lines.
+        volume_weight = math.log1p(api_hits) / math.log1p(max(float(total_loc), self.EVIDENCE_MASS_FLOOR))
 
         return min(exposure_ratio * volume_weight * network_multiplier * 100.0, 100.0)
 
@@ -1685,7 +1925,6 @@ class SignalProcessor:
         self,
         loc: int,
         raw_signals: dict[str, int],
-        irc: int,
         mp: float,
     ) -> float:
         """
@@ -1704,15 +1943,16 @@ class SignalProcessor:
         if net_concurrency == 0:
             return 0.0
 
-        density = (net_concurrency / max(loc + loc_padding, 1)) * 100.0
-        density += irc * tuning.get("irc_mult", 0.1)
+        # No language term (#2719): neither a strictness column nor per-file dynamism
+        # describes concurrency; the inputs are the file's own spawns and locks.
+        density = (net_concurrency / (self._mass_loc(loc) + loc_padding)) * 100.0
 
         threshold = tuning.get("threshold_base", 4.0)  # Matches your config!
         slope = tuning.get("sigmoid_slope", 0.4)
 
         return min(self._sigmoid(density, threshold, slope) * 100.0 * mp, 100.0)
 
-    def _calc_state_flux(self, loc: int, raw_signals: dict[str, int], irc: int, mp: float) -> float:
+    def _calc_state_flux(self, loc: int, raw_signals: dict[str, int], mp: float) -> float:
         """
         RISK: State mutation (flux).
         MITIGATION: Immutability enforcements (freeze_hits).
@@ -1731,8 +1971,9 @@ class SignalProcessor:
         if net_volatility == 0:
             return 0.0
 
-        density = (net_volatility / max(loc + loc_padding, 1)) * 100.0
-        density += irc * tuning.get("irc_mult", 0.15)
+        # No language term (#2719): mutability-by-default is not a strictness column
+        # and dynamism is not mutation; the inputs are the file's own writes and locks.
+        density = (net_volatility / (self._mass_loc(loc) + loc_padding)) * 100.0
 
         threshold = tuning.get("threshold_base", 15.0)
         slope = tuning.get("sigmoid_slope", 0.2)
@@ -1740,7 +1981,12 @@ class SignalProcessor:
         return min(self._sigmoid(density, threshold, slope) * 100.0 * mp, 100.0)
 
     def _calc_spec_alignment(self, raw_signals: dict[str, int], mp: float) -> float:
-        entities = max(raw_signals.get("func_start", 0) + raw_signals.get("class_start", 0), 1)
+        entities = raw_signals.get("func_start", 0) + raw_signals.get("class_start", 0)
+        # Nothing to specify, nothing misaligned (#2655): a file with no functions or
+        # classes (css, yaml, a constants module) used to score a flat 100 because the
+        # denominator was floored to 1 and then hidden by the loc/15 dampener.
+        if entities == 0:
+            return 0.0
         ratio = min(raw_signals.get("spec_exposure", 0) / entities, 1.0)
         return min((1.0 - ratio) * 100.0 * mp, 100.0)
 
@@ -1826,16 +2072,30 @@ class SignalProcessor:
             active_files = parsed_files
 
         # ====================================================================
-        # CALCULATE CUMULATIVE RISK
+        # (#3112) THE CUMULATIVE RISK COMPOSITE WAS REMOVED HERE
         # ====================================================================
-        def get_cumulative_risk(f):
-            rv = f.get("risk_vector", [])
-            if not isinstance(rv, list):
-                return 0.0
-            return sum(val for val in rv if isinstance(val, (int, float)))
-
-        sorted_by_cumulative = sorted(active_files, key=get_cumulative_risk, reverse=True)
-
+        # It was `sum()` over the whole 13-entry risk_vector -- independently
+        # scaled sigmoid percentages added with no weighting and no unit,
+        # yielding figures like "Cumulative Risk: 556.29" that mean nothing
+        # and cannot be compared between repos.
+        #
+        # It was not repairable in place. Four of the 13 summands are
+        # structurally degenerate on a real scan: spec_match and documentation
+        # are ceiling-defaulted where the convention is simply absent (#3111,
+        # #3114), and stability/churn are ablated to zero in every scan today
+        # (GITGALAXY_DISABLE_GIT_HISTORY; temporal-crucible#29, promotion
+        # pending #2987) -- so ~31% of the sum was constant or dead. It also
+        # contradicted the post-#2991/#2982 framing: the vectors were renamed
+        # to activity/content SURFACE METERS precisely because the per-file
+        # standing-risk claim did not survive temporal-crucible validation,
+        # and summing them re-created the composite "risk score" that record
+        # retired.
+        #
+        # The question it answered -- "which files deserve attention first" --
+        # is legitimate and survives in the LLM brief's ranked-file section,
+        # now ordered by structural magnitude and blast radius, which are
+        # unit-honest (#3113).
+        #
         # --- NEW: CALCULATE SYSTEMIC ARCHITECTURAL BOTTLENECKS ---
         flux_idx = self.RISK_SCHEMA.index("state_flux") if "state_flux" in self.RISK_SCHEMA else -1
         err_idx = self.RISK_SCHEMA.index("safety_score") if "safety_score" in self.RISK_SCHEMA else -1
@@ -1853,9 +2113,14 @@ class SignalProcessor:
             rv = raw_rv if isinstance(raw_rv, list) else []
             p = file_data.get("path", "")
 
-            btw = net.get("betweenness_score") or 0.0
-            close = net.get("closeness_score") or 0.0
-            pr = net.get("normalized_blast_radius") or 0.0
+            # #3027: a file enters a ranking only if the metric that ranking
+            # multiplies was computed. None (betweenness or closeness past its
+            # #3037/#3038 work budget) used to be read as
+            # 0.0, filling each list with five zero-score files picked by path
+            # order -- a ranking of nothing. A ranking nobody could compute is empty.
+            btw = net.get("betweenness_score")
+            close = net.get("closeness_score")
+            pr = net.get("normalized_blast_radius")
 
             flux_risk = (
                 float(rv[flux_idx])
@@ -1873,30 +2138,33 @@ class SignalProcessor:
                 else 0.0
             )
 
-            bottlenecks["cascading_state_mutation"].append(
-                {
-                    "path": p,
-                    "score": round(btw * flux_risk, 3),
-                    "btw": round(btw, 4),
-                    "state_mutation": flux_risk,
-                }
-            )
-            bottlenecks["fragile_dependency_chain"].append(
-                {
-                    "path": p,
-                    "score": round(close * err_risk, 3),
-                    "close": round(close, 4),
-                    "err": err_risk,
-                }
-            )
-            bottlenecks["undocumented_critical_path"].append(
-                {
-                    "path": p,
-                    "score": round(pr * doc_risk, 3),
-                    "pr": round(pr, 4),
-                    "doc": doc_risk,
-                }
-            )
+            if btw is not None:
+                bottlenecks["cascading_state_mutation"].append(
+                    {
+                        "path": p,
+                        "score": round(btw * flux_risk, 3),
+                        "btw": round(btw, 4),
+                        "state_mutation": flux_risk,
+                    }
+                )
+            if close is not None:
+                bottlenecks["fragile_dependency_chain"].append(
+                    {
+                        "path": p,
+                        "score": round(close * err_risk, 3),
+                        "close": round(close, 4),
+                        "err": err_risk,
+                    }
+                )
+            if pr is not None:
+                bottlenecks["undocumented_critical_path"].append(
+                    {
+                        "path": p,
+                        "score": round(pr * doc_risk, 3),
+                        "pr": round(pr, 4),
+                        "doc": doc_risk,
+                    }
+                )
 
         bottlenecks["cascading_state_mutation"].sort(key=lambda x: x["score"], reverse=True)
         bottlenecks["fragile_dependency_chain"].sort(key=lambda x: x["score"], reverse=True)
@@ -1912,25 +2180,9 @@ class SignalProcessor:
             "file_impact": self._rank_list(active_files, key_path=["file_impact"]),
             "function_impact": self._generate_function_rankings(active_files),
             "systemic_bottlenecks": {k: v[:5] for k, v in bottlenecks.items()},
-            # Inject the new Cumulative Risk ranking directly into the root of the report
-            "cumulative_risk": {
-                "highest": [
-                    {
-                        "name": f.get("name", "unknown"),
-                        "path": f.get("path", ""),
-                        "value": round(get_cumulative_risk(f), 2),
-                    }
-                    for f in sorted_by_cumulative[:10]
-                ],
-                "lowest": [
-                    {
-                        "name": f.get("name", "unknown"),
-                        "path": f.get("path", ""),
-                        "value": round(get_cumulative_risk(f), 2),
-                    }
-                    for f in reversed(sorted_by_cumulative[-3:])
-                ],
-            },
+            # #3112: the "cumulative_risk" key (highest/lowest by summed
+            # risk_vector) was removed from this report. `file_impact` above
+            # is the unit-honest ranking that replaced it.
         }
 
         for idx, rk in enumerate(self.RISK_SCHEMA):
@@ -2026,17 +2278,43 @@ class SignalProcessor:
             "lowest": all_funcs[-3:] if len(all_funcs) >= 3 else all_funcs,
         }
 
-    def _get_tier(self, lang_id: str) -> str:
-        explicit = {"rust", "go", "swift", "java", "typescript", "csharp", "dart"}
-        structured = {"python", "javascript", "cpp", "c", "ruby", "kotlin", "php"}
-        if lang_id in explicit:
-            return "tier1"
-        if lang_id in structured:
-            return "tier2"
-        return "tier3"
+    def _language_constants(self, lang_id: str) -> tuple[int, float, dict[str, float]]:
+        """(Irc, Ot, per-signal Fc) for a language (#2716 / #2718).
+
+        Irc and Ot come from `analysis_lens.LANGUAGE_STRICTNESS` (one Irc per strictness
+        gap, `None` rows and unknown languages get none); the Fidelity Coefficients from
+        the keyword-rosetta-generated `fidelity_table` (1.0 wherever the corpus has no
+        measurement). Dialects resolve through LANGUAGE_FAMILY first, so
+        `embedded_python` reads python's rows -- the fall-through to a harsh default
+        that opened #2653 no longer exists.
+        """
+        family = analysis_lens.resolve_language_family(lang_id)
+        irc, ot = analysis_lens.strictness_constants(family)
+        # Strictness is a property of the language family; fidelity is a property of
+        # the RULE SET, and a dialect with its own registry entry (embedded_python has
+        # 51 rules to python's 61) was measured on its own -- read its own row first.
+        row = FIDELITY_TABLE.get(lang_id) or FIDELITY_TABLE.get(family, {})
+        fid = {sig: float(row.get(sig, 1.0)) for sig in self.FIDELITY_SIGNALS}
+        return irc, ot, fid
 
     def _get_dominant_lang(self, composition: dict[str, dict[str, Any]]) -> str:
         if not composition:
             return "mixed"
-        # Sort by active structural impact instead of raw lines of code
-        return max(composition.items(), key=lambda x: x[1].get("impact", 0.0))[0]
+        # Sort by active structural impact instead of raw lines of code.
+        #
+        # #2555: documentation languages get their `file_impact` from a *full*
+        # line-count basis (`max(total_loc/50, 1.0)`, the STATIC LITERATURE OVERRIDE),
+        # so a handful of large plaintext/markdown files can out-rank real source on
+        # summed impact even while the COMPOSITION table (which ranks by file count /
+        # coding_loc) shows a code language as the clear majority -- producing a report
+        # that names PLAINTEXT dominant over JAVASCRIPT 53.8%. A documentation language
+        # is never the "dominant language" of a codebase that also contains code, so we
+        # take the impact-argmax over code languages first and only fall back to the
+        # full set (docs included) when there is no code language present at all.
+        doc_languages = {
+            lang.lower()
+            for lang in self.asset_masks.get("DOCUMENTATION_LANGUAGES", {"markdown", "plaintext", "rst", "text"})
+        }
+        code_langs = {lang: stats for lang, stats in composition.items() if lang.lower() not in doc_languages}
+        ranked = code_langs or composition
+        return max(ranked.items(), key=lambda x: x[1].get("impact", 0.0))[0]

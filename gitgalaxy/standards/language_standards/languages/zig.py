@@ -34,9 +34,12 @@ DEFINITION: dict[str, Any] = {
     "rules": {
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
         # 1. branch: decisions that split flow. Includes unique 'orelse' and 'catch' patterns.
-        "branch": re.compile(
-            r"(?<!@\")\b(if|else|switch|while|for|try|catch|orelse|break|continue|return)\b(?!\")|&&|\|\|"
-        ),
+        # #2545: `return` removed -- was phantom-counting every early-return function as a
+        # branch with no real decision point. Rust, zig's closest sibling with the exact
+        # same error-propagation-via-return idiom, doesn't count it either. Already tracked
+        # under `structural_boundaries` below, so this is a pure de-duplication. Corpus
+        # impact: zig branch 19 (planted 3, +280%) -> exact.
+        "branch": re.compile(r"(?<!@\")\b(if|else|switch|while|for|orelse)\b(?!\")|&&|\|\|"),
         # 2. args: Parameters / Coupling. Captures parameters in function signatures.
         "args": re.compile(
             r"\bfn[ \t\n]*(?:@\"[^\"]+\"|[a-zA-Z_]\w*[ \t\n]*)?\(((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\([^)(]*\))*\))*\))*\))*)\)"
@@ -56,7 +59,7 @@ DEFINITION: dict[str, Any] = {
         "_args_bare_body_groups": {1},
         # 3. linear: Sequential I/O & Network Boundaries. Structural boundaries. EXCLUDES access modifiers and const (freeze_hits).
         "structural_boundaries": re.compile(
-            r"(?<!@\")\b(var|return|defer|errdefer|unreachable|resume|suspend|await|nosuspend|usingnamespace)\b(?!\")"
+            r"(?<!@\")\b(var|return|break|continue|defer|errdefer|unreachable|resume|suspend|await|nosuspend|usingnamespace)\b(?!\")"
         ),
         # 4. func_start: Executable Logic Anchors. Anchors logic blocks (fn). EXCLUDES struct/enum/union headers.
         "func_start": re.compile(
@@ -71,8 +74,18 @@ DEFINITION: dict[str, Any] = {
         # struct-as-namespace immediately projecting one declaration out
         # of itself) and a pointer-to-opaque handle type (`const HMONITOR
         # = *opaque {};`, the standard idiom for an opaque OS handle).
+        #
+        # ReDoS fix: the previous form paired an unbounded `[^=;]{0,150}` gap
+        # with a `*`-group that nested `+` over overlapping whitespace/word
+        # classes ((?:[A-Za-z0-9_. \t\n]+\|\|...)+). On ordinary `const x = ...`
+        # lines that don't terminate in a type keyword the engine backtracked
+        # catastrophically (a single 18KB file could take 400s+). It is now
+        # structurally linear: the pre-`=` gap is line-local (`\n`-excluded)
+        # and lazy, and the step-over is a bounded `{0,8}` of alternatives that
+        # each consume >=1 char with non-overlapping classes. Match set is
+        # byte-for-byte identical to the old rule on well-formed corpus input.
         "class_start": re.compile(
-            r"^[ \t]*(?:pub[ \t\n]+)?(?:const|var)[ \t\n]+(@\"[^\"]+\"|[a-zA-Z_]\w*)(?:(?!\b(?:const|var)\b)[^=;]){0,150}=[ \t\n]*(?:List\([ \t\n]*|\[_\][ \t\n]*|if[ \t]*\([^)]*\)[ \t\n]*|(?:[A-Za-z0-9_. \t\n]+\|\|[ \t\n]*)+|(?:\(|\*)[ \t\n]*|(?:packed|extern|inline)[ \t\n]+|align\([^)]*\)[ \t\n]+)*(?:struct|enum|union|error|opaque)(?=[ \t\n]*[{(])",
+            r"^[ \t]*(?:pub[ \t\n]+)?(?:const|var)[ \t\n]+(@\"[^\"]+\"|[a-zA-Z_]\w*)(?:(?!\b(?:const|var)\b)[^=;]){0,150}=[ \t\n]*(?:(?:packed|extern|inline)[ \t\n]+|align\([^)]*\)[ \t\n]+|if[ \t]*\([^)]*\)[ \t\n]*|List\([ \t\n]*|\[_\][ \t\n]*|[A-Za-z0-9_.]+[ \t\n]*\|\|[ \t\n]*|[(*][ \t\n]*){0,8}(?:struct|enum|union|error|opaque)(?=[ \t\n]*[{(])",
             re.M,
         ),
         # --- PHASE 2: RISK & STRUCTURAL INTEGRITY ---
@@ -90,13 +103,30 @@ DEFINITION: dict[str, Any] = {
         ),
         # 8. danger: High-Risk Execution. Forceful panics and process terminations.
         # BUG FIX: `@panic` is `@`-prefixed -- same leading-\b bug.
-        "high_risk_execution": re.compile(r"\b(?:panic|std\.process\.exit)\b|@panic"),
+        # #2878 contract C2: `.panic` enum tags, `panic,` fields and the `pub fn panic(` handler
+        # definition are not sites; the call and the builtin are.
+        "high_risk_execution": re.compile(
+            r"@panic\b|\bstd\.(?:process\.(?:exit|abort)|debug\.panic|os\.abort)\b|(?<!fn )(?<![.\w\"])panic\s*\("
+        ),
         # 9. io: I/O & Network Boundaries. Standard library IO, Network, and Filesystem interactions.
         "io": re.compile(r"\b(std\.fs|std\.net|std\.io(?!\.getStdOut)|std\.ChildProcess|std\.posix|std\.os)\b"),
         # 10. api: Public Surface Area. Exposed boundaries via 'pub' and 'export' (C ABI).
         "api": re.compile(r"\b(pub|export)\b"),
         # 11. flux: State Mutation. State mutation (var) and pointer dereference assignments (.* =).
-        "state_mutation": re.compile(r"\bvar\b|\.\*[ \t]*=[^=]"),
+        "state_mutation": re.compile(
+            # #2765 contract: one hit is a statement that writes a new value into state
+            # that already exists. A declaration is not a write, even with an initializer,
+            # so the assignment arm anchors a STATEMENT START to a bare lvalue -- a type
+            # name in front of the lvalue breaks the match. `==` is excluded by the
+            # operator set, a trailing-comma line (enum member / named argument) is not
+            # a statement, and `++`/`--` must touch an operand (a run of dashes inside a
+            # string literal is not an increment).
+            # `var x = v` declares (corollary 1) and `_ = v` discards (the blank identifier
+            # is not state); `x = v`, `x += 1`, `p.* = v` write.
+            r"(?:^(?![ \t]*_[ \t]*=)|[;{}])[ \t]*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\.\*|\[[^\]\n]{0,80}\])*"
+            r"[ \t]*(?:[-+*/%&|^]|<<|>>|\+%|-%|\*%|\+\||-\||\*\|)?=(?![=>])(?![^\n(]{0,300},[ \t]*$)",
+            re.M,
+        ),
         # 12. dead_code (Commented Logic / Deprecated Trails) Commented out structural code.
         "dead_code": re.compile(r"//[ \t]*(?:fn|const|var|pub|if|for|while|try|catch)\b"),
         # 13. doc: Structured Documentation. Structured documentation (/// and //!).
@@ -125,8 +155,10 @@ DEFINITION: dict[str, Any] = {
         # 17. closures: Closures / Anonymous Functions. (Zig lacks traditional anonymous closures).
         "closures": None,
         # 18. globals: Global / Shared State. Top-level file-scoped state.
+        # BUG FIX (#2651): Anchored to true column-0 (no indentation) to prevent
+        # function-local var/const declarations from being incorrectly counted as globals.
         "globals": re.compile(
-            r"^[ \t]*(?:pub[ \t]+)?(?:threadlocal[ \t]+)?(?:comptime[ \t]+)?(?:const|var)\s+[a-zA-Z_]\w*\s*(?::[^=]+)?=",
+            r"^(?![ \t])(?:pub[ \t]+)?(?:threadlocal[ \t]+)?(?:comptime[ \t]+)?(?:const|var)\s+[a-zA-Z_]\w*\s*(?::[^=]+)?=",
             re.M,
         ),
         # 19. decorators: Decorators / Annotations. (Zig uses @builtins instead).
@@ -154,7 +186,11 @@ DEFINITION: dict[str, Any] = {
             re.M,
         ),
         # 25. ownership: Authorship indicators in comments.
-        "ownership": re.compile(r"//\s*(?:Author|Created by|Maintainer|Copyright):\s+([^\n]+)", re.I),
+        # #2882 contract: C2 `Copyright:` out; `//!` doc lines
+        "ownership": re.compile(
+            r"@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?:/\*+|\*+|//+!?)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$",
+            re.I | re.M,
+        ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
         # 26. planned_debt: The Promise. Future work markers.
         "planned_debt": GLOBAL_PLANNED_DEBT,
@@ -191,24 +227,39 @@ DEFINITION: dict[str, Any] = {
         "explicit_casts": re.compile(r"@ptrCast\b|@intCast\b|@alignCast\b|@bitCast\b|@as\b"),
         # 41. panics_and_aborts (Execution Interrupts / Fatal Aborts) Aborting context.
         # BUG FIX: `@panic` is `@`-prefixed -- same leading-\b bug.
-        "panics_and_aborts": re.compile(r"\b(?:unreachable|return)\b|@panic"),
+        # #2898: `return` removed -- an unconditional transfer is structural_boundaries'
+        # (7538 crucible hits, none of them a panic/abort).
+        "panics_and_aborts": re.compile(r"\bunreachable\b|@panic"),
         # 42. thread_sleeps (Thread Blocking / Synchronous Pauses) (Forced waits/sleep).
         "thread_sleeps": re.compile(r"\b(std\.time\.sleep)\b"),
         # 43. bitwise_ops (Bitwise Operations)
-        "bitwise_ops": re.compile(r"(?<!&)&(?!&)|(?<!\|)\|(?!\|)|<<|>>|\^|~"),
+        # #2898: binary `&`/`|` require the zig-fmt spacing (` a & b `) so the prefix
+        # address-of `&x` and payload captures `|err|` no longer count.
+        "bitwise_ops": re.compile(r"(?<= )&(?= )|(?<= )\|(?= )|<<|>>|\^|~"),
         # 44. sync_locks (Resource Management & Stability) Coordinated threading.
         "sync_locks": re.compile(r"\b(Mutex|RwLock|Semaphore|lock|unlock)\b"),
         # 45. immutability_locks (Immutability Constraints) Immutability.
-        "immutability_locks": re.compile(r"\bconst\b"),
+        "immutability_locks": None,  # #2772 C1: `const` is zig's ordinary binding declaration for locals, imports and containers alike; there is no added lock form. Stated absence.
         # 46. cleanup (Resource Cleanup / Teardown) Resource release.
-        "cleanup": re.compile(r"\b(deinit|free|destroy|allocator\.free)\b"),
+        "cleanup": re.compile(
+            r"\b(?<!fn )(deinit|free|destroy|allocator\.free)\b"
+        ),  # #2888 C1: `pub fn deinit(` declares
         # 47. encapsulation Scope hiding (Lack of pub).
-        "encapsulation": re.compile(r"^[ \t]*(?!(?:pub|export|extern)\b)(?:const|var|fn)\s+", re.M),
+        # #2766: contract-level absence. Zig hiding is the UNMARKED default (there is
+        # no private keyword and no per-name non-public marker); the old rule counted
+        # every non-pub declaration including function locals (15430 crucible hits) --
+        # code volume, not information-hiding effort.
+        "encapsulation": None,
         # 48. listeners (Event Listeners / Observers)
         "listeners": None,
         # 49. test_skip (Bypassed Tests / Ignored Specs)
         "test_skip": re.compile(r"\b(std\.testing\.expect|assume|expectError)\b"),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Zig Specifics) ---
+        # auth_middleware (#3004): the std posix/linux identity switches in call
+        # form -- zig has no auth framework, but a call that drops or assumes an
+        # identity gates privilege. Path-anchored so std's own `pub fn setuid`
+        # definitions never count.
+        "auth_middleware": re.compile(r"\bstd\.(?:posix|os\.linux)\.sete?[ug]id\("),
         "serialization_parsing": re.compile(r"\b(std\.json\.parseFrom(?:Slice|TokenSource)|std\.json\.stringify)\b"),
         "regex_execution": re.compile(
             r"\b(std\.mem\.(?:indexOf|tokenize(?:Any)?|split(?:Sequence|Any)?|replace))\b"
@@ -217,5 +268,9 @@ DEFINITION: dict[str, Any] = {
         "ipc_rpc_bridges": re.compile(
             r"\b(std\.process\.Child|std\.net\.tcpConnectToHost|std\.Thread\.spawn|std\.posix|std\.os\.execve)\b"
         ),
+        # system_config_mutation (#3084): contract-level absence. systems
+        # language with no dedicated config-mutation primitive -- config writes
+        # are ordinary file I/O (io's).
+        "system_config_mutation": None,
     },
 }

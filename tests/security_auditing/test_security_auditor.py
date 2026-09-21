@@ -46,31 +46,47 @@ def mock_artifacts():
 
 
 # ==============================================================================
-# TEST 1: DEPENDENCY GRAPH RESOLUTION (NetworkX vs Pure Python Deque)
+# TEST 1: DEPENDENCY GRAPH RESOLUTION (exact reach counts, #3040)
 # ==============================================================================
-def test_dependency_graph_pure_python(mock_artifacts):
-    """Proves the pure-Python O(1) Deque resolver survives circular dependencies."""
-    auditor = SecurityAuditor()
+def test_dependency_graph_counts_a_cycle_exactly(mock_artifacts):
+    """
+    #3040: main.py and utils.py import each other, so each has exactly one other
+    file upstream and one downstream. A file is never its own dependency. The
+    old pure-Python fallback counted 2 here, while networkx counted 1.
+    """
+    resolved_artifacts = SecurityAuditor()._resolve_dependency_graph(mock_artifacts)
 
-    with patch("gitgalaxy.security.security_auditor.HAS_NETWORKX", False):
-        resolved_artifacts = auditor._resolve_dependency_graph(mock_artifacts)
-
-    main_artifact = next(s for s in resolved_artifacts if s["name"] == "main.py")
-    assert "dependency_network" in main_artifact
-    # The deque BFS considers the node itself as a visited descendant/ancestor in a circular loop
-    assert main_artifact["dependency_network"]["total_upstream"] == 2
-    assert main_artifact["dependency_network"]["total_downstream"] == 2
+    for artifact in resolved_artifacts:
+        network = artifact["dependency_network"]
+        assert (network["total_upstream"], network["total_downstream"]) == (1, 1), artifact["name"]
+        assert (network["upstream_ratio"], network["downstream_ratio"]) == (0.5, 0.5), artifact["name"]
 
 
-def test_dependency_graph_networkx(mock_artifacts):
-    """Proves the C-optimized NetworkX resolver handles the exact same circular loop."""
-    auditor = SecurityAuditor()
+def test_dependency_graph_matches_networkx_without_a_cap():
+    """#3040: exact reach counts, equal to len(nx.descendants / nx.ancestors), with no 500-file cap."""
+    nx = pytest.importorskip("networkx")
+    names = [f"f{i}.py" for i in range(600)]  # a 600-file chain: the old cap clipped it at 500
+    artifacts = [{"path": n, "name": n, "raw_imports": [names[i + 1]] if i < 599 else []} for i, n in enumerate(names)]
+    resolved = {a["path"]: a["dependency_network"] for a in SecurityAuditor()._resolve_dependency_graph(artifacts)}
+    graph = nx.DiGraph((names[i], names[i + 1]) for i in range(599))
+    for n in names:
+        assert resolved[n]["total_upstream"] == len(nx.descendants(graph, n)), n
+        assert resolved[n]["total_downstream"] == len(nx.ancestors(graph, n)), n
+    assert resolved["f0.py"]["total_upstream"] == 599
 
-    with patch("gitgalaxy.security.security_auditor.HAS_NETWORKX", True):
-        resolved_artifacts = auditor._resolve_dependency_graph(mock_artifacts)
 
-    main_artifact = next(s for s in resolved_artifacts if s["name"] == "main.py")
-    assert main_artifact["dependency_network"]["total_upstream"] == 1
+def test_dependency_graph_past_its_work_budget_is_none():
+    """A graph too large for the budget leaves the totals "not computed" -- None, never 0."""
+    # A chain (not a single cycle, which condenses to one component and needs no
+    # bitset work), so the budget is charged and a zero budget is exceeded.
+    names = ["a.py", "b.py", "c.py"]
+    artifacts = [{"path": n, "name": n, "raw_imports": names[i + 1 : i + 2]} for i, n in enumerate(names)]
+    with patch("gitgalaxy.security.security_auditor.PATH_METRICS_WORK_BUDGET", 0):
+        resolved_artifacts = SecurityAuditor()._resolve_dependency_graph(artifacts)
+
+    network = resolved_artifacts[0]["dependency_network"]
+    assert (network["total_upstream"], network["total_downstream"], network["upstream_ratio"]) == (None, None, None)
+    assert network["direct_upstream"] == 1  # the direct counts never needed the graph
 
 
 # ==============================================================================
@@ -91,6 +107,49 @@ def test_construct_feature_matrix(mock_artifacts):
     # Ensure the log_density math didn't crash
     assert "log_density_hit_high_risk_execution" in df.columns
     assert "log_logic_loc" in df.columns
+
+
+def test_func_internal_density_is_a_frozen_placeholder(mock_artifacts):
+    """#2714: the frame's func_internal_density column is a permanent 0.0.
+
+    Nothing ever writes that key into artifact telemetry -- the density is
+    computed only inside record_keeper.py while the file_data row is written --
+    so the column has been a constant 0.0 in every frame the model was ever
+    scored or trained against. Making it vary is a scored-model input change
+    that needs a retrain, so this pins the constant: if some future pass does
+    start emitting the telemetry key, the security frame must not silently
+    start moving with it.
+    """
+    auditor = SecurityAuditor()
+    auditor.SIGNAL_SCHEMA = ["high_risk_execution", "io", "state_mutation", "safety", "dead_code"]
+
+    mock_artifacts[0]["telemetry"]["func_internal_density"] = 0.87
+
+    auditor._resolve_dependency_graph(mock_artifacts)
+    df = auditor._construct_feature_matrix(mock_artifacts)
+
+    assert "func_internal_density" in df.columns
+    assert (df["func_internal_density"] == 0.0).all()
+
+
+def test_retired_repo_cluster_columns_are_frozen(mock_artifacts):
+    """#1159: the repo K-Means columns keep the constants every full scan fed the model.
+
+    The retired model scored each repo as an all-zero vector, so it always chose
+    cluster 3 with the same z and distances. Stray telemetry must not move them.
+    """
+    auditor = SecurityAuditor()
+    auditor.SIGNAL_SCHEMA = ["high_risk_execution", "io", "state_mutation", "safety", "dead_code"]
+    mock_artifacts[0]["telemetry"].update(ecosystem_baseline_cluster=1, ecosystem_z_score=9.9, dist_to_0=5.0)
+
+    auditor._resolve_dependency_graph(mock_artifacts)
+    df = auditor._construct_feature_matrix(mock_artifacts)
+
+    assert (df["assigned_macro_species"] == 3).all()
+    assert (df["primary_z_score"] == 2.272).all()
+    assert df["dist_to_0"].tolist() == [0.598052373041024] * 2
+    assert df["dist_to_5"].tolist() == [0.6645988084551461] * 2
+    assert (df["dist_to_10"] == 0.0).all()
 
 
 def test_construct_feature_matrix_exception_fallback():

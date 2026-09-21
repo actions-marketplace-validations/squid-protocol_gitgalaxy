@@ -44,7 +44,16 @@ DEFINITION: dict[str, Any] = {
         "PKGBUILD",
     ],
     # Thorough Shebang mapping: Essential for identifying extensionless scripts.
-    "shebangs": ["bash", "sh", "zsh", "ksh", "dash", "ash", "rbash"],
+    # #3116: `csh`, `tcsh`, `pfsh` (Solaris profile shell) and `Shell`
+    # (SerenityOS's own) are real interpreters this list was missing. They
+    # resolved anyway while a trigger was matched as a bare SUBSTRING of the
+    # shebang line -- `sh` is inside all four -- so the substring bug was
+    # simultaneously causing false positives (`tclsh` -> shell) and covering
+    # for these false negatives. Token matching exposed them: the crucible's
+    # `#!/bin/csh`, `#!/bin/Shell` and `#!/usr/bin/pfsh` files dropped from
+    # Tier 0 consensus to Tier 2 extension-only. Named explicitly now, so the
+    # match is intentional rather than accidental.
+    "shebangs": ["bash", "sh", "zsh", "ksh", "dash", "ash", "rbash", "csh", "tcsh", "pfsh", "shell"],
     # UPGRADED: Maps to Family 3 (Pure Hash)
     # Rationale: Relies strictly on '#' for line-level Commented / Non-Executable Text; no native block delimiters.
     "lexical_family": "line_exclusive",
@@ -53,9 +62,7 @@ DEFINITION: dict[str, Any] = {
         # 1. branch (Control Flow / Branching)
         # Decisions and logic jumps. Includes test constructs [[ ]] and [ ].
         # CRITICAL: Excluded bare '((' and '))' to prevent ReDoS on massive subshell nesting.
-        "branch": re.compile(
-            r"\b(if|then|else|elif|fi|case|esac|for|while|do|done|until|select|break|continue)\b|&&|\|\||\[\[|\]\]|(?:^|(?<=\s|;|\||&))\[(?=\s)|(?<=\s)\](?=\s|;|\||&|$)"
-        ),
+        "branch": re.compile(r"\b(if|else|elif|case|for|while|until|select)\b|&&|\|\|"),
         # 2. args (Parameters / Coupling)
         # Positional parameters and expansion markers.
         # BUG FIX (epic #813/#835): the braced form only matched a bare
@@ -88,7 +95,7 @@ DEFINITION: dict[str, Any] = {
         # `_dependency_capture` below. Pulled out into its own statement-boundary
         # anchored alternative instead of sitting inside the `\b(...)\b` group.
         "structural_boundaries": re.compile(
-            r"\b(local|readonly|export|declare|typeset|return|exit|source|read|cd|pwd|ls|cp|mv|rm|mkdir|touch)\b|(?<!\|)\|(?!\s*\|)|(?:^|[ \t;|&])\.(?=[ \t])",
+            r"\b(local|readonly|export|declare|typeset|return|break|continue|exit|source|read|cd|pwd|ls|cp|mv|rm|mkdir|touch|then|fi|esac|done|do)\b|(?<!\|)\|(?!\s*\|)|(?:^|[ \t;|&])\.(?=[ \t])|\[\[|\]\]|(?:^|(?<=\s|;|\||&))\[(?=\s)|(?<=\s)\](?=\s|;|\||&|$)",
             re.M,
         ),
         # Anchors executable logic blocks. Captures `function foo` or `foo()`.
@@ -129,8 +136,9 @@ DEFINITION: dict[str, Any] = {
         # {0,300}; the `${...}` clauses use the one-level-nesting form so a
         # realistic nested default like `${LOG_LEVEL:-${DEFAULT:-info}}` is
         # captured in full instead of truncating at the inner `}`.
+        # C4: quoted expansion is ordinary shell. The ${VAR:-default} fallback form stays (C1).
         "safety": re.compile(
-            r'\b(set\s+-(?:[a-zA-Z]*e[a-zA-Z]*|u|o\s+pipefail)|trap\s+[^\n]{0,300}(?:ERR|EXIT|INT|TERM))\b|"\$[@*]"|"\$\{(?:[^{}]|\{[^{}]*\})+\}"|\bcommand\s+-v\b|\$\{[a-zA-Z0-9_]+:[-=?](?:[^{}]|\{[^{}]*\})*\}'
+            r"\b(set\s+-(?:[a-zA-Z]*e[a-zA-Z]*|u|o\s+pipefail)|trap\s+[^\n]{0,300}(?:ERR|EXIT|INT|TERM))\b|\bcommand\s+-v\b|\$\{[a-zA-Z0-9_]+:[-=?](?:[^{}]|\{[^{}]*\})*\}"
         ),
         # 7. safety_neg (Safety Bypasses / Unchecked Types)
         # Unquoted variables, dynamic evaluation, and blind network-to-shell piping.
@@ -141,15 +149,43 @@ DEFINITION: dict[str, Any] = {
         ),
         # 8. danger (High-Risk Execution / System Calls)
         # Destructive commands and privilege elevation. EXCLUDES echo (Phase 5).
+        # #2878 contract C4: `rm -rf` counts on the root only (makefile/dockerfile/yaml agree; a
+        # path target is cleanup's question, #2843); C1a `kill -0` probes and `kill -l` lists.
         "high_risk_execution": re.compile(
-            r"\b(rm\s+-[rR]f|sudo|chmod\s+(?:-R[ \t]+)?777|chown\s+(?:-R[ \t]+)?root|mkfs|dd|kill(?:all)?)\b"
+            r"\brm[ \t]+(?:-[rR][fF]|-[fF][rR])[ \t]+[\"']?/(?![A-Za-z])|(?<![-\w])sudo(?![-\w])|\b(?:chmod\s+(?:-R[ \t]+)?777|chown\s+(?:-R[ \t]+)?root|mkfs(?:\.\w+)?|dd)\b|\bkill(?:all)?\b(?![ \t]+-[0l]\b)"
         ),
         # 9. io (I/O & Network Boundaries)
         # Redirections, pipes, and network clients.
         "io": re.compile(r">|>>|<|\|(?:&)?|\b(curl|wget|nc|ssh|scp|ftp|rsync|cat|tail|grep|find|xargs|jq)\b"),
         # 10. api (Public Surface Area)
         # Exported variables and identifiers modifying the global environment.
-        "api": re.compile(r"^[ \t]*export\s+[a-zA-Z_]\w*", re.M),
+        # BUG FIX #2730 (api contract): the way a shell script makes a
+        # FUNCTION visible to its children is `export -f name`; the old
+        # pattern demanded a bare identifier straight after `export`, so the
+        # `-f` form (and every other flag spelling) never matched and the
+        # rule could only ever see exported variables. The flag run is
+        # bounded to one token each so it cannot chew through an argument
+        # list.
+        "api": re.compile(r"^[ \t]*export[ \t]+(?:-[a-zA-Z]+[ \t]+)*[a-zA-Z_]\w*", re.M),
+        # #2774: the ORPHAN-CENSUS EXEMPTION. `_is_orphan` is a textual
+        # name-recurrence test, so naming a function in an export statement --
+        # the one place a library is *guaranteed* to name a function it never
+        # calls itself -- counted as a use and cleared its orphan flag. Measured
+        # on keyword-rosetta/data/shell: 3 orphans per file without the export
+        # lines, 0 with them. Five languages publish a FUNCTION (rather than a
+        # variable) by naming it, and all five sat at `raw_state_unreferenced`
+        # 0.25 against a 2.50 median because of it.
+        #
+        # This is deliberately NOT the `api` rule, though it overlaps it. `api`
+        # matches broad visibility MODIFIERS in most languages (javascript's is
+        # a bare `export`, java's a bare `public`), so discounting every line it
+        # matched would silently swallow a genuine call in
+        # `export const x = foo();`. This rule instead captures the exported
+        # NAME, and only that capture's own span is discounted -- so a language
+        # opts in by declaring it, and the other 41 are unchanged by
+        # construction. Leading `_` keeps it out of `coding_analysis`'s rule
+        # loop and the counts schema, the same way `_scope_filters` does.
+        "_visibility_export": re.compile(r"^[ \t]*export[ \t]+-f[ \t]+([a-zA-Z_]\w*)", re.M),
         # 11. flux (State Mutation)
         # Mutation of state via assignment or arithmetic.
         # QUADRATIC BLOWUP FIX: the arithmetic-expansion branch's two
@@ -159,7 +195,10 @@ DEFINITION: dict[str, Any] = {
         # for O(n^2) total. Bounded to {0,200} each; real `(( ... ))`
         # arithmetic expressions don't get remotely that long.
         "state_mutation": re.compile(
-            r"^[ \t]*[a-zA-Z_]\w*(?:\[[^\]]+\])?\+?=(?![=~])|\b(?:let|declare)\s+[a-zA-Z_]\w*\+?=|\(\([^)]{0,200}(?:\+\+|--|[-+*/%]=)[^)]{0,200}\)\)",
+            # #2765 contract: shell has no declaration syntax, so `x=v` is the write;
+            # `declare x=v` / `local x=v` / `readonly x=v` declare (count contract
+            # corollary 1) and `let x=v` evaluates arithmetic into an existing variable.
+            r"^[ \t]*[a-zA-Z_]\w*(?:\[[^\]]+\])?\+?=(?![=~])|\blet\s+[a-zA-Z_]\w*\+?=|\(\([^)]{0,200}(?:\+\+|--|[-+*/%]=)[^)]{0,200}\)\)",
             re.M,
         ),
         # 12. dead_code (Commented Logic / Deprecated Trails)
@@ -197,7 +236,13 @@ DEFINITION: dict[str, Any] = {
         "closures": None,  # Shell lacks native anonymous lambdas.
         # 18. globals (Global / Shared State)
         "globals": re.compile(
-            r"\b(PATH|HOME|USER|SHELL|EDITOR|PWD|OLDPWD|TERM|LANG|OSTYPE|MACHTYPE|UID|EUID|GROUPS)\b"
+            # #2858 contract corollary 3: an environment variable is global state
+            # in its variable form -- a read `$NAME` / `${NAME` or a top-level
+            # assignment `NAME=` / `export NAME=` -- never as a bare word: `TERM`
+            # in `trap : TERM` is a signal name, `PATH` in a log string is prose.
+            r"\$\{?(?:PATH|HOME|USER|SHELL|EDITOR|PWD|OLDPWD|TERM|LANG|OSTYPE|MACHTYPE|UID|EUID|GROUPS)\b"
+            r"|^[ \t]*(?:export[ \t]+)?(?:PATH|HOME|USER|SHELL|EDITOR|PWD|OLDPWD|TERM|LANG|OSTYPE|MACHTYPE|UID|EUID|GROUPS)=",
+            re.M,
         ),
         # 19. decorators
         "decorators": None,
@@ -209,18 +254,35 @@ DEFINITION: dict[str, Any] = {
         # 22. scientific (Numerical / Compute Libraries)
         "scientific": re.compile(r"\b(bc|awk|dc|expr|jq|RANDOM|SRANDOM)\b|\$\(\("),
         # 23. heat_triggers (Metaprogramming & Reflection)
-        # Sub-languages and indirect expansion. (ReDoS Shielded)
-        # QUADRATIC BLOWUP + NESTING FIX: `$(...)`'s flat `[^)]+` was
-        # unbounded and unanchored -- O(n^2) on a long run of unclosed
-        # `$(` (confirmed ~4x slowdown per input-size doubling). Upgraded
-        # to the one-level-nesting form so the common nested command
-        # substitution idiom (e.g. `DIR=$(cd "$(dirname "$0")" && pwd)`)
-        # is captured in full instead of truncating at the inner `)`.
+        # Sub-languages and indirect expansion -- the code whose behaviour is
+        # decided at runtime by a name, not written in the file. (ReDoS Shielded)
+        # VOCABULARY LEAK FIX (#2722): two alternatives counted ordinary shell
+        # as dynamism. (a) `\$\{!?...\}` made the indirection marker OPTIONAL,
+        # so plain `${var}` matched -- 4,117 of the crucible's 4,863 shell hits
+        # (85%) were variable expansions, while `${!var}` itself never occurs.
+        # (b) `$(...)` and backticks counted every command substitution, one per
+        # 33 lines of real shell: running a program yields data, not code, and no
+        # other language's rule counts invocation (python's does not fire on
+        # `subprocess.run`). Both dropped. `eval` is now unanchored -- the old
+        # `\beval\s+\$` missed `eval "$cmd"` -- and namerefs plus `source`/`.`
+        # of a computed path are added, which is what dynamic dispatch in shell
+        # actually looks like. Since #2719 this count IS the file's dynamism,
+        # read by documentation risk and cognitive load, so the leak was
+        # structural rather than cosmetic.
         "reflection_metaprogramming": re.compile(
-            r'\$\((?:[^()]|\([^()]*\))+\)|`[^`]+`|\b(?:awk|sed|perl|python[23]?|ruby)\s+[\'"][^\'"]{0,500}|\beval\s+\$|\$\{!?[a-zA-Z0-9_]+\}'
+            r"\beval\b"
+            r"|\$\{![a-zA-Z0-9_]+\}"
+            r"|\b(?:declare|typeset|local)[ \t]+-n\b"
+            r"|(?:^|[ \t;|&])(?:source\b|\.(?=[ \t]))[ \t]+[\"']?\$"
+            r"|\b(?:awk|sed|perl|python[23]?|ruby)\s+['\"][^'\"]{0,500}",
+            re.M,
         ),
         # 24. import (Dependency Inclusions)
-        "import": re.compile(r"(?:^|[ \t;|&])(?:source\b|\.(?=[ \t]))[ \t]+[^\s;]+", re.M),
+        # #2875 contract C5: command position only -- a lone `.` after a plain space is a
+        # path argument (`find -s . -mindepth`, `--init-path . name`), not the source builtin.
+        "import": re.compile(
+            r"(?:^|[;|&(`]|\b(?:then|else|do|if|elif|until|while)[ \t])[ \t]*(?:source[ \t]+|\.[ \t]+)[^\s;]+", re.M
+        ),
         "_dependency_capture": re.compile(
             # =====================================================================
             # [ FUTURE LLM CONTEXT: THE DYNAMIC EXECUTION SHIFT (SHELL) ]
@@ -245,12 +307,13 @@ DEFINITION: dict[str, Any] = {
             # Therefore, we explicitly branch: `source` gets a word boundary `\b`,
             # and `.` gets a positive lookahead for whitespace `(?=[ \t])`.
             # =====================================================================
-            r"(?:^|[ \t;|&])(?:source\b|\.(?=[ \t]))[ \t]+['\"]?([^'\"\s;]+)['\"]?",
+            r"(?:^|[;|&(`]|\b(?:then|else|do|if|elif|until|while)[ \t])[ \t]*(?:source[ \t]+|\.[ \t]+)['\"]?([^'\"\s;]+)['\"]?",  # #2875 C5
             re.M,
         ),
         # 25. ownership (Authorship Metadata)
+        # #2882 contract: C2 colon-optional `Copyright` counted every notice (131 of 256 crucible files)
         "ownership": re.compile(
-            r"^[ \t]*#\s*(?:Author|Created by|Maintainer|Copyright):?\s+(.*)",
+            r"^[ \t]*(?:#+)[ \t]*(?:Authors?|Created[ \t]+by|Maintainers?|Owners?|Developers?|Contact)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$|^[ \t]*(?-i:(?:Author|AUTHOR)(?:s|S)?|Created[ \t]+by|CREATED[ \t]+BY|Maintainer(?:s)?|MAINTAINER(?:S)?|Owner(?:s)?|OWNER(?:S)?|Developer(?:s)?|DEVELOPER(?:S)?|Contact|CONTACT)[ \t]*:(?![:=])[ \t]*(\S[^\n]*?)(?<![,;{(])[ \t]*(?:\*/|-->)?[ \t]*$|@author:?[ \t]+(\S[^\n]*?)[ \t]*(?:\*/|-->)?[ \t]*$",
             re.M | re.I,
         ),
         # --- PHASE 4: SPECIALIZED SUB-SYSTEMS ---
@@ -303,17 +366,24 @@ DEFINITION: dict[str, Any] = {
         # 44. sync_locks (Resource Management & Stability)
         "sync_locks": re.compile(r"\b(flock|mkdir|mkfifo|lockfile|sem)\b"),
         # 45. immutability_locks (Immutability Constraints)
-        "immutability_locks": re.compile(r"\b(readonly|declare\s+-r|typeset\s+-r)\b"),
+        "immutability_locks": re.compile(
+            r"(?:^|[;&|]|\$\()[ \t]*(?:readonly[ \t]+[A-Za-z_]|declare[ \t]+-[a-zA-Z]*r|typeset[ \t]+-[a-zA-Z]*r)", re.M
+        ),  # #2772 C3: command position only -- readonly='readonly' inside echo'd HTML strings is prose
         # 46. cleanup (Resource Cleanup / Teardown)
         # QUADRATIC BLOWUP FIX: same class of bug as `safety`'s trap clause
         # above -- the unbounded `.*` before the required `EXIT` literal was
         # unanchored, O(n^2) on a long run of `trap ` occurrences that never
         # resolve to EXIT (confirmed ~4x slowdown per input-size doubling).
         # Bounded to {0,300}, matching the fix already applied to `safety`.
-        "cleanup": re.compile(r"\b(rm\s+-f|trap\s+.{0,300}EXIT|unset|exit|logout)\b"),
+        "cleanup": re.compile(
+            r"\brm[ \t]+-[a-zA-Z]*f[a-zA-Z]*[ \t]+(?!/(?:[^A-Za-z]|$))\S|\btrap[ \t]+[^\n]{0,300}\bEXIT\b|\bunset\b"
+        ),  # #2888 C2: exit terminates (panics_and_aborts owns it); rm flags-with-f on a non-root target destroys external state (#2843; rm -rf / stays high_risk\'s)
         # 47. encapsulation (Access Modifiers / Encapsulation)
         # Physical Reality: local variables represent internal state scope.
-        "encapsulation": re.compile(r"\b(local|typeset|declare)\b"),
+        # #2766: contract-level absence. `local`/`typeset`/`declare` scope variables
+        # inside functions -- scope is not API visibility; shell has no per-name
+        # non-public marker.
+        "encapsulation": None,
         # 48. listeners (Event Listeners / Observers)
         "listeners": re.compile(r"\b(read|inotifywait|nc\s+-l|while\s+read)\b"),
         # 49. test_skip (Bypassed Tests / Ignored Specs)
@@ -324,7 +394,20 @@ DEFINITION: dict[str, Any] = {
         # group with the leading `\b` dropped (the `#` is self-delimiting).
         "test_skip": re.compile(r"\b(test\.skip|bats_skip|mock|stub)\b|#\s*SKIP\b"),
         # --- PHASE 3: HYBRID DOMAIN SENSORS (Shell Specifics) ---
-        "serialization_parsing": re.compile(r"\b(jq|yq|awk|sed|xmlstarlet)\b"),
+        # auth_middleware (#3004): identity and credential commands in command
+        # position. `sudo` is deliberately NOT here -- high_risk_execution has
+        # owned it since before this key existed, and one construct keeps one
+        # owner. kinit/kdestroy obtain and drop Kerberos credentials,
+        # passwd/chpasswd rotate one, `su -`/runuser switch identity.
+        "auth_middleware": re.compile(
+            r"(?:^|[|&;][ \t]*)[ \t]*(?:kinit|kdestroy|chpasswd|runuser)\b"
+            r"|(?:^|[|&;][ \t]*)[ \t]*passwd[ \t]"
+            r"|(?:^|[|&;][ \t]*)[ \t]*su[ \t]+-",
+            re.M,
+        ),
+        # #2898: sed/awk removed -- general text processors, not format codecs
+        # (sed alone was 529 crucible hits); jq/yq/xmlstarlet parse a format.
+        "serialization_parsing": re.compile(r"\b(jq|yq|xmlstarlet)\b"),
         "regex_execution": re.compile(r"\b(grep|egrep|sed|awk)\b|=~"),
         # BOUNDARY FIX: the trailing `\s+` before the shared closing `\b`
         # required a word char to immediately follow the whitespace --
@@ -335,5 +418,9 @@ DEFINITION: dict[str, Any] = {
         # alone already prevents partial-word matches like "update".
         "time_date_logic": re.compile(r"\b(date|sleep|uptime|times)\b"),
         "ipc_rpc_bridges": re.compile(r"\b(curl|wget|nc|netcat|ssh|scp|xargs|socat)\b"),
+        # system_config_mutation (#3084): contract-level absence. deferred, see
+        # 3084: sysctl -w/systemctl enable measured 4/256 crucible files, one
+        # inside a string literal (#2899 FP shape) -- not worth owning yet.
+        "system_config_mutation": None,
     },
 }

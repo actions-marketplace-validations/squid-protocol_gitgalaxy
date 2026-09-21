@@ -14,10 +14,11 @@ Evaluating code quality in isolation is insufficient; a poorly written script ha
 ## Design
 ### Current Behavior
 - **Directed Graph Construction:** Uses pre-computed lookup maps to resolve raw import strings into target paths and assigns weighted edges based on dependency specificity.
-- **Centrality Metrics:** Computes PageRank (Normalized Blast Radius), Betweenness Centrality (Architectural Choke Points), and Closeness Centrality.
+- **Native Graph Index:** The resolved edges are loaded once per scan into an integer-indexed CSR adjacency (`gitgalaxy/core/graph_engine.py`, #3034) that the native graph metrics read, with no networkx graph involved. `tests/tools/graph_parity.py` checks each native metric against networkx as a test-time oracle and benchmarks it on a real scan's graph.
+- **Centrality Metrics:** Computes PageRank (Normalized Blast Radius) with the engine's own pure-Python implementation in every mode (#3027: one implementation, so no mode or networkx-version drift), plus Betweenness Centrality (Architectural Choke Points, #3038) and Closeness Centrality (#3037), both native in every mode. Both are exact at every graph size, with no sampling and no file-count cutoff. Each is bounded only by a deterministic work budget (`PATH_METRICS_WORK_BUDGET` edge scans, never wall-clock time), past which it is `None`/NULL, never 0.0. A failed centrality computation leaves the metric `None` (#3027).
 - **Component Roles:** Classifies modules as Producers (Foundation), Consumers (Orchestrators), Transceivers (Middle Tier), or Isolated, based on inbound/outbound edge ratios.
 - **Global Topology Metrics:** Evaluates modularity, assortativity, cyclic density, average path length, and articulation points.
-- **Zero-Dependency Mode:** Degrades gracefully if `networkx` is unavailable, calculating basic in/out degree ratios.
+- **One builder, no optional package (#3041):** The resolved edges are counted linearly for degree (`popularity`, `internal_dependency_links`, producer ratio and ecosystem role; #3024), the `edge_data` table persists them, and every graph metric is computed natively (#3027, #3034-#3040). Every install therefore computes the same graph values; networkx is only a test-time oracle. See [`docs/zero_dependency_mode.md`](../zero_dependency_mode.md).
 
 ### Planned Improvements
 - Introduce community detection algorithms to auto-discover implicit package domains.
@@ -35,7 +36,7 @@ graph LR
 ```
 
 ## Tradeoffs
-- **Approximation vs. Exactness:** For repositories exceeding 5,000 nodes, betweenness computation uses randomized sampling ($k=50$) to maintain $O(N)$ execution speed, sacrificing exact shortest-path metrics for performance.
+- **Exactness vs. Scale:** Every centrality is exact. #3038 removed networkx's 100-source betweenness sampling above 500 files. Instead of approximating, a metric whose search exceeds its deterministic work budget is recorded as `None`, never as a sampled or placeholder value.
 - **Static Analysis Limits:** Resolving dynamic imports or dependency injection at runtime is skipped in favor of static, explicit import declarations to guarantee determinism.
 
 ## Limitations
@@ -43,7 +44,7 @@ graph LR
 - **Ecosystem Boundaries:** Does not map external third-party package dependencies, limiting the graph to intra-repository files.
 
 ## Performance Notes
-- Operates linearly $O(N)$ for graph construction. Path traversal and centrality metrics are heavily optimized using `networkx` heuristics and sampling for large repositories, ensuring low runtime overhead.
+- Graph construction is linear in files plus imports. Every metric is exact and native (`gitgalaxy/core/graph_engine.py`), bounded by deterministic work budgets rather than sampling.
 
 ## Future Work
 - Extend dependency parsing to map cross-repository package dependencies and internal sub-module cyclic detection.
