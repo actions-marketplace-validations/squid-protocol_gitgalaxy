@@ -3222,11 +3222,34 @@ class StructuralExtractor:
             if lang_id in ("shell", "bash")
             else ""
         )
+        # C-family and many others use /* ... */ for multi-line comments.
+        # HTML/XML use <!-- ... -->
+        block_comment_alt = ""
+        if lang_id in ("html", "xml", "markdown"):
+            block_comment_alt = r"<!--[\s\S]*?-->|"
+        elif lang_id == "haskell":
+            block_comment_alt = r"\{-[\s\S]*?-\}|"
+        elif lang_id not in (
+            "python",
+            "ruby",
+            "shell",
+            "bash",
+            "perl",
+            "lua",
+            "r",
+            "yaml",
+            "elixir",
+            "cobol",
+            "fortran",
+            "abap",
+        ):
+            # Default to C-style block comments for the vast majority of C-family / web languages
+            block_comment_alt = r"/\*[\s\S]*?\*/|"
 
         atomic_string_pattern = (
             heredoc_opener_alt + r'""".*?"""|'  # Python Triple Double
             r"'''.*?'''|"  # Python Triple Single
-            r'R"([a-zA-Z0-9_]*)\(.*?\)\1"|'  # C++ Raw String Literal (e.g. R"EOF(...)EOF")
+             + block_comment_alt + r'R"([a-zA-Z0-9_]*)\(.*?\)\1"|'  # C++ Raw String Literal (e.g. R"EOF(...)EOF")
             r'@"[^"]*(?:""[^"]*)*"|'  # THE FIX: Unrolled C# Verbatim Shield (O(N) safe)
             f"{standard_double}|"  # Standard Double
             f"{standard_single}|"  # Standard Single
@@ -8527,7 +8550,11 @@ class StructuralExtractor:
         # ---> NEW: LEVEL 3 WIRING (Function Call Chains) <---
         # We scan the block for any word followed by a parenthesis, minus common language keywords.
         invocation_pattern = re.compile(r"\b([a-zA-Z_]\w*)\s*\(")
-        raw_calls = invocation_pattern.findall(block)
+
+        # Apply literal shield to avoid capturing words inside strings
+        safe_block = self._apply_literal_shield(block, self.primary_lang_id)
+        raw_calls = invocation_pattern.findall(safe_block)
+
         ignore_keywords = {
             "if",
             "for",
@@ -8597,7 +8624,7 @@ class StructuralExtractor:
             "Boolean",
         }
         # Deduplicate and filter (excluding the function calling itself recursively)
-        calls_out = list({c for c in raw_calls if c not in ignore_keywords and c != name})[:20]
+        calls_out = list(dict.fromkeys(c for c in raw_calls if c not in ignore_keywords and c != name))
 
         sat: FunctionNode = {
             "name": name,
