@@ -2766,7 +2766,7 @@ class StructuralExtractor:
         active: list[tuple[str, Any, str, Optional[RulePrefilterGate], Optional[re.Pattern[str]]]] = []
         seen_rule_names: set[str] = set()
         for rule_name, pattern in rules_dict.items():
-            if rule_name.startswith("_") or not pattern:
+            if rule_name.startswith("_") or rule_name == "calls_out" or not pattern:
                 continue
             mapped_key = self.CORE_MAPPING.get(rule_name, rule_name)
             if mapped_key not in valid_keys:
@@ -6046,12 +6046,57 @@ class StructuralExtractor:
         # Order matters: triple-quote markers must precede the single-char
         # quote patterns, or e.g. the double-quote alternative would match
         # the first two characters of a `"""..."""` as an empty `""` string.
+        # #3277: a YAML `|`/`>` block scalar's content is opaque literal text
+        # (a `run:` shell script, a github-script `script:` JS block, ...), NOT
+        # YAML. Blank it FIRST, index-aligned, so the combined string/comment
+        # pass below cannot pair an apostrophe or quote embedded in that
+        # literal text with a much-later one and blank the real `- name:`/
+        # `run:` step keys in between (the #1302/#1184 quote-cascade shape,
+        # here triggered by embedded JS/shell rather than a stray contraction).
+        # Left unshielded, one such block silently erased four real steps in
+        # vscode's api-proposal-version-check.yml and let a lone `script:` unit
+        # run to EOF.
+        if lang_id == "yaml":
+            code = self._blank_yaml_block_scalars(code)
+
         combined_pattern = (
             r'"""(?:.*?)"""|'
             r"'''(?:.*?)'''|"
             r'"(?:\\.|[^"\\])*"|' + single_quote + r"|" + comment_marker
         )
         return re.sub(combined_pattern, index_aligned_shield, code, flags=re.DOTALL)
+
+    # A YAML block-scalar opener: a mapping key (optionally a `- ` sequence
+    # item) whose value is a `|` or `>` block indicator (with optional
+    # chomping/indent indicators `+`/`-`/digits and a trailing `#` comment).
+    _YAML_BLOCK_SCALAR_OPENER = re.compile(
+        r"^(?P<indent>[ \t]*)(?:-[ \t]+)?[^:\n#]+:[ \t]*[|>][+\-0-9]*[ \t]*(?:#[^\n]*)?$"
+    )
+
+    def _blank_yaml_block_scalars(self, code: str) -> str:
+        """Blank the CONTENT of every YAML `|`/`>` block scalar to spaces,
+        index-aligned (same char count, newlines preserved). The opener line
+        itself is kept -- so a real step key still matches -- but its literal
+        body (every following line more indented than the opener, blank lines
+        included) becomes inert whitespace, ending at the first non-blank line
+        dedented back to <= the opener's indent. #3277."""
+        lines = code.split("\n")
+        out: list[str] = []
+        block_indent: Optional[int] = None
+        for line in lines:
+            if block_indent is not None:
+                stripped = line.strip()
+                indent = len(line) - len(line.lstrip())
+                if stripped and indent <= block_indent:
+                    block_indent = None  # dedented out of the block; fall through
+                else:
+                    out.append(" " * len(line))  # inside the block: blank it
+                    continue
+            m = self._YAML_BLOCK_SCALAR_OPENER.match(line)
+            out.append(line)
+            if m:
+                block_indent = len(m.group("indent"))
+        return "\n".join(out)
 
     def _slice_by_indentation(
         self,
@@ -8571,15 +8616,17 @@ class StructuralExtractor:
 
         # ---> NEW: LEVEL 3 WIRING (Function Call Chains) <---
         # We scan the block for explicit function invocation edges.
-        # Epic #3264: Route via the language's specific paradigm first (e.g. COBOL's PERFORM),
-        # falling back to the generic C-family parenthesis-invocation shape if unconfigured.
+        # Epic #3264: Route via the language's specific paradigm.
+        # Fallback is explicitly removed: if a language does not configure calls_out,
+        # it is returned as empty (intentional blindness) rather than guessing.
         invocation_pattern = rules.get("calls_out")
-        if not invocation_pattern:
-            invocation_pattern = re.compile(r"\b([a-zA-Z_]\w*)\s*\(")
 
-        # Apply literal shield to avoid capturing words inside strings
-        safe_block = self._apply_literal_shield(block, self.primary_lang_id)
-        raw_calls = invocation_pattern.findall(safe_block)
+        if not invocation_pattern:
+            raw_calls = []
+        else:
+            # Apply literal shield to avoid capturing words inside strings
+            safe_block = self._apply_literal_shield(block, self.primary_lang_id)
+            raw_calls = invocation_pattern.findall(safe_block)
 
         ignore_keywords = {
             "if",

@@ -20,6 +20,9 @@ MOCK_LANG_DEFS = {
         "lexical_family": "single_line_only",
         "rules": {
             "func_start": re.compile(r"^[ \t]*def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", re.M),
+            # Epic #3264: calls_out_to now requires an explicit paradigm declaration
+            # (the fallback was removed), so the mock must declare one too.
+            "calls_out": re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\("),
             "branch": re.compile(r"\b(if|elif|for|while)\b"),
             "structural_boundaries": re.compile(r"\b(print|return|assign)\b"),
             "ownership": re.compile(r"#\s*Architect:\s*(.*)"),
@@ -1010,6 +1013,37 @@ def test_detector_mode_c_indentation():
     parent = result["functions"][0]
     assert parent["name"] == "parent_process"
     assert parent["loc"] == 4, "Mode C failed to accurately count lines inside the indentation block!"
+
+
+def test_detector_yaml_block_scalar_does_not_swallow_following_steps():
+    """#3277: a YAML `|`/`>` block scalar's embedded literal content (a shell or
+    github-script JS body, complete with apostrophes/quotes) must not corrupt the
+    indentation shield and blank out the real steps after it. Before the fix, the
+    single-quote in `console.log('done')` paired with a later quote and erased the
+    second step's `- name:`/`run:` keys, dropping it and letting the `script:` unit
+    run to EOF."""
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    detector = StructuralExtractor("yaml", LANGUAGE_DEFINITIONS)
+    code = (
+        "jobs:\n"
+        "  build:\n"
+        "    steps:\n"
+        "      - name: First step\n"
+        "        uses: actions/github-script@v7\n"
+        "        with:\n"
+        "          script: |\n"
+        "            const x = 'it\\'s here';\n"
+        "            console.log('done');\n"
+        "            if (x) { console.log('ok'); }\n"
+        "      - name: Second step\n"
+        "        run: |\n"
+        "          echo 'second'\n"
+    )
+    result = detector.splice(code, "")
+    names = {f["name"] for f in result["functions"]}
+    assert "Second step" in names, f"block scalar swallowed the following step; got {names}"
+    assert len(result["functions"]) == 2, f"expected 2 steps, got {len(result['functions'])}: {names}"
 
 
 def test_detector_nested_function_is_counted_as_own_node_indentation():
