@@ -304,3 +304,27 @@ def test_same_directory_visibility_is_for_package_scoped_languages_only():
 
     assert _site(resolve_calls(files("java", "java"))[0], "save")["step"] == "import"
     assert _site(resolve_calls(files("python", "py"))[0], "save")["step"] == "receiver"
+
+
+def test_transfers_resolve_as_their_own_kind_outside_the_rates():
+    # #3362: COBOL GO TO targets are linked like calls but are not calls.
+    main = _fn("MAIN-PARA", 1, owner="P", calls=["SUB-PARA"])
+    main["transfers_to"] = ["EXIT-PARA"]
+    files = [_file("p.cbl", "cobol", [main, _fn("SUB-PARA", 5, owner="P"), _fn("EXIT-PARA", 9, owner="P")])]
+    sites, stats = resolve_calls(files)
+    assert {(s["callee"], s["kind"], s["step"]) for s in sites} == {
+        ("SUB-PARA", "call", "class"),
+        ("EXIT-PARA", "transfer", "class"),
+    }
+    assert stats["by_step"] == {"class": 1}
+    assert stats["transfers_by_step"] == {"class": 1}
+
+
+def test_transfers_never_become_file_edges():
+    from gitgalaxy.core.call_resolver import confident_file_pairs
+
+    sites = [
+        {"src_path": "a.cbl", "dst_path": "b.cbl", "resolution": "unique", "kind": "transfer"},
+        {"src_path": "a.cbl", "dst_path": "b.cbl", "resolution": "unique", "kind": "call"},
+    ]
+    assert confident_file_pairs(sites) == {("a.cbl", "b.cbl"): 1}
