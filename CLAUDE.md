@@ -229,6 +229,21 @@ pairs one-for-one with a now-stale entry of the same file/code/message); a new f
 duplicate of a baselined line (next `#occurrence`), still fails. Human-readable output still
 prints each finding's current line number.
 
+### Mainframe ground-truth ledger
+
+`tests/cobol_mainframe/ground_truth_ledger.json` lists every place the engine master DB or the
+refraction forge disagrees with the hand-verified COBOL answer keys
+(`tests/cobol_mainframe/answer_key/`) on the pinned real corpora. Each mismatch maps to a cause,
+and each cause has a `kind` (`defect` to fix, `deliberate` by design) and an owning issue.
+`mainframe-ground-truth.yml` runs `tests/tools/ground_truth_ledger.py check` on **every** PR.
+It fails on an unlisted mismatch (a regression) *and* on a listed one that no longer reproduces
+(an improvement, which has to be ratcheted in). After a change that moves a score:
+`mainframe_corpus.py fetch`, then `ground_truth_ledger.py update`. New entries come in
+`UNTRIAGED` and fail until you `assign` them a cause with an issue; explain the moves in the PR.
+Each field is labelled with the weakest verification tier behind it (`llm_verified` <
+`cross_verified` < `human_signed`, `cobol_answer_key.TIERS`), or `draft` when its key section is
+unsigned. Every tier gates, but only the label says how strongly a number may be quoted.
+
 ## Testing conventions
 
 `tests/` has no `__init__.py` anywhere in this repo. A new test file that needs to import a

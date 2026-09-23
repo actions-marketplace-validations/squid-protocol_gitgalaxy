@@ -58,18 +58,7 @@ DEFINITION: dict[str, Any] = {
                 "unless",
                 "elsif",
                 "foreach",
-                "defined",
-                "wantarray",
-                "ref",
-                "bless",
-                "scalar",
-                "exists",
-                "delete",
-                "shift",
-                "unshift",
-                "chomp",
                 "die",
-                "warn",
                 # #3359 (contract C2/C7): keywords and quote-like operators, never
                 # calls. `qx(...)` is deliberately absent: it runs a shell command,
                 # an invocation like `system` (the rosetta oracle plants it as one).

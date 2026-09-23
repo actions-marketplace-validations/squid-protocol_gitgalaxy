@@ -51,6 +51,11 @@ DEFINITION: dict[str, Any] = {
             {
                 "this",
                 "synchronized",
+                # #3361: statement keywords here (`assert(x)`, a constructor's
+                # `super(x)`); they left the global set because C's assert macro
+                # and Python's super() ARE calls.
+                "assert",
+                "super",
             }
         ),
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---
