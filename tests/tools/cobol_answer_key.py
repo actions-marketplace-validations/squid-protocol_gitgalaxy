@@ -7,10 +7,18 @@ tools and the engine's master DB against it.
         --out key.json [--report why.md]
     python tests/tools/cobol_answer_key.py score <repo> --key key.json [--db master.db] [--md out.md]
     python tests/tools/cobol_answer_key.py add-pli <repo> --key key.json
+    python tests/tools/cobol_answer_key.py add-sql-tables <repo> --key key.json
+    python tests/tools/cobol_answer_key.py add-bms <repo> --key key.json
+    python tests/tools/cobol_answer_key.py add-jcl <repo> --key key.json
 
 `add-pli` (#3250) drafts the PL/I DECLARE record layouts of every PL/I source in
 <repo> into the key's `pli_programs`, leaving every COBOL program (and its
 `validated` status) untouched -- a full `draft` would wipe them.
+`add-sql-tables` (#3344) does the same for DB2 `EXEC SQL DECLARE ... TABLE`
+columns (inline or DCLGEN members) into the key's `sql_tables`. `add-bms` (#3347)
+does the same for every BMS map source's screen fields, into `bms_maps`.
+`add-jcl` (#3345) does the same for every JCL member's DD bindings and
+symbol-resolved DSNs, into `jcl_jobs`.
 
 AUTHORITY. `draft` computes CANDIDATE values with its own fixed-format reading
 (Area A headers, PERFORM ... THRU, GO TO, SECTION fall-through, terminal
@@ -659,6 +667,611 @@ def draft_pli(repo: Path) -> dict[str, dict[str, Any]]:
 
 
 # ==============================================================================
+# DB2 DECLARE TABLE / DCLGEN schemas (#3344)
+# ==============================================================================
+# This tool's own reading of `EXEC SQL DECLARE <table> TABLE (...)`. It works on
+# the RAW file with its own comment/sequence handling (COBOL: cols 8-72 of every
+# non-comment line; PL/I: `/* */` blanked, cols 73-80 dropped) and cuts each
+# statement at its TERMINATOR -- `END-EXEC` in COBOL, `;` in PL/I -- then takes
+# the list up to the last `)`. The engine instead walks the PRISM code stream to
+# the balancing parenthesis, so the two share the CONTRACT (per column: name,
+# type, length/precision, scale, NOT NULL) and not the code: an agreement is
+# evidence, a disagreement a finding.
+SQL_TABLE_EXTS = PROGRAM_EXTS + COPYBOOK_EXTS + (".pco", ".cut") + PLI_EXTS
+_SQL_NAME = r'(?:"[^"\n]+"|[A-Z@#$][A-Z0-9_@#$]*)'
+_SQL_DECLARE = re.compile(rf"\bEXEC\s+SQL\s+DECLARE\s+({_SQL_NAME}(?:\s*\.\s*{_SQL_NAME}){{0,2}})\s+TABLE\s*\(", re.I)
+_SQL_TOKEN = re.compile(r'"[^"]*"|[()]|[^\s()]+')
+_SQL_OPTION_WORDS = {
+    "NOT",
+    "NULL",
+    "WITH",
+    "FOR",
+    "DEFAULT",
+    "CCSID",
+    "GENERATED",
+    "IMPLICITLY",
+    "INLINE",
+    "CONSTRAINT",
+    "PRIMARY",
+    "UNIQUE",
+    "REFERENCES",
+    "CHECK",
+    "AS",
+    "FIELDPROC",
+}
+_SQL_UNIT = {"K": 1024, "M": 1024**2, "G": 1024**3}
+
+
+def _sql_prepared(text: str, pli: bool) -> str:
+    """The raw file reduced to code, one output line per source line."""
+    if pli:
+        text = _pli_source_lines(text)
+        return re.sub(r"/\*.*?(?:\*/|\Z)", lambda m: re.sub(r"[^\n]", " ", m.group(0)), text, flags=re.S)
+    out = []
+    for raw in text.split("\n"):
+        raw = raw.rstrip("\r")
+        if len(raw) > 6 and raw[6] in "*/":
+            out.append("")
+        else:
+            out.append((raw[7:72] if len(raw) > 7 else "").split("*>", 1)[0])
+    return "\n".join(out)
+
+
+def _sql_unquote(name: str) -> str:
+    return name[1:-1] if name.startswith('"') and name.endswith('"') else name.upper()
+
+
+def sql_table_columns(text: str, pli: bool = False) -> list[dict[str, Any]]:
+    """Every DECLARE TABLE column in one source file, this tool's own reading."""
+    code = _sql_prepared(text, pli)
+    terminator = re.compile(r";" if pli else r"\bEND-EXEC\b", re.I)
+    out: list[dict[str, Any]] = []
+    for m in _SQL_DECLARE.finditer(code):
+        term = terminator.search(code, m.end())
+        region = code[m.end() : term.start() if term else len(code)]
+        body = re.sub(r"--[^\n]*", "", region[: region.rfind(")")])
+        table = ".".join(_sql_unquote(p.strip()) for p in re.findall(_SQL_NAME, m.group(1), re.I))
+        # Top-level commas only: `DECIMAL(10, 2)` is one column.
+        pieces, depth, start = [], 0, 0
+        for i, ch in enumerate(body):
+            depth += ch == "("
+            depth -= ch == ")"
+            if ch == "," and depth == 0:
+                pieces.append((start, body[start:i]))
+                start = i + 1
+        pieces.append((start, body[start:]))
+        colno = 0
+        for off, piece in pieces:
+            toks = _SQL_TOKEN.findall(piece)
+            if len(toks) < 2 or toks[0].upper() in ("PRIMARY", "FOREIGN", "CONSTRAINT", "UNIQUE", "CHECK"):
+                continue
+            i, words = 1, []
+            while i < len(toks) and toks[i] != "(" and toks[i].upper() not in _SQL_OPTION_WORDS and len(words) < 4:
+                words.append(toks[i].upper())
+                i += 1
+            if not words:
+                continue
+            length = scale = None
+            if i < len(toks) and toks[i] == "(":
+                j = toks.index(")", i) if ")" in toks[i:] else len(toks)
+                args = " ".join(toks[i + 1 : j])
+                lm = re.match(r"(\d+)\s*([KMG])?\b", args, re.I)
+                if lm:
+                    length = int(lm.group(1)) * _SQL_UNIT.get((lm.group(2) or "").upper(), 1)
+                sm = re.search(r",\s*(\d+)", args.replace(" ,", ","))
+                scale = int(sm.group(1)) if sm else None
+                i = j + 1
+            rest = " ".join(toks[i:]).upper()
+            tz = re.match(r"(WITH(?:OUT)?) TIME ZONE\b", rest)
+            if tz:
+                words += [tz.group(1), "TIME", "ZONE"]
+                rest = rest[tz.end() :]
+            colno += 1
+            lead = len(piece) - len(piece.lstrip())
+            out.append(
+                {
+                    "table": table,
+                    "colno": colno,
+                    "name": _sql_unquote(toks[0]),
+                    "sql_type": " ".join(words),
+                    "length": length,
+                    "scale": scale,
+                    "nullable": not re.search(r"\bNOT NULL\b", rest),
+                    "line": code.count("\n", 0, m.end() + off + lead) + 1,
+                }
+            )
+    return out
+
+
+def sql_column_key(
+    table: str, name: str, sql_type: str, length: Optional[int], scale: Optional[int], nullable: bool
+) -> str:
+    """The cross-reader comparison key for one column: its full declared shape, so a
+    disagreement on type, length, scale or nullability is a delta, not just a name."""
+    args = "" if length is None else f"({length})" if scale is None else f"({length},{scale})"
+    return f"{table}.{name} {sql_type}{args} {'NULLABLE' if nullable else 'NOT NULL'}".upper()
+
+
+def sql_column_keys(columns: list[dict[str, Any]]) -> set[str]:
+    return {
+        sql_column_key(c["table"], c["name"], c["sql_type"], c.get("length"), c.get("scale"), c.get("nullable", True))
+        for c in columns
+    }
+
+
+def draft_sql_tables(repo: Path) -> dict[str, dict[str, Any]]:
+    """Drafted DECLARE TABLE columns for every COBOL/PL/I source that declares one
+    (#3344). A file's columns adjudicate a differential delta only once it is
+    signed off with `sql_tables_validated` -- the records precedent (#3246)."""
+    out: dict[str, dict[str, Any]] = {}
+    for p in sorted(repo.rglob("*")):
+        if p.is_file() and p.suffix.lower() in SQL_TABLE_EXTS and ".git" not in p.parts:
+            cols = sql_table_columns(p.read_text(encoding="utf-8", errors="ignore"), p.suffix.lower() in PLI_EXTS)
+            if cols:
+                out[p.relative_to(repo).as_posix()] = {
+                    "columns": cols,
+                    "sql_tables_validated": False,
+                    "verification": {"status": "draft", "notes": []},
+                }
+    return out
+
+
+# ==============================================================================
+# BMS screen-field layouts (#3347)
+# ==============================================================================
+# This tool's own reading of a BMS map source, over the RAW file (it drops its
+# own `*`/`.*` comment lines -- it never sees the engine's PRISM stream). Each
+# statement is its physical lines sliced at the HLASM columns (1-71, then 16-71
+# for every line whose column 72 is non-blank), concatenated, and tokenized with
+# one regex; a blank outside a literal ends the operands unless it is the padding
+# between a trailing comma and the next continuation line. It shares the engine's
+# CONTRACT (one row per DFHMSD/DFHMDI/DFHMDF, TYPE=FINAL is not a mapset), not its
+# code, so an agreement is evidence and a disagreement is a finding.
+BMS_EXTS = (".bms",)
+_BMS_HEAD = re.compile(r"([A-Z@#$][A-Z0-9@#$_]*)?[ \t]+(DFHMSD|DFHMDI|DFHMDF)(?=[ \t]|$)", re.I)
+_BMS_TOKEN = re.compile(r"'(?:[^']|'')*'?|[(),=]|[^\s(),=']+|\s+")
+_BMS_KIND = {"DFHMSD": "mapset", "DFHMDI": "map", "DFHMDF": "field"}
+# The item keys the comparison reads, shared by this reader's items and the engine's rows.
+BMS_ITEM_KEYS = (
+    "kind",
+    "ordinal",
+    "parent_ordinal",
+    "name",
+    "pos_line",
+    "pos_column",
+    "length",
+    "attrb",
+    "picin",
+    "picout",
+    "initial",
+    "occurs",
+)
+
+
+def _bms_operands(text: str, boundaries: set[int]) -> list[list[str]]:
+    """The statement's operands as token lists, split at top-level commas."""
+    operands: list[list[str]] = [[]]
+    depth = 0
+    for m in _BMS_TOKEN.finditer(text):
+        tok = m.group(0)
+        if tok.isspace():
+            padding = any(m.start() <= b <= m.end() for b in boundaries)
+            if padding and depth == 0 and not operands[-1]:
+                continue  # between `,` and the next continuation line
+            break
+        if tok == "(":
+            depth += 1
+        elif tok == ")":
+            depth -= 1
+        if tok == "," and depth == 0:
+            operands.append([])
+        else:
+            operands[-1].append(tok)
+    return [o for o in operands if o]
+
+
+def bms_screen_items(text: str) -> list[dict[str, Any]]:
+    """Every DFHMSD/DFHMDI/DFHMDF of one BMS source, in source order, with
+    `parent_ordinal` the owning mapset (for a map) or map (for a field)."""
+    lines = [ln.rstrip("\r") for ln in text.split("\n")]
+    items: list[dict[str, Any]] = []
+    mapset = map_ = None
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith(("*", ".*")):
+            i += 1
+            continue
+        first = i
+        segments = [lines[i][:71]]
+        while len(lines[i]) > 71 and lines[i][71] != " " and i + 1 < len(lines):
+            i += 1
+            segments.append(lines[i][15:71])
+        i += 1
+        head = _BMS_HEAD.match(segments[0])
+        if not head:
+            continue
+        kind = _BMS_KIND[head.group(2).upper()]
+        body = segments[0][head.end() :]
+        lead = len(body) - len(body.lstrip())
+        body = body[lead:]
+        boundaries, offset = set(), len(body)
+        for seg in segments[1:]:
+            boundaries.add(offset)
+            offset += len(seg)
+        row: dict[str, Any] = {
+            "kind": kind,
+            "name": head.group(1),
+            "pos_line": None,
+            "pos_column": None,
+            "length": None,
+            "attrb": None,
+            "picin": None,
+            "picout": None,
+            "initial": None,
+            "occurs": None,
+            "line": first + 1,
+        }
+        final = False
+        for op in _bms_operands(body + "".join(segments[1:]), boundaries):
+            key = op[0].upper()
+            value = "".join(op[2:]) if len(op) > 2 and op[1] == "=" else ""
+            if key == "TYPE" and value.upper() == "FINAL":
+                final = True
+            if kind != "field":
+                continue
+            nums = re.fullmatch(r"\((\d+),(\d+)\)", value)
+            if key == "POS" and nums:
+                row["pos_line"], row["pos_column"] = int(nums.group(1)), int(nums.group(2))
+            elif key in ("LENGTH", "OCCURS") and value.isdigit():
+                row[key.lower()] = int(value)
+            elif key == "ATTRB":
+                row["attrb"] = value.strip("()").upper()
+            elif key in ("PICIN", "PICOUT", "INITIAL"):
+                lit = value[1:-1] if len(value) > 1 and value.startswith("'") and value.endswith("'") else value
+                row[key.lower()] = lit.replace("''", "'").replace("&&", "&")
+        if kind == "mapset" and final:
+            mapset = map_ = None
+            continue
+        row["ordinal"] = len(items)
+        if kind == "mapset":
+            row["parent_ordinal"] = None
+            mapset, map_ = row["ordinal"], None
+        elif kind == "map":
+            row["parent_ordinal"] = mapset
+            map_ = row["ordinal"]
+        else:
+            row["parent_ordinal"] = map_ if map_ is not None else mapset
+        items.append(row)
+    return items
+
+
+def bms_layout_units(items: list[dict[str, Any]]) -> set[str]:
+    """The BMS comparison unit: one string per mapset, map and field carrying its
+    owner and every parsed column, e.g. `field BNK1CA.CUSTNO @6,23 len=10
+    attrb=NORM,NUM,FSET`. Works on this reader's items and on the engine's rows
+    (the same keys). An unnamed field (a screen literal) is `.` + its position,
+    so two literals are two units."""
+    by_ordinal = {it["ordinal"]: it for it in items}
+    out: set[str] = set()
+    for it in items:
+        name = (it.get("name") or "").upper()
+        if it["kind"] != "field":
+            parent = by_ordinal.get(it.get("parent_ordinal"))
+            owner = f"{(parent.get('name') or '').upper()}." if parent else ""
+            out.add(f"{it['kind']} {owner}{name}")
+            continue
+        parent = by_ordinal.get(it.get("parent_ordinal"))
+        owner = (parent.get("name") or "").upper() if parent else ""
+        pos = f"@{it['pos_line']},{it['pos_column']}" if it.get("pos_line") is not None else "@?"
+        unit = f"field {owner}.{name} {pos} len={it.get('length')}"
+        for col in ("attrb", "picin", "picout", "occurs", "initial"):
+            if it.get(col) is not None:
+                unit += f" {col}={it[col]!r}" if col == "initial" else f" {col}={it[col]}"
+        out.add(unit)
+    return out
+
+
+def bms_symbolic_names(items: list[dict[str, Any]]) -> set[str]:
+    """`MAP.FIELD` for every NAMED field -- exactly the names that become
+    `<field>L/F/A/I/O` in the generated symbolic map."""
+    by_ordinal = {it["ordinal"]: it for it in items}
+    out: set[str] = set()
+    for it in items:
+        if it["kind"] == "field" and it.get("name"):
+            parent = by_ordinal.get(it.get("parent_ordinal"))
+            out.add(f"{(parent.get('name') or '').upper() if parent else ''}.{it['name'].upper()}")
+    return out
+
+
+def symbolic_map_names(copybook: Path) -> set[str]:
+    """`MAP.FIELD` from a GENERATED symbolic-map copybook (IBM's DFHMAPS output):
+    each `01 <map>I` input record's `<field>I` items, the suffix dropped. Read with
+    this tool's own COBOL data-item reader."""
+    out: set[str] = set()
+    root = None
+    for it in _data_items(Source(copybook)):
+        if it["level"] == 1:
+            root = it["name"][:-1] if it["name"].endswith("I") else None
+        elif root and it["name"] != "FILLER" and it["name"].endswith("I") and it["level"] == 2:
+            out.add(f"{root}.{it['name'][:-1]}")
+    return out
+
+
+def draft_bms(repo: Path) -> dict[str, dict[str, Any]]:
+    """Drafted screen-field layouts for every BMS source in `repo` (#3347). They
+    adjudicate a differential delta only once a map is signed off with
+    `fields_validated` -- the records_validated precedent (#3246/#3250)."""
+    out: dict[str, dict[str, Any]] = {}
+    for p in sorted(repo.rglob("*")):
+        if p.is_file() and p.suffix.lower() in BMS_EXTS and ".git" not in p.parts:
+            out[p.relative_to(repo).as_posix()] = {
+                "fields": bms_screen_items(p.read_text(encoding="utf-8", errors="ignore")),
+                "fields_validated": False,
+                "verification": {"status": "draft", "notes": []},
+            }
+    return out
+
+
+# ==============================================================================
+# JCL DD bindings with symbolic parameters resolved (#3345)
+# ==============================================================================
+# This tool's own reading of a JCL member: it works on the RAW file (it drops
+# `//*` comments and columns 73-80 itself, never seeing the PRISM stream), splits
+# each statement with a character scanner rather than the engine's statement
+# regex, and substitutes symbols with a hand-written scan rather than a regex
+# `sub`. It shares the engine's CONTRACT -- which statements bind a DSN, how
+# SET / PROC defaults / EXEC overrides combine (EXEC > PROC default > SET), what
+# counts as statically resolvable inside one file -- not its code, so an agreement
+# is evidence and a disagreement is a finding.
+JCL_EXTS = (".jcl", ".prc")
+_JCL_OPS = {"JOB", "EXEC", "DD", "PROC", "PEND", "SET", "INCLUDE", "JCLLIB"}
+_JCL_NAME_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$")
+_JCL_EXEC_PARAMS = {
+    "PGM", "PROC", "PARM", "PARMDD", "COND", "REGION", "REGIONX", "TIME", "ACCT", "ADDRSPC",
+    "DPRTY", "PERFORM", "RD", "CCSID", "DYNAMNBR", "MEMLIMIT", "TVSMSG", "TVSAMCOM",
+}  # fmt: skip
+
+
+def _jcl_field_end(text: str) -> int:
+    """Index of the first blank outside apostrophes -- where the operand field ends."""
+    quoted = False
+    for i, ch in enumerate(text):
+        if ch == "'":
+            quoted = not quoted
+        elif ch in " \t" and not quoted:
+            return i
+    return len(text)
+
+
+def _jcl_key_statements(text: str) -> list[tuple[int, str, str, str]]:
+    """(line, NAME, OP, operand field) per logical statement, continuations joined."""
+    out: list[list] = []
+    open_stmt = False
+    for no, raw in enumerate(text.splitlines(), 1):
+        line = raw[:72].rstrip()
+        if not line.startswith("//") or line.startswith("//*"):
+            if not line.startswith("//*"):
+                open_stmt = False
+            continue
+        body = line[2:]
+        name_end = 0
+        while name_end < len(body) and body[name_end] not in " \t":
+            name_end += 1
+        name, rest = body[:name_end].upper(), body[name_end:].lstrip()
+        op_end = 0
+        while op_end < len(rest) and rest[op_end] not in " \t":
+            op_end += 1
+        op = rest[:op_end].upper()
+        if op in _JCL_OPS and all(c in _JCL_NAME_CHARS or c == "_" for c in name):
+            operands = rest[op_end:].lstrip()
+            operands = operands[: _jcl_field_end(operands)]
+            out.append([no, name, op, operands])
+            open_stmt = operands.endswith(",")
+        elif open_stmt and not name:
+            more = body.lstrip()
+            more = more[: _jcl_field_end(more)]
+            out[-1][3] += more
+            open_stmt = more.endswith(",")
+        else:
+            open_stmt = False
+    return [tuple(s) for s in out]
+
+
+def _jcl_key_split(field: str) -> list[tuple[Optional[str], str]]:
+    """Top-level comma split (not inside '...' or (...)) into (KEY or None, value)."""
+    pieces, buf, depth, quoted = [], [], 0, False
+    for ch in field:
+        if ch == "'":
+            quoted = not quoted
+        if not quoted and ch == "(":
+            depth += 1
+        if not quoted and ch == ")" and depth:
+            depth -= 1
+        if ch == "," and not quoted and depth == 0:
+            pieces.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    pieces.append("".join(buf))
+    out: list[tuple[Optional[str], str]] = []
+    for p in pieces:
+        eq = p.find("=")
+        head = p[:eq] if eq > 0 else ""
+        if head and head[0].isalpha() or head[:1] in ("@", "#", "$"):
+            out.append((head.upper(), p[eq + 1 :]))
+        elif p:
+            out.append((None, p))
+    return out
+
+
+def _jcl_key_value(v: str) -> str:
+    if len(v) > 1 and v[0] == "'" and v[-1] == "'":
+        return v[1:-1].replace("''", "'")
+    return v
+
+
+def _jcl_key_symbols(field: str, null_is_value: bool) -> dict[str, str]:
+    table = {}
+    for k, v in _jcl_key_split(field):
+        if k is None or "." in k or len(k) > 8 or not all(c in _JCL_NAME_CHARS for c in k):
+            continue
+        if v or null_is_value:
+            table[k] = _jcl_key_value(v)
+    return table
+
+
+def _jcl_key_subst(text: str, table: dict[str, str], depth: int = 0) -> tuple[str, bool]:
+    """Substitute `&NAME` / `&NAME.` by scanning; (result, every reference resolved)."""
+    out, i, ok = [], 0, True
+    upper = text.upper()
+    while i < len(text):
+        if text[i] != "&":
+            out.append(text[i])
+            i += 1
+            continue
+        if text[i + 1 : i + 2] == "&":  # a temporary-dataset prefix, not a symbol
+            out.append("&&")
+            ok = False
+            i += 2
+            continue
+        j = i + 1
+        while j < len(text) and j - i <= 8 and upper[j] in _JCL_NAME_CHARS:
+            j += 1
+        name = upper[i + 1 : j]
+        end = j + 1 if text[j : j + 1] == "." else j
+        if not name or name[0].isdigit() or name not in table or depth >= 8:
+            out.append(text[i:end])
+            ok = False
+        else:
+            val, sub_ok = _jcl_key_subst(table[name], table, depth + 1)
+            out.append(val)
+            ok = ok and sub_ok
+        i = end
+    return "".join(out), ok
+
+
+def _jcl_key_dsn(dsn: str, table: dict[str, str]) -> Optional[str]:
+    text, ok = _jcl_key_subst(dsn, table)
+    if not ok:
+        return None
+    for stop in (" ", "\t", ","):
+        text = text.split(stop, 1)[0]
+    return text.upper() or None
+
+
+def jcl_dataset_bindings(text: str) -> list[dict[str, Any]]:
+    """Every DD -> DSN binding in one JCL member, with the DSN's symbols resolved.
+
+    Each binding: line, step, dd, dsn (as written, upper), resolved (None unless
+    every symbol resolved) and status (literal / resolved / proc_default /
+    ambiguous / unresolved). `&&TEMP` and `*` (backward reference) DSNs are not
+    bindings; override DDs (`//STEP.DD`) and cross-member PROC callers are out of
+    scope -- the same contract the engine states."""
+    rows: list[dict[str, Any]] = []
+    job = False
+    sets: dict[str, str] = {}
+    procs: list[dict[str, Any]] = []
+    named: dict[str, dict[str, Any]] = {}
+    proc: Optional[dict[str, Any]] = None
+    step, last_dd = "", ""
+    for no, name, op, field in _jcl_key_statements(text):
+        if op == "JOB":
+            job = True
+        elif op == "SET":
+            scope = proc["sets"] if proc is not None else sets
+            for k, v in _jcl_key_symbols(field, True).items():
+                scope[k] = _jcl_key_subst(v, {**sets, **scope})[0]
+        elif op == "PROC":
+            proc = {
+                "defaults": _jcl_key_symbols(field, False),
+                "sets": {},
+                "rows": [],
+                "calls": [],
+                "sets0": dict(sets),
+            }
+            procs.append(proc)
+            if job and name:
+                named[name] = proc
+            step, last_dd = "", ""
+        elif op == "PEND":
+            proc, step, last_dd = None, "", ""
+        elif op == "EXEC":
+            step, last_dd = name, ""
+            ops = _jcl_key_split(field)
+            if proc is None and not any(k == "PGM" for k, _ in ops):
+                target = next((v for k, v in ops if k == "PROC"), None) or next((v for k, v in ops if k is None), "")
+                if target.upper() in named:
+                    over = {
+                        k: _jcl_key_subst(v, sets)[0]
+                        for k, v in _jcl_key_symbols(field, True).items()
+                        if k not in _JCL_EXEC_PARAMS
+                    }
+                    named[target.upper()]["calls"].append((dict(sets), over))
+        elif op == "DD":
+            if name:
+                last_dd = name
+            dd = name or last_dd
+            dsn = next((v for k, v in _jcl_key_split(field) if k in ("DSN", "DSNAME")), None)
+            if not dd or not dsn or dsn.startswith(("&&", "*", "'")):
+                continue
+            row = {"line": no, "step": step or None, "dd": dd, "dsn": dsn.upper()}
+            rows.append(row)
+            if proc is not None:
+                proc["rows"].append((row, dict(proc["sets"])))
+            elif "&" not in dsn:
+                row.update(resolved=row["dsn"], status="literal")
+            else:
+                got = _jcl_key_dsn(dsn, sets)
+                row.update(resolved=got, status="resolved" if got else "unresolved")
+    for p in procs:
+        for row, local in p["rows"]:
+            if "&" not in row["dsn"]:
+                row.update(resolved=row["dsn"], status="literal")
+            elif not p["calls"]:
+                got = _jcl_key_dsn(row["dsn"], {**p["sets0"], **local, **p["defaults"]})
+                row.update(resolved=got, status="proc_default" if got else "unresolved")
+            else:
+                seen = {_jcl_key_dsn(row["dsn"], {**s0, **local, **p["defaults"], **ov}) for s0, ov in p["calls"]}
+                if None in seen:
+                    row.update(resolved=None, status="unresolved")
+                elif len(seen) > 1:
+                    row.update(resolved=None, status="ambiguous")
+                else:
+                    row.update(resolved=seen.pop(), status="resolved")
+    return rows
+
+
+def jcl_dsn_values(rows: list[dict[str, Any]]) -> set[str]:
+    """The comparison unit: `STEP/DD@line=RESOLVED[status]`, one per binding. Works on
+    this reader's rows and on the engine's (keys step_name/dd_name/dsn_resolved/...)."""
+    out = set()
+    for r in rows:
+        step = r.get("step", r.get("step_name")) or "-"
+        dd = r.get("dd", r.get("dd_name"))
+        resolved = r.get("resolved", r.get("dsn_resolved")) or "?"
+        status = r.get("status", r.get("dsn_resolution"))
+        out.add(f"{step}/{dd}@{r['line']}={resolved}[{status}]")
+    return out
+
+
+def draft_jcl(repo: Path) -> dict[str, dict[str, Any]]:
+    """Drafted JCL DD bindings (with resolved DSNs) for every JCL member in `repo`
+    (#3345). They adjudicate a differential delta only once a member is signed off
+    with `dsns_validated` -- the records_validated precedent (#3246)."""
+    out: dict[str, dict[str, Any]] = {}
+    for p in sorted(repo.rglob("*")):
+        if p.is_file() and p.suffix.lower() in JCL_EXTS and ".git" not in p.parts:
+            rows = jcl_dataset_bindings(p.read_text(encoding="utf-8", errors="ignore"))
+            if rows:
+                out[p.relative_to(repo).as_posix()] = {
+                    "bindings": rows,
+                    "dsns_validated": False,
+                    "verification": {"status": "draft", "notes": []},
+                }
+    return out
+
+
+# ==============================================================================
 # Draft
 # ==============================================================================
 def _operand(src: Source, offset: int) -> tuple[str, str]:
@@ -803,6 +1416,9 @@ def draft(repo: Path, corpus: str, url: str, ref: str) -> tuple[dict[str, Any], 
         "ref": ref,
         "programs": {},
         "pli_programs": draft_pli(repo),  # #3250
+        "sql_tables": draft_sql_tables(repo),  # #3344
+        "bms_maps": draft_bms(repo),  # #3347
+        "jcl_jobs": draft_jcl(repo),  # #3345
     }
     report = [f"# Draft reachability evidence: {corpus} @ {ref[:8]}", ""]
     for p in programs:
@@ -966,6 +1582,18 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
         # #3250: PL/I DECLARE leaf fields (dotted paths), per PL/I file. Truth is
         # this tool's own PL/I reader; there is no PL/I forge; engine is record_data.
         "PL/I record fields",
+        # #3344: DB2 DECLARE TABLE columns (full shape key), per declaring file.
+        # Truth is this tool's own terminator-cut reader; no forge reads them;
+        # engine is sql_table_data.
+        "DB2 table columns",
+        # #3347: BMS screen-field layout units (mapset/map/field with position,
+        # length and attributes), per map source. Truth is this tool's own BMS
+        # reader; there is no BMS forge; engine is screen_field_data.
+        "BMS screen fields",
+        # #3345: JCL DD bindings with their symbolic-parameter-resolved DSN, per JCL
+        # member. Truth is this tool's own JCL reader; there is no JCL forge; engine
+        # is dataset_data (dsn_resolved + dsn_resolution).
+        "JCL resolved DSNs",
     ]
     agg: dict[str, dict[str, list[set]]] = {f: {"truth": [], "forge": [], "engine": []} for f in fields}
 
@@ -1109,6 +1737,61 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
             pli_record_fields(engine_items, "parent_ordinal") if engine_items is not None else None,
         )
 
+    for rel, k in key.get("sql_tables", {}).items():
+        ef = ir.files.get(rel) if ir else None
+        add(
+            "DB2 table columns",
+            rel,
+            sql_column_keys(k.get("columns", [])),
+            None,
+            (
+                {
+                    sql_column_key(t.name, c.name, c.sql_type, c.length, c.scale, c.nullable)
+                    for t in ef.sql_tables
+                    for c in t.columns
+                }
+                if ef
+                else None
+            ),
+        )
+
+    for rel, k in key.get("bms_maps", {}).items():
+        ef = ir.files.get(rel) if ir else None
+        engine_rows = [{c: getattr(sf, c) for c in BMS_ITEM_KEYS} for sf in ef.screen_fields] if ef else None
+        add(
+            "BMS screen fields",
+            rel,
+            bms_layout_units(k.get("fields", [])),
+            None,
+            bms_layout_units(engine_rows) if engine_rows is not None else None,
+        )
+
+    for rel, k in key.get("jcl_jobs", {}).items():
+        ef = ir.files.get(rel) if ir else None
+        add(
+            "JCL resolved DSNs",
+            rel,
+            jcl_dsn_values(k.get("bindings", [])),
+            None,
+            (
+                jcl_dsn_values(
+                    [
+                        {
+                            "step_name": d.step_name,
+                            "dd_name": d.dd_name,
+                            "dsn_resolved": d.dsn_resolved,
+                            "dsn_resolution": d.dsn_resolution,
+                            "line": d.line,
+                        }
+                        for d in ef.datasets
+                        if d.is_binding
+                    ]
+                )
+                if ef
+                else None
+            ),
+        )
+
     result: dict[str, Any] = {
         "corpus": key["corpus"],
         "ref": key["ref"],
@@ -1159,6 +1842,15 @@ def main() -> int:
     a = sub.add_parser("add-pli")
     a.add_argument("repo", type=Path)
     a.add_argument("--key", type=Path, required=True)
+    q = sub.add_parser("add-sql-tables")
+    q.add_argument("repo", type=Path)
+    q.add_argument("--key", type=Path, required=True)
+    b = sub.add_parser("add-bms")
+    b.add_argument("repo", type=Path)
+    b.add_argument("--key", type=Path, required=True)
+    j = sub.add_parser("add-jcl")
+    j.add_argument("repo", type=Path)
+    j.add_argument("--key", type=Path, required=True)
     args = ap.parse_args()
 
     repo = args.repo.resolve()
@@ -1180,6 +1872,36 @@ def main() -> int:
         key["pli_programs"] = existing
         args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
         print(f"drafted {len(existing)} PL/I files -> {args.key}")
+        return 0
+    if args.cmd == "add-sql-tables":
+        # #3344: same rule as add-pli -- refresh drafts, never clobber a sign-off.
+        existing_sql = key.get("sql_tables", {})
+        for rel, entry in draft_sql_tables(repo).items():
+            if not existing_sql.get(rel, {}).get("sql_tables_validated"):
+                existing_sql[rel] = entry
+        key["sql_tables"] = existing_sql
+        args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+        print(f"drafted {len(existing_sql)} DECLARE TABLE files -> {args.key}")
+        return 0
+    if args.cmd == "add-bms":
+        # Refresh drafts, but never clobber a map someone already signed off.
+        existing = key.get("bms_maps", {})
+        for rel, entry in draft_bms(repo).items():
+            if not existing.get(rel, {}).get("fields_validated"):
+                existing[rel] = entry
+        key["bms_maps"] = existing
+        args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+        print(f"drafted {len(existing)} BMS maps -> {args.key}")
+        return 0
+    if args.cmd == "add-jcl":
+        # #3345: the add-pli discipline -- refresh drafts, keep signed-off members.
+        jobs = key.get("jcl_jobs", {})
+        for rel, entry in draft_jcl(repo).items():
+            if not jobs.get(rel, {}).get("dsns_validated"):
+                jobs[rel] = entry
+        key["jcl_jobs"] = jobs
+        args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+        print(f"drafted {len(jobs)} JCL members -> {args.key}")
         return 0
     result, md = score(repo, key, args.db)
     if args.md:

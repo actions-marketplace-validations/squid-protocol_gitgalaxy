@@ -394,13 +394,23 @@ class StateRehydrator:
                         "line": int(r["line"] or 0),
                     },
                 )
+                # #3345: the resolved-DSN pair is per-file (one JCL file determines
+                # it), so it is restored like the raw DSN. A baseline written
+                # before #3345 lacks the columns; its rows come back without the
+                # keys, exactly the shape the extractor gives a COBOL row.
+                resolved_cols = (
+                    "ds.dsn_resolved, ds.dsn_resolution"
+                    if _has_table(cursor, "dataset_data") and _has_column(cursor, "dataset_data", "dsn_resolution")
+                    else "NULL AS dsn_resolved, NULL AS dsn_resolution"
+                )
                 datasets_by_file = _restore_child_table(
                     cursor,
                     repo_name,
                     baseline_hash,
                     "dataset_data",
-                    "SELECT fd.file_path AS _fp, ds.step_name, ds.internal_name, ds.assign_name, "
-                    "ds.dd_name, ds.access_modes AS modes, ds.dsn, ds.line_number AS line "
+                    "SELECT fd.file_path AS _fp, ds.step_name, ds.internal_name, ds.assign_name, "  # noqa: S608 -- resolved_cols is one of two literals; values are bound
+                    "ds.dd_name, ds.access_modes AS modes, ds.dsn, ds.line_number AS line, "
+                    f"{resolved_cols} "
                     "FROM dataset_data ds JOIN file_data fd ON ds.file_id = fd.id "
                     "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY ds.id",
                     lambda r: {
@@ -411,6 +421,11 @@ class StateRehydrator:
                         "modes": (r["modes"] or "").split(",") if r["modes"] else [],
                         "dsn": r["dsn"],
                         "line": int(r["line"] or 0),
+                        **(
+                            {"dsn_resolved": r["dsn_resolved"], "dsn_resolution": r["dsn_resolution"]}
+                            if r["dsn_resolution"]
+                            else {}
+                        ),
                     },
                 )
                 # Aliased to the extractor's own payload key names (level_number ->
@@ -472,6 +487,62 @@ class StateRehydrator:
                     },
                 )
 
+                # #3344: DB2 DECLARE TABLE / DCLGEN columns, aliased back to the
+                # extractor's payload keys (table_name -> table, column_name ->
+                # name). A pre-#3344 baseline has no table and restores nothing.
+                sql_tables_by_file = _restore_child_table(
+                    cursor,
+                    repo_name,
+                    baseline_hash,
+                    "sql_table_data",
+                    'SELECT fd.file_path AS _fp, st.table_name AS "table", st.table_line, st.colno, st.column_name AS name, '
+                    "st.sql_type, st.length, st.scale, st.nullable, st.attributes, st.line_number AS line "
+                    "FROM sql_table_data st JOIN file_data fd ON st.file_id = fd.id "
+                    "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY st.id",
+                    lambda r: {
+                        "table": r["table"],
+                        "table_line": int(r["table_line"] or 0),
+                        "colno": int(r["colno"] or 0),
+                        "name": r["name"],
+                        "sql_type": r["sql_type"],
+                        "length": r["length"],
+                        "scale": r["scale"],
+                        "nullable": bool(r["nullable"]),
+                        "attributes": r["attributes"],
+                        "line": int(r["line"] or 0),
+                    },
+                )
+
+                # #3347: BMS screen-field layouts, aliased to the extractor's payload
+                # keys (field_name -> name, initial_value -> initial).
+                screen_fields_by_file = _restore_child_table(
+                    cursor,
+                    repo_name,
+                    baseline_hash,
+                    "screen_field_data",
+                    "SELECT fd.file_path AS _fp, sf.kind, sf.ordinal, sf.parent_ordinal, "
+                    "sf.field_name AS name, sf.pos_line, sf.pos_column, sf.length, sf.attrb, sf.picin, "
+                    "sf.picout, sf.initial_value AS initial, sf.occurs, sf.attributes, sf.line_number AS line "
+                    "FROM screen_field_data sf JOIN file_data fd ON sf.file_id = fd.id "
+                    "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY sf.file_id, sf.ordinal",
+                    lambda r: {
+                        "kind": r["kind"],
+                        "ordinal": int(r["ordinal"] or 0),
+                        "parent_ordinal": r["parent_ordinal"],
+                        "name": r["name"],
+                        "pos_line": r["pos_line"],
+                        "pos_column": r["pos_column"],
+                        "length": r["length"],
+                        "attrb": r["attrb"],
+                        "picin": r["picin"],
+                        "picout": r["picout"],
+                        "initial": r["initial"],
+                        "occurs": r["occurs"],
+                        "attributes": r["attributes"],
+                        "line": int(r["line"] or 0),
+                    },
+                )
+
                 for rel_path, node in ram_state.items():
                     node["functions"] = funcs_by_file.get(rel_path, [])
                     node["classes"] = classes_by_file.get(rel_path, [])
@@ -479,6 +550,8 @@ class StateRehydrator:
                     node["dataset_bindings"] = datasets_by_file.get(rel_path, [])
                     node["record_layouts"] = records_by_file.get(rel_path, [])
                     node["transaction_defs"] = transactions_by_file.get(rel_path, [])
+                    node["sql_tables"] = sql_tables_by_file.get(rel_path, [])
+                    node["screen_fields"] = screen_fields_by_file.get(rel_path, [])
             except sqlite3.Error as fc_err:
                 print(f"⚠️ Could not rehydrate functions/classes (structure counts may drift): {fc_err}")
 

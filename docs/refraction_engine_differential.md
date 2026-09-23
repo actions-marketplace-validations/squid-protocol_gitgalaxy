@@ -47,6 +47,7 @@ hlasm 1). pli reads 8 instead of the issue's 7.
 | paragraph inventory | graveyard regex | `function_data` | **neither is clean** (D1). The DB is carried as data only |
 | dead paragraphs | graveyard reachability | `usage_status` | **not replaceable** (D2) |
 | DATA DIVISION items, FD record layouts | `cobol_schema_forge` (flat) | `record_data` | **DB** since #3246 — the full item tree (level/PIC/USAGE/OCCURS/REDEFINES/VALUE) and FD→file binding; a field the engine carries and the forge's flat single-line reader drops is `forge_flat_schema` |
+| DB2 `DECLARE TABLE` / DCLGEN columns | — (no forge reads them) | `sql_table_data` | **DB** since #3344 — compared against the answer key's own raw-file reader as `sql_column` deltas (full column shape); 24/24 on CBSA |
 | orphaned variables | graveyard | — | **stated absence**: the by-name unused-variable count is a graveyard signal, not a layout |
 | DD names, OPEN modes, dataset lineage | forge / DAG architect | `dataset_data` | **DB** since #3201 — exact against the answer key on both corpora (see the #3200/#3201 update) |
 | unresolved CALLs | DAG architect | `call_site_data` | **DB** since #3200 — every call site, resolved or not, with its verb, form and line |
@@ -545,3 +546,43 @@ leaf fields. The first run did not: the engine missed fields in 179 DSF files, b
 trailing comment but not the column-73 sequence number after it, and two such orphaned numbers in a
 row hid the next `DCL`. The engine now skips any run of them.
 
+## Update: DB2 DECLARE TABLE / DCLGEN schemas (#3344) — 2026-09-23
+
+`EXEC SQL DECLARE <table> TABLE (...)` columns -- inline or in a DCLGEN member -- are now a fact
+channel (`sql_table_data`, `EngineFile.sql_tables`) and a compared datum. As with PL/I no forge reads
+them, so the compared side is the answer key's own reader (`cobol_answer_key.sql_table_columns`: the
+RAW file, its own comment and sequence-column handling, each statement cut at its terminator --
+`END-EXEC` / `;` -- where the engine walks the PRISM stream to the balancing parenthesis). The unit is
+the column's full shape, `TABLE.COLUMN TYPE(len,scale) NOT NULL|NULLABLE`, reported as `sql_column`
+deltas and `sql_columns_key` / `_db` / `_agree` in the summary. A delta is `unexplained` (never
+`stated_absence`) until the declaring file is signed off with `sql_tables_validated`.
+
+On CBSA the two agree on every column of ACCDB2/CONTDB2/PROCDB2 (24/24; ACCDB2 and CONTDB2 are now
+in the excerpt, as BANKDATA's `EXEC SQL INCLUDE`d members -- which also surfaces 2 `exec_sql_include`
+copybook deltas in the excerpt baseline). zopeneditor has no DB2. carddemo's DCLGEN members use a
+`.dcl` extension, which no language claims, so they are not scanned (a detection follow-up, not this
+channel's).
+
+## Update: BMS screen-field layouts (#3347) — 2026-09-23
+
+BMS map sources are now a compared datum. The engine extracts every `DFHMSD`/`DFHMDI`/`DFHMDF` into
+`screen_field_data` (a `bms` boundary dialect, `core/bms_screen_fields.py`). Two comparisons run per
+map source:
+
+- **`bms_field`**: the answer key's own BMS reader (`cobol_answer_key.bms_screen_items`, over the RAW
+  file with its own column slicing and one tokenizer regex) vs the engine. The unit is one string per
+  mapset, map and field carrying its owner and every parsed column
+  (`field BNK1CA.CUSTNO @6,23 len=10 attrb=NORM,NUM,FSET`), so a position, length, attribute or
+  INITIAL disagreement is a delta, not only a missing name. INDEPENDENT; drafted, so it adjudicates
+  once a map is `fields_validated`.
+- **`bms_symbolic_field`**: where the repository carries the symbolic-map copybook generated from a
+  map (carddemo's `app/cpy-bms`), that copybook's `<field>I` names vs the engine's named fields. The
+  copybook is IBM's DFHMAPS output, so this checks the engine against the assembler itself. Before
+  #3347 the differential saw these copybooks only as the `bms_symbolic_map` cause.
+
+Both are `unexplained` on a delta, never `stated_absence`. Measured: the two readers agree on all 41
+maps across carddemo (21), CBSA (10) and the crucible's `data/bms` (10), 2,181 units; the engine
+agrees with all 17 of carddemo's generated symbolic-map copybooks. The excerpts gained carddemo's
+`COCRDLI.bms` (beside its committed `COCRDLI.CPY`) and CBSA's `BNK1CAM`/`BNK1ACC`/`BNK1UAM`; CBSA's
+excerpt `COPY BNK1CAM` delta now classifies as `bms_symbolic_map` (the map is present) instead of
+the key's `old-parser defect`, and unexplained stays 0 on every excerpt and full corpus.

@@ -97,7 +97,7 @@ class AuditRecorder:
         return value
 
     def _mainframe_facts_block(self, file_data):
-        """The Named System Facts for one file (#3200/#3201/#3246/#3250), or {} if none.
+        """The Named System Facts for one file (#3200/#3201/#3246/#3250/#3344), or {} if none.
 
         The forensic report is the VERBOSE surface (unlike the token-optimized LLM
         brief, which shows only record roots), so this carries the FULL detail:
@@ -121,6 +121,8 @@ class AuditRecorder:
             ]
         datasets = file_data.get("dataset_bindings") or []
         if datasets:
+            # #3345: the resolved DSN rides only on a binding whose DSN names a
+            # symbol, so a literal DSN (and every COBOL row) is unchanged.
             block["Dataset Bindings"] = [
                 {
                     "DD Name": d.get("dd_name"),
@@ -130,6 +132,11 @@ class AuditRecorder:
                     "DSN": d.get("dsn"),
                     "Step": d.get("step_name"),
                     "Line": d.get("line", 0),
+                    **(
+                        {"Resolved DSN": d.get("dsn_resolved"), "DSN Resolution": d["dsn_resolution"]}
+                        if d.get("dsn_resolution") not in (None, "literal")
+                        else {}
+                    ),
                 }
                 for d in datasets
             ]
@@ -156,6 +163,45 @@ class AuditRecorder:
                     **({"Attributes": it["attributes"]} if it.get("attributes") else {}),
                 }
                 for it in records
+            ]
+        # #3344: DB2 `EXEC SQL DECLARE ... TABLE` columns, mirroring sql_table_data.
+        sql_tables = file_data.get("sql_tables") or []
+        if sql_tables:
+            block["SQL Tables"] = [
+                {
+                    "Table": c.get("table"),
+                    "Column No": c.get("colno"),
+                    "Column": c.get("name"),
+                    "SQL Type": c.get("sql_type"),
+                    "Length": c.get("length"),
+                    "Scale": c.get("scale"),
+                    "Nullable": c.get("nullable"),
+                    "Attributes": c.get("attributes"),
+                    "Line": c.get("line", 0),
+                }
+                for c in sql_tables
+            ]
+        screen = file_data.get("screen_fields") or []
+        if screen:
+            # #3347: BMS mapset/map/field rows, mirroring screen_field_data.
+            block["Screen Fields"] = [
+                {
+                    "Kind": sf.get("kind"),
+                    "Name": sf.get("name"),
+                    "POS Line": sf.get("pos_line"),
+                    "POS Column": sf.get("pos_column"),
+                    "Length": sf.get("length"),
+                    "ATTRB": sf.get("attrb"),
+                    "PICIN": sf.get("picin"),
+                    "PICOUT": sf.get("picout"),
+                    "Initial": sf.get("initial"),
+                    "Occurs": sf.get("occurs"),
+                    "Attributes": sf.get("attributes"),
+                    "Ordinal": sf.get("ordinal"),
+                    "Parent Ordinal": sf.get("parent_ordinal"),
+                    "Line": sf.get("line", 0),
+                }
+                for sf in screen
             ]
         return block
 

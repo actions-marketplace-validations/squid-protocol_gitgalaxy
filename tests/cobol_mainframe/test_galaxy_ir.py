@@ -167,6 +167,63 @@ def test_a_pre_3250_db_loads_pli_records_without_attributes(scanned_pli, tmp_pat
     assert all(item.attributes is None for item in ef.data_items)
 
 
+# #3347: BMS screen-field layouts ride their own screen_field_data table. A REAL
+# scan, so the top-level `boundary_extraction: "bms"` declaration is proven to
+# survive the config pipeline (#2806). The map is cics-banking-sample-application-
+# cbsa's BNK1CAM shape: `*` continuation, an INITIAL literal continued mid-word.
+BNK1CAM = "\n".join(
+    [
+        f"{'BNK1CAM  DFHMSD TYPE=&SYSPARM,MODE=INOUT,LANG=COBOL,STORAGE=AUTO,':<71}*",
+        "               TIOAPFX=YES",
+        f"{'BNK1CA   DFHMDI SIZE=(24,80),':<71}*",
+        "               COLUMN=1,LINE=1",
+        f"{'         DFHMDF POS=(3,1),LENGTH=57,ATTRB=(NORM,PROT),COLOR=TURQUOISE,':<71}*",
+        f"{'               INITIAL=' + chr(39) + 'Please provide the requested information and pr':<71}*",
+        "               ess Enter.'",
+        f"{'CUSTNO   DFHMDF POS=(6,23),LENGTH=10,ATTRB=(NORM,NUM,FSET),':<71}*",
+        "               COLOR=GREEN,HILIGHT=UNDERLINE",
+        "*OLDFLD  DFHMDF POS=(7,23),LENGTH=10",
+        "         DFHMSD TYPE=FINAL",
+        "         END",
+        "",
+    ]
+)
+
+
+@pytest.fixture(scope="module")
+def scanned_bms(tmp_path_factory):
+    base = tmp_path_factory.mktemp("galaxy_ir_bms")
+    repo = base / "bmsrepo"
+    (repo / "bms_src").mkdir(parents=True)
+    (repo / "bms_src" / "BNK1CAM.bms").write_text(BNK1CAM, encoding="utf-8")
+    return scan_to_db(repo, base / "scan")
+
+
+def test_bms_maps_load_as_screen_fields(scanned_bms):
+    ef = load_galaxy_ir(scanned_bms).files["bms_src/BNK1CAM.bms"]
+    assert ef.language == "bms"
+    assert [(sf.kind, sf.name, sf.parent_ordinal) for sf in ef.screen_fields] == [
+        ("mapset", "BNK1CAM", None),
+        ("map", "BNK1CA", 0),
+        ("field", None, 1),
+        ("field", "CUSTNO", 1),
+    ]
+    literal, custno = ef.screen_fields[2:]
+    assert literal.initial == "Please provide the requested information and press Enter."
+    assert (literal.is_symbolic, custno.is_symbolic) == (False, True)
+    assert (custno.pos_line, custno.pos_column, custno.length, custno.attrb) == (6, 23, 10, "NORM,NUM,FSET")
+    assert custno.attributes == "COLOR=GREEN,HILIGHT=UNDERLINE"
+    assert ef.screen_fields[1].attributes == "SIZE=(24,80),COLUMN=1,LINE=1"
+
+
+def test_a_pre_3347_db_loads_with_no_screen_fields(scanned_bms, tmp_path):
+    copy = tmp_path / "old.db"
+    shutil.copy(scanned_bms, copy)
+    with sqlite3.connect(copy) as conn:
+        conn.execute("DROP TABLE screen_field_data")
+    assert load_galaxy_ir(copy).files["bms_src/BNK1CAM.bms"].screen_fields == []
+
+
 def test_inventory_spans_the_mainframe_family(scanned):
     _, db = scanned
     ir = load_galaxy_ir(db)
@@ -354,3 +411,74 @@ def test_return_transid_routing_rides_in_calls_but_not_unresolved(txn_scanned):
     # XCTL PROGRAM('PAYPGM') resolves to a file; RETURN TRANSID is excluded -- so
     # MENU has no unresolved PROGRAM calls at all.
     assert [c for c in ir.unresolved_calls() if c["file"] == "src/MENU.cbl"] == []
+
+
+# ==============================================================================
+# #3344: DB2 DECLARE TABLE / DCLGEN schemas (sql_table_data)
+# ==============================================================================
+# A real scan (so the config pipeline runs, the #2806 trap): a DCLGEN copybook in
+# CBSA's ACCDB2.cpy shape, a program that INCLUDEs it, and a PL/I include.
+ACCDB2 = """\
+      *  Copyright IBM Corp. 2023
+           EXEC SQL DECLARE ACCOUNT TABLE
+              ( ACCOUNT_SORTCODE               CHAR(6) NOT NULL,
+                ACCOUNT_NUMBER                 CHAR(8) NOT NULL,
+                ACCOUNT_INTEREST_RATE          DECIMAL(4, 2),
+                ACCOUNT_OPENED                 DATE )
+           END-EXEC.
+"""
+
+ACCPGM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ACCPGM.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           EXEC SQL INCLUDE ACCDB2 END-EXEC.
+       PROCEDURE DIVISION.
+           GOBACK.
+"""
+
+DEPTINC = """\
+ EXEC SQL DECLARE DSN8C10.DEPT TABLE
+           ( DEPTNO    CHAR(3) NOT NULL,
+             DEPTNAME  VARCHAR(36) NOT NULL
+           ) ;
+"""
+
+
+@pytest.fixture(scope="module")
+def scanned_db2(tmp_path_factory):
+    base = tmp_path_factory.mktemp("galaxy_ir_db2")
+    repo = base / "db2repo"
+    for rel, text in {"copy/ACCDB2.cpy": ACCDB2, "src/ACCPGM.cbl": ACCPGM, "pli/DEPTINC.pli": DEPTINC}.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return scan_to_db(repo, base / "scan")
+
+
+def test_declared_tables_load_per_declaring_file(scanned_db2):
+    ir = load_galaxy_ir(scanned_db2)
+    (table,) = ir.files["copy/ACCDB2.cpy"].sql_tables
+    assert (table.name, table.line) == ("ACCOUNT", 2)
+    assert [(c.colno, c.name, c.sql_type, c.length, c.scale, c.nullable) for c in table.columns] == [
+        (1, "ACCOUNT_SORTCODE", "CHAR", 6, None, False),
+        (2, "ACCOUNT_NUMBER", "CHAR", 8, None, False),
+        (3, "ACCOUNT_INTEREST_RATE", "DECIMAL", 4, 2, True),
+        (4, "ACCOUNT_OPENED", "DATE", None, None, True),
+    ]
+    assert table.columns[0].attributes == "NOT NULL"
+    # The including program declares nothing itself (same-file only).
+    assert ir.files["src/ACCPGM.cbl"].sql_tables == []
+    (dept,) = ir.files["pli/DEPTINC.pli"].sql_tables
+    assert (dept.name, [c.name for c in dept.columns]) == ("DSN8C10.DEPT", ["DEPTNO", "DEPTNAME"])
+
+
+def test_a_pre_3344_db_loads_with_no_sql_tables(scanned_db2, tmp_path):
+    copy = tmp_path / "old.db"
+    shutil.copy(scanned_db2, copy)
+    with sqlite3.connect(copy) as conn:
+        conn.execute("DROP TABLE sql_table_data")
+    ir = load_galaxy_ir(copy)
+    assert all(ef.sql_tables == [] for ef in ir.files.values())
+    assert "copy/ACCDB2.cpy" in ir.files

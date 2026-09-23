@@ -465,6 +465,8 @@ class RecordKeeper:
         DIVISION item tree + FD record layouts (#3246) ride along on each file's
         own `record_layouts` and become record_data (PL/I DECLAREd structures
         too, #3250).
+        DB2 `EXEC SQL DECLARE ... TABLE` columns (#3344) ride on each file's
+        own `sql_tables` and become sql_table_data.
 
         `transactions` (#3211-followup) is the CICS transaction map:
         `invocation_resolver.resolve_transactions()`'s resolved records, persisted
@@ -881,9 +883,18 @@ class RecordKeeper:
                 access_modes TEXT,
                 dsn TEXT,
                 line_number INTEGER,
+                dsn_resolved TEXT,
+                dsn_resolution TEXT,
                 FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
             )
         """)
+        # #3345: a JCL DSN with its symbolic parameters (SET / PROC defaults /
+        # EXEC overrides) resolved where the file alone determines it. `dsn` stays
+        # the DSN as written; `dsn_resolved` is NULL unless every symbol resolved,
+        # and `dsn_resolution` says how (literal / resolved / proc_default /
+        # ambiguous / unresolved -- see mainframe_boundary._jcl_resolve_datasets).
+        # Both NULL on a COBOL row. Healed onto a table created before #3345.
+        _ensure_columns(cursor, "dataset_data", ["dsn_resolved TEXT", "dsn_resolution TEXT"])
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_dataset_file_id ON dataset_data(file_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_dataset_dd_name ON dataset_data(dd_name);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_dataset_snapshot ON dataset_data(repo_name, commit_hash);")
@@ -932,6 +943,44 @@ class RecordKeeper:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_file_id ON record_data(file_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_snapshot ON record_data(repo_name, commit_hash);")
 
+        # #3347: BMS screen-field layouts -- one row per DFHMSD (mapset) / DFHMDI
+        # (map) / DFHMDF (field) macro, in source order, the tree carried as
+        # `ordinal`/`parent_ordinal` like record_data. A dedicated table rather
+        # than a record_data dialect: a screen field's facts are GEOMETRY (POS
+        # line/column, LENGTH) and 3270 attributes, none of which is a record_data
+        # column, and a map is not storage. `kind` is 'mapset' | 'map' | 'field';
+        # `field_name` is NULL for an unnamed DFHMDF (a screen literal, which never
+        # reaches the symbolic map). `attributes` keeps every other operand as
+        # written (COLOR=, HILIGHT=, a map's SIZE=, a mapset's MODE=/LANG= ...).
+        # Per-file, so it hangs off file_data with the usual cascade-delete.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS screen_field_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT,
+                commit_hash TEXT,
+                file_id INTEGER,
+                kind TEXT,
+                ordinal INTEGER,
+                parent_ordinal INTEGER,
+                field_name TEXT,
+                pos_line INTEGER,
+                pos_column INTEGER,
+                length INTEGER,
+                attrb TEXT,
+                picin TEXT,
+                picout TEXT,
+                initial_value TEXT,
+                occurs INTEGER,
+                attributes TEXT,
+                line_number INTEGER,
+                FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_screen_field_file_id ON screen_field_data(file_id);")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_screen_field_snapshot ON screen_field_data(repo_name, commit_hash);"
+        )
+
         # #3211-followup: the CICS transaction map -- which 4-char transaction id a
         # user submits and which program CICS routes it to. Extracted from the CSD
         # `DEFINE TRANSACTION(TTTT) ... PROGRAM(PPPP)` records (and PROGRAM
@@ -968,6 +1017,45 @@ class RecordKeeper:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_transaction_snapshot ON transaction_data(repo_name, commit_hash);"
         )
+
+        # #3344: the DB2 table shape a program binds to -- one row per column of
+        # an `EXEC SQL DECLARE <table> TABLE (...)` (inline in a COBOL/PL/I
+        # program, or DCLGEN-generated into a copybook/include member). A per-file
+        # fact like record_data, with the same cascade-delete, but its own table:
+        # SQL type / length / scale / nullability have no home in record_data's
+        # level/PIC/USAGE shape, and a DCLGEN member's COBOL host structure already
+        # lands there as the separate record layout it is.
+        #   table_name  -- as declared, `owner.table` kept whole; ordinary names
+        #                  upper-cased, delimited "..." names verbatim
+        #   colno       -- 1-based column position in its table (SYSCOLUMNS.COLNO)
+        #   sql_type    -- the type as written (`DECIMAL`, `VARCHAR`, `TIMESTAMP
+        #                  WITH TIME ZONE`); `length` is its length/precision (LOB
+        #                  K/M/G applied), `scale` the DECIMAL scale -- NULL when the
+        #                  source writes none (DB2 defaults are not invented)
+        #   nullable    -- 0 exactly when the column says NOT NULL
+        #   attributes  -- every column option after the type, as written
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sql_table_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT,
+                commit_hash TEXT,
+                file_id INTEGER,
+                table_name TEXT,
+                table_line INTEGER,
+                colno INTEGER,
+                column_name TEXT,
+                sql_type TEXT,
+                length INTEGER,
+                scale INTEGER,
+                nullable INTEGER,
+                attributes TEXT,
+                line_number INTEGER,
+                FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sql_table_file_id ON sql_table_data(file_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sql_table_name ON sql_table_data(table_name);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sql_table_snapshot ON sql_table_data(repo_name, commit_hash);")
 
         # #3313 step 3: project-local idiom wrappers -- a short function or a
         # function-like `#define` alias that hides a literal-vocabulary rule
@@ -1882,7 +1970,17 @@ class RecordKeeper:
             repo_name,
             commit_hash,
             "dataset_data",
-            ("step_name", "internal_name", "assign_name", "dd_name", "access_modes", "dsn", "line_number"),
+            (
+                "step_name",
+                "internal_name",
+                "assign_name",
+                "dd_name",
+                "access_modes",
+                "dsn",
+                "line_number",
+                "dsn_resolved",
+                "dsn_resolution",
+            ),
             "dataset_bindings",
             lambda b: (
                 b.get("step_name"),
@@ -1892,6 +1990,8 @@ class RecordKeeper:
                 ",".join(b.get("modes") or []) or None,
                 b.get("dsn"),
                 int(b.get("line", 0) or 0),
+                b.get("dsn_resolved"),  # #3345
+                b.get("dsn_resolution"),
             ),
         )
 
@@ -1941,6 +2041,49 @@ class RecordKeeper:
             ),
         )
 
+        # #3347: BMS screen-field layouts -- the same per-file shape.
+        _insert_per_file_child(
+            cursor,
+            parsed_files,
+            path_to_file_id,
+            repo_name,
+            commit_hash,
+            "screen_field_data",
+            (
+                "kind",
+                "ordinal",
+                "parent_ordinal",
+                "field_name",
+                "pos_line",
+                "pos_column",
+                "length",
+                "attrb",
+                "picin",
+                "picout",
+                "initial_value",
+                "occurs",
+                "attributes",
+                "line_number",
+            ),
+            "screen_fields",
+            lambda sf: (
+                sf.get("kind"),
+                int(sf.get("ordinal", 0) or 0),
+                sf.get("parent_ordinal"),
+                sf.get("name"),
+                sf.get("pos_line"),
+                sf.get("pos_column"),
+                sf.get("length"),
+                sf.get("attrb"),
+                sf.get("picin"),
+                sf.get("picout"),
+                sf.get("initial"),
+                sf.get("occurs"),
+                sf.get("attributes"),
+                int(sf.get("line", 0) or 0),
+            ),
+        )
+
         # #3211-followup: the transaction map, resolved cross-file (transid ->
         # program -> the program's file) like call_sites, so it is passed in
         # rather than read per-file. A definition whose deck has no file_data row
@@ -1975,6 +2118,41 @@ class RecordKeeper:
                 """,
                     txn_rows,
                 )
+
+        # #3344: DB2 DECLARE TABLE / DCLGEN columns -- per-file, like record_data.
+        _insert_per_file_child(
+            cursor,
+            parsed_files,
+            path_to_file_id,
+            repo_name,
+            commit_hash,
+            "sql_table_data",
+            (
+                "table_name",
+                "table_line",
+                "colno",
+                "column_name",
+                "sql_type",
+                "length",
+                "scale",
+                "nullable",
+                "attributes",
+                "line_number",
+            ),
+            "sql_tables",
+            lambda c: (
+                c.get("table"),
+                int(c.get("table_line", 0) or 0),
+                int(c.get("colno", 0) or 0),
+                c.get("name"),
+                c.get("sql_type"),
+                c.get("length"),
+                c.get("scale"),
+                1 if c.get("nullable", True) else 0,
+                c.get("attributes"),
+                int(c.get("line", 0) or 0),
+            ),
+        )
 
         # #3313 step 3: the resolved idiom wrappers, like transactions passed in
         # rather than read per file (resolution needs the whole repository). A

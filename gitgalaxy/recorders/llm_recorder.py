@@ -513,6 +513,8 @@ class LLMRecorder:
                 len(f.get("call_sites") or [])
                 + len(f.get("dataset_bindings") or [])
                 + len(f.get("record_layouts") or [])
+                + len(f.get("sql_tables") or [])  # #3344
+                + len(f.get("screen_fields") or [])  # #3347
             )
 
         carriers = sorted((f for f in parsed_files if _volume(f) > 0), key=_volume, reverse=True)
@@ -529,6 +531,8 @@ class LLMRecorder:
             "the call graph (`CALL`/CICS `LINK`·`XCTL`/JCL `EXEC PGM=`), the dataset boundary "
             "(`SELECT…ASSIGN` + `OPEN` modes, JCL `DD`→dataset), and record layouts (COBOL DATA "
             "DIVISION items, PL/I `DECLARE`d structures). "
+            "BMS screen maps (every field's position, length and attributes, `screen_field_data`) "
+            "are the 3270 UI surface. "
             "These are the schema of the system: use them to trace which program runs which, which "
             "dataset a job binds, and the shape of the records that flow between them. Extracted by "
             "the engine (`core/mainframe_boundary.py`) and carried in the master DB "
@@ -538,6 +542,14 @@ class LLMRecorder:
             f"- **Coverage:** `{len(carriers)}` files carry mainframe facts -- "
             f"`{total_calls}` call sites, `{total_ds}` dataset bindings, `{total_items}` record items.\n"
         )
+
+        # #3344: named only when present, so a scan without DB2 declarations is unchanged.
+        total_sql = sum(len(f.get("sql_tables") or []) for f in carriers)
+        if total_sql:
+            lines.append(
+                f"- **DB2 schemas:** `{total_sql}` columns of `EXEC SQL DECLARE ... TABLE` "
+                "(inline or DCLGEN members), full shape in `sql_table_data`.\n"
+            )
 
         for f in carriers[:20]:
             path = f.get("path", "UNK")
@@ -560,7 +572,9 @@ class LLMRecorder:
                 for d in datasets:
                     dd = d.get("dd_name") or d.get("internal_name") or "?"
                     if d.get("dsn"):  # a JCL DD -> dataset binding
-                        parts.append(f"{dd}→{d['dsn']}")
+                        # #3345: the symbol-resolved DSN where the file determines
+                        # it, else the DSN as written (`&HLQ..X`).
+                        parts.append(f"{dd}→{d.get('dsn_resolved') or d['dsn']}")
                     else:  # a COBOL SELECT with its OPEN modes
                         modes = "/".join(d.get("modes") or []) or "declared"
                         parts.append(f"{dd}({modes})")
@@ -603,6 +617,30 @@ class LLMRecorder:
                 lines.append(
                     f"- **Record layouts ({len(items)} items):** {', '.join(f'`{lbl}`' for lbl in labels)}{more}"
                 )
+            # #3344: DB2 DECLARE TABLE schemas -- table name + column count only.
+            sql_cols = f.get("sql_tables") or []
+            if sql_cols:
+                per_table: dict[str, int] = {}
+                for c in sql_cols:
+                    per_table[c.get("table") or "?"] = per_table.get(c.get("table") or "?", 0) + 1
+                sql_labels = [f"`{t} ({n} cols)`" for t, n in per_table.items()]
+                lines.append(f"- **DB2 tables declared:** {', '.join(sql_labels[:12])}")
+            # #3347: BMS screen layouts -- per map, its named (symbolic-map) fields
+            # out of all its fields; the geometry is in screen_field_data.
+            screen = f.get("screen_fields") or []
+            if screen:
+                maps = [sf for sf in screen if sf.get("kind") == "map"]
+                labels = []
+                for m in maps[:12]:
+                    own = [
+                        sf
+                        for sf in screen
+                        if sf.get("kind") == "field" and sf.get("parent_ordinal") == m.get("ordinal")
+                    ]
+                    named = sum(1 for sf in own if sf.get("name"))
+                    labels.append(f"{m.get('name') or '?'} ({named} named / {len(own)} fields)")
+                more = f" … (+{len(maps) - 12} more)" if len(maps) > 12 else ""
+                lines.append(f"- **Screen maps:** {', '.join(f'`{lbl}`' for lbl in labels)}{more}")
             lines.append("")
 
         if len(carriers) > 20:
