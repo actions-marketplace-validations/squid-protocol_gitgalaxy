@@ -76,6 +76,9 @@ DEFINITION: dict[str, Any] = {
                 "from",
                 "as",
                 "else",
+                # #3361: `assert` is a statement keyword here; it left the global
+                # set because C's assert macro IS a call.
+                "assert",
             }
         ),
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---

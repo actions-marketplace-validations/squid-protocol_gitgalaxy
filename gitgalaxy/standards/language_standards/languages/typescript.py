@@ -69,6 +69,9 @@ DEFINITION: dict[str, Any] = {
                 "void",
                 "instanceof",
                 "keyof",
+                # #3361: constructor-chaining keyword; it left the global set
+                # because Python's super() IS a call.
+                "super",
             }
         ),
         # --- PHASE 1: LOGIC TOPOLOGY & STRUCTURE ---

@@ -1114,7 +1114,7 @@ def test_detector_calls_out_language_ignore_union():
     `identifier_case: insensitive` compares it casefolded (lowercase words filter
     in any spelling); #3359: every other language compares it exactly, so a
     keyword never swallows a capitalised callee. The global set keeps filtering
-    exactly as before.
+    its keywords (`sizeof`); #3361: a built-in like `print` is a call.
     """
 
     def defs(identifier_case):
@@ -1130,16 +1130,19 @@ def test_detector_calls_out_language_ignore_union():
             definition["identifier_case"] = identifier_case
         return {"fortranish": definition}
 
-    code = "def dispatch(unit):\n    OPEN(unit)\n    Open(unit)\n    open(unit)\n    print(unit)\n    db_insert(unit)\n"
+    code = (
+        "def dispatch(unit):\n    OPEN(unit)\n    Open(unit)\n    open(unit)\n"
+        "    sizeof(unit)\n    print(unit)\n    db_insert(unit)\n"
+    )
 
     folded = StructuralExtractor("fortranish", defs("insensitive")).splice(code, "")["functions"][0]
-    assert folded["calls_out_to"] == ["db_insert"], (
+    assert folded["calls_out_to"] == ["print", "db_insert"], (
         "_calls_out_ignore must filter casefolded (OPEN/Open/open) in a case-insensitive language "
-        f"and the global set must keep filtering (print); got {folded['calls_out_to']}"
+        f"and the global set must keep filtering keywords (sizeof); got {folded['calls_out_to']}"
     )
 
     exact = StructuralExtractor("fortranish", defs(None)).splice(code, "")["functions"][0]
-    assert exact["calls_out_to"] == ["OPEN", "Open", "db_insert"], (
+    assert exact["calls_out_to"] == ["OPEN", "Open", "print", "db_insert"], (
         f"a case-sensitive language filters only the exact spelling; got {exact['calls_out_to']}"
     )
 
@@ -5448,15 +5451,5 @@ def test_detector_is_documented_powershell_undelimited_doc_marker_in_code():
     assert documented(near) is True
 
     # Same undelimited marker, pushed 6+ lines above (outside k=5).
-    far = (
-        ".SYNOPSIS\n"
-        "\n"
-        "\n"
-        "\n"
-        "\n"
-        "\n"
-        "function probe_dispatch {\n"
-        "    param($argv)\n"
-        "}\n"
-    )
+    far = ".SYNOPSIS\n\n\n\n\n\nfunction probe_dispatch {\n    param($argv)\n}\n"
     assert documented(far) is False

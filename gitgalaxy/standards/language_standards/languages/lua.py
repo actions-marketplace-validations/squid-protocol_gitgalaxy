@@ -41,19 +41,10 @@ DEFINITION: dict[str, Any] = {
     "rules": {
         # Epic #3264: Explicitly declare the structural invocation paradigm
         "calls_out": CALLS_OUT_C_STYLE,
+        # #3359 (contract C2): keywords and special forms, never calls. The
+        # built-ins that used to lead this set are calls (#3361).
         "_calls_out_ignore": frozenset(
             {
-                "pairs",
-                "ipairs",
-                "tostring",
-                "tonumber",
-                "type",
-                "unpack",
-                "rawequal",
-                "rawlen",
-                "next",
-                "select",
-                # #3359 (contract C2): keywords and special forms, never calls
                 "not",
                 "or",
                 "and",
