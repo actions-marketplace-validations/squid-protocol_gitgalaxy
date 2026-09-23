@@ -20,6 +20,7 @@ import statistics
 from pathlib import Path
 from typing import Any, Optional
 
+from gitgalaxy.core.call_resolver import RATE_CAVEAT, resolution_rates
 from gitgalaxy.standards import analysis_lens as config
 
 # ==============================================================================
@@ -208,8 +209,12 @@ class LLMRecorder:
         session_meta: dict[str, Any],
         output_dir: str,
         forensic_report: Optional[dict[str, Any]] = None,
+        call_resolution: Optional[dict[str, Any]] = None,
     ):
-        """Generates the dual-output AI artifacts: Markdown and SQLite."""
+        """Generates the dual-output AI artifacts: Markdown and SQLite.
+
+        `call_resolution` (#3331) is the call resolver's stats, rendered as the
+        brief's function-call resolution section (absent when None/empty)."""
         if forensic_report is None:
             forensic_report = {}
 
@@ -266,6 +271,7 @@ class LLMRecorder:
             summary,
             session_meta,
             forensic_report,
+            call_resolution,
         )
 
         try:
@@ -450,6 +456,46 @@ class LLMRecorder:
         lines.append("")
         return lines
 
+    def _call_resolution_lines(self, call_resolution: Optional[dict[str, Any]]) -> list[str]:
+        """#3331: how many function calls the resolver linked, and how surely.
+
+        Repository shares first, then the ten languages with the most call pairs.
+        The caveat is part of the section on purpose: a confident link is not a
+        verified one (#3332).
+        """
+        rows = resolution_rates(call_resolution or {})
+        if not rows:
+            return []
+
+        def pct(n: int, total: int) -> str:
+            return f"{100.0 * n / total:.1f}%" if total else "n/a"
+
+        repo, langs = rows[0], rows[1:]
+        lines = ["## 15. FUNCTION CALL RESOLUTION (Call Graph Confidence)"]
+        lines.append(
+            "> **AI CONTEXT:** Each function's callee names, linked to the definition they most plausibly "
+            "mean. *scoped* = same class/file, an imported file, or a class-qualified call; *unique* = the "
+            "only definition in the repository; *ambiguous* = several candidates or an untyped receiver "
+            "(never a graph edge); *external* = defined nowhere here (built-ins, packages). "
+            f"{RATE_CAVEAT} Detail in `fcall_data` / `fcall_rate_data`.\n"
+        )
+        lines.append(
+            f"- **Repository:** {repo['total']} call pairs -- scoped {pct(repo['scoped'], repo['total'])}, "
+            f"unique {pct(repo['unique'], repo['total'])}, ambiguous {pct(repo['ambiguous'], repo['total'])}, "
+            f"external {pct(repo['external'], repo['total'])}"
+        )
+        lines.append("")
+        lines.append("| Language | Pairs | Scoped | Unique | Ambiguous | External |")
+        lines.append("|---|---|---|---|---|---|")
+        for r in sorted(langs, key=lambda r: (-r["total"], r["language"]))[:10]:
+            t = r["total"]
+            lines.append(
+                f"| {r['language']} | {t} | {pct(r['scoped'], t)} | {pct(r['unique'], t)} | "
+                f"{pct(r['ambiguous'], t)} | {pct(r['external'], t)} |"
+            )
+        lines.append("")
+        return lines
+
     def _idiom_wrapper_lines(self, parsed_files: list[dict[str, Any]]) -> list[str]:
         """Project-local idiom wrappers (#3313 step 3) -- ABSENT unless one resolved.
 
@@ -516,6 +562,7 @@ class LLMRecorder:
                 + len(f.get("sql_tables") or [])  # #3344
                 + len(f.get("screen_fields") or [])  # #3347
                 + len(f.get("csd_resources") or [])  # #3356
+                + len(f.get("cics_resources") or [])  # #3351-#3354
             )
 
         carriers = sorted((f for f in parsed_files if _volume(f) > 0), key=_volume, reverse=True)
@@ -560,6 +607,18 @@ class LLMRecorder:
                 "DB2TRAN→DB2ENTRY→PLAN, MAPSET, LIBRARY, ...), full attributes in `csd_resource_data`.\n"
             )
 
+        # #3351-#3354: named only when present, so a scan without CICS is unchanged.
+        cics_ops = [op for f in carriers for op in (f.get("cics_resources") or [])]
+        if cics_ops:
+            by_kind: dict[str, int] = {}
+            for op in cics_ops:
+                by_kind[op.get("kind") or "?"] = by_kind.get(op.get("kind") or "?", 0) + 1
+            kinds = ", ".join(f"`{n}` {k}" for k, n in sorted(by_kind.items()))
+            lines.append(
+                f"- **CICS operations:** `{len(cics_ops)}` EXEC CICS operations naming a resource ({kinds}); "
+                "verb, direction, VALUE-resolved name and INTO/FROM record in `cics_resource_data`.\n"
+            )
+
         for f in carriers[:20]:
             path = f.get("path", "UNK")
             lang = f.get("lang_id", "UNK").upper()
@@ -574,6 +633,20 @@ class LLMRecorder:
                         seen.append(label)
                 more = f" … (+{len(seen) - 12})" if len(seen) > 12 else ""
                 lines.append(f"- **Calls:** {', '.join(f'`{s}`' for s in seen[:12])}{more}")
+                # #3355: the record each CICS transfer passes (`COMMAREA(x)`), with a
+                # declared LENGTH when the site states one. Distinct pairs only; the
+                # contract join to the callee's DFHCOMMAREA is galaxy_ir's.
+                passed: list[str] = []
+                for c in calls:
+                    if not c.get("commarea"):
+                        continue
+                    length = f" LENGTH({c['commarea_length']})" if c.get("commarea_length") else ""
+                    label = f"{c.get('verb')} {c.get('target') or c.get('operand') or '?'} ← {c['commarea']}{length}"
+                    if label not in passed:
+                        passed.append(label)
+                if passed:
+                    more = f" … (+{len(passed) - 12})" if len(passed) > 12 else ""
+                    lines.append(f"- **COMMAREA passed:** {', '.join(f'`{s}`' for s in passed[:12])}{more}")
 
             datasets = f.get("dataset_bindings") or []
             if datasets:
@@ -666,6 +739,17 @@ class LLMRecorder:
                 if joins:
                     more = f" … (+{len(joins) - 12})" if len(joins) > 12 else ""
                     lines.append(f"- **CICS bindings:** {', '.join(f'`{j}`' for j in joins[:12])}{more}")
+            # #3351-#3354: CICS resources -- each distinct KIND name (access set);
+            # the per-command rows are in cics_resource_data.
+            cics = f.get("cics_resources") or []
+            if cics:
+                touched: dict[str, set] = {}
+                for op in cics:
+                    name = op.get("name") or (f"{op.get('operand')}?" if op.get("operand") else "?")
+                    touched.setdefault(f"{op.get('kind')} {name}", set()).add(op.get("access") or "?")
+                labels = [f"{k} ({'/'.join(sorted(v))})" for k, v in touched.items()]
+                more = f" … (+{len(labels) - 12} more)" if len(labels) > 12 else ""
+                lines.append(f"- **CICS operations:** {', '.join(f'`{lbl}`' for lbl in labels[:12])}{more}")
             lines.append("")
 
         if len(carriers) > 20:
@@ -682,6 +766,7 @@ class LLMRecorder:
         summary: dict[str, Any],
         session_meta: dict[str, Any],
         forensic_report: dict[str, Any],
+        call_resolution: Optional[dict[str, Any]] = None,
     ) -> str:
         """Constructs a high-density, context-rich Markdown brief for LLM agents."""
         target = session_meta.get("target", "Project")
@@ -1747,6 +1832,10 @@ class LLMRecorder:
         # --- 14. PROJECT IDIOM WRAPPERS (#3313 step 3) ---
         # Optional: renders only when the scan resolved at least one wrapper.
         lines.extend(self._idiom_wrapper_lines(parsed_files))
+
+        # --- 15. FUNCTION CALL RESOLUTION (#3331) ---
+        # Optional: renders only when the call resolver saw at least one call.
+        lines.extend(self._call_resolution_lines(call_resolution))
 
         # ==============================================================================
 

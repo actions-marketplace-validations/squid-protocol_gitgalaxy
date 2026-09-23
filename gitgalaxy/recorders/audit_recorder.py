@@ -109,6 +109,8 @@ class AuditRecorder:
         block = {}
         calls = file_data.get("call_sites") or []
         if calls:
+            # #3355: the COMMAREA contract operands ride only on a CICS site that
+            # carries them, so every other call site is unchanged.
             block["Call Sites"] = [
                 {
                     "Verb": c.get("verb"),
@@ -116,6 +118,15 @@ class AuditRecorder:
                     "Operand": c.get("operand"),
                     "Target": c.get("target"),
                     "Line": c.get("line", 0),
+                    **{
+                        label: c[key]
+                        for key, label in (
+                            ("commarea", "COMMAREA"),
+                            ("commarea_length", "COMMAREA Length"),
+                            ("commarea_datalength", "COMMAREA Data Length"),
+                        )
+                        if c.get(key)
+                    },
                 }
                 for c in calls
             ]
@@ -161,6 +172,8 @@ class AuditRecorder:
                     "Parent Ordinal": it.get("parent_ordinal"),
                     "Line": it.get("line", 0),
                     **({"Attributes": it["attributes"]} if it.get("attributes") else {}),
+                    # #3355: the COPY member(s) expanding after this entry, when any.
+                    **({"Copy Members": it["copy_members"]} if it.get("copy_members") else {}),
                 }
                 for it in records
             ]
@@ -230,6 +243,28 @@ class AuditRecorder:
                     "Line": r.get("line", 0),
                 }
                 for r in csd
+            ]
+        cics = file_data.get("cics_resources") or []
+        if cics:
+            # #3351-#3354: EXEC CICS FILE/MAP/QUEUE/CONTAINER/CHANNEL operations,
+            # mirroring cics_resource_data.
+            block["CICS Resources"] = [
+                {
+                    "Verb": op.get("verb"),
+                    "Kind": op.get("kind"),
+                    "Access": op.get("access"),
+                    "Operand": op.get("operand"),
+                    "Name": op.get("name"),
+                    "Resolution": op.get("resolution"),
+                    "Candidates": op.get("candidates"),
+                    "Qualifier Operand": op.get("qualifier_operand"),
+                    "Qualifier": op.get("qualifier"),
+                    "Record Clause": op.get("record_clause"),
+                    "Record": op.get("record"),
+                    "Attributes": op.get("attributes"),
+                    "Line": op.get("line", 0),
+                }
+                for op in cics
             ]
         return block
 

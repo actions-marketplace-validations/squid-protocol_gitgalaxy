@@ -19,6 +19,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 
+from gitgalaxy.core.call_resolver import decode_qualifiers
+
 
 def _json_list(value: Any) -> list:
     """Decode a persisted JSON-list column (e.g. calls_out_to) back to a list.
@@ -327,6 +329,13 @@ class StateRehydrator:
                         # list (network_risk_sensor's test-coverage mapping iterates it);
                         # decode it so risk_verification's coverage graph resolves.
                         "calls_out_to": _json_list(r["calls_out_to"]) if "calls_out_to" in rk else [],
+                        # #3328/#3329: the call resolver keys functions by start line
+                        # and reads the per-callee receiver chains.
+                        "calls_out_qualifiers": decode_qualifiers(
+                            _json_list(r["calls_out_to"]) if "calls_out_to" in rk else [],
+                            _json_list(r["calls_out_qualifiers"]) if "calls_out_qualifiers" in rk else None,
+                        ),
+                        "start_line": int(r["start_line"] or 0) if "start_line" in rk else 0,
                         # engine stores the complexity/branch metric under "branch"
                         # (signal_processor reads func["branch"] for z-scores + archetype).
                         "branch": r["complexity"] if "complexity" in rk and r["complexity"] is not None else 0,
@@ -378,12 +387,23 @@ class StateRehydrator:
                 # deliberately NOT restored for calls or transactions: resolution
                 # is repo-wide and redone every scan, because a file added or
                 # deleted this commit can change what an unchanged file resolves to.
+                # #3355: the COMMAREA contract operands are per-file (the site's own
+                # EXEC block), so they are restored like `operand`. A baseline
+                # written before #3355 lacks the columns; its rows come back
+                # without the keys, the shape the extractor gives a site with no
+                # COMMAREA -- so a restored row is identical to a re-extracted one.
+                commarea_cols = (
+                    "cs.commarea, cs.commarea_length, cs.commarea_datalength"
+                    if _has_table(cursor, "call_site_data") and _has_column(cursor, "call_site_data", "commarea")
+                    else "NULL AS commarea, NULL AS commarea_length, NULL AS commarea_datalength"
+                )
                 calls_by_file = _restore_child_table(
                     cursor,
                     repo_name,
                     baseline_hash,
                     "call_site_data",
-                    "SELECT fd.file_path AS _fp, cs.verb, cs.form, cs.operand, cs.target, cs.line_number AS line "
+                    "SELECT fd.file_path AS _fp, cs.verb, cs.form, cs.operand, cs.target, cs.line_number AS line, "  # noqa: S608 -- commarea_cols is one of two literals; values are bound
+                    f"{commarea_cols} "
                     "FROM call_site_data cs JOIN file_data fd ON cs.src_file_id = fd.id "
                     "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY cs.id",
                     lambda r: {
@@ -392,6 +412,7 @@ class StateRehydrator:
                         "operand": r["operand"],
                         "target": r["target"],
                         "line": int(r["line"] or 0),
+                        **{k: r[k] for k in ("commarea", "commarea_length", "commarea_datalength") if r[k]},
                     },
                 )
                 # #3345: the resolved-DSN pair is per-file (one JCL file determines
@@ -436,6 +457,14 @@ class StateRehydrator:
                     if _has_table(cursor, "record_data") and _has_column(cursor, "record_data", "attributes")
                     else "NULL"
                 )
+                # #3355: `copy_members` is per-file (the entry's own window); NULL on
+                # a baseline written before it existed, and then left off the payload
+                # exactly as the extractor leaves it off an entry no COPY follows.
+                copy_col = (
+                    "rd.copy_members"
+                    if _has_table(cursor, "record_data") and _has_column(cursor, "record_data", "copy_members")
+                    else "NULL"
+                )
                 records_by_file = _restore_child_table(
                     cursor,
                     repo_name,
@@ -444,7 +473,7 @@ class StateRehydrator:
                     "SELECT fd.file_path AS _fp, rd.section, rd.fd_name, rd.ordinal, rd.parent_ordinal, "  # noqa: S608 -- attributes_col is one of two literals; values are bound
                     "rd.level_number AS level, rd.item_name AS name, rd.pic, rd.usage, rd.occurs_min, "
                     "rd.occurs_max, rd.occurs_depending_on, rd.redefines, rd.value_literal AS value, "
-                    f"rd.line_number AS line, {attributes_col} AS attributes "
+                    f"rd.line_number AS line, {attributes_col} AS attributes, {copy_col} AS copy_members "
                     "FROM record_data rd JOIN file_data fd ON rd.file_id = fd.id "
                     "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY rd.file_id, rd.ordinal",
                     lambda r: {
@@ -463,6 +492,7 @@ class StateRehydrator:
                         "value": r["value"],
                         "line": int(r["line"] or 0),
                         "attributes": r["attributes"],
+                        **({"copy_members": r["copy_members"]} if r["copy_members"] else {}),
                     },
                 )
                 # #3211-followup: the CSD transaction definitions, restored per
@@ -576,6 +606,36 @@ class StateRehydrator:
                     },
                 )
 
+                # #3351-#3354: CICS resource operations, aliased back to the
+                # extractor's payload keys. A pre-channel baseline restores nothing.
+                cics_by_file = _restore_child_table(
+                    cursor,
+                    repo_name,
+                    baseline_hash,
+                    "cics_resource_data",
+                    "SELECT fd.file_path AS _fp, cr.verb, cr.resource_kind AS kind, cr.access, "
+                    "cr.name_operand AS operand, cr.resource_name AS name, cr.name_resolution AS resolution, "
+                    "cr.name_candidates AS candidates, cr.qualifier_operand, cr.qualifier, cr.record_clause, "
+                    "cr.record_name AS record, cr.attributes, cr.line_number AS line "
+                    "FROM cics_resource_data cr JOIN file_data fd ON cr.file_id = fd.id "
+                    "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY cr.id",
+                    lambda r: {
+                        "verb": r["verb"],
+                        "kind": r["kind"],
+                        "access": r["access"],
+                        "operand": r["operand"],
+                        "name": r["name"],
+                        "resolution": r["resolution"],
+                        "candidates": r["candidates"],
+                        "qualifier_operand": r["qualifier_operand"],
+                        "qualifier": r["qualifier"],
+                        "record_clause": r["record_clause"],
+                        "record": r["record"],
+                        "attributes": r["attributes"],
+                        "line": int(r["line"] or 0),
+                    },
+                )
+
                 for rel_path, node in ram_state.items():
                     node["functions"] = funcs_by_file.get(rel_path, [])
                     node["classes"] = classes_by_file.get(rel_path, [])
@@ -586,6 +646,7 @@ class StateRehydrator:
                     node["sql_tables"] = sql_tables_by_file.get(rel_path, [])
                     node["screen_fields"] = screen_fields_by_file.get(rel_path, [])
                     node["csd_resources"] = csd_resources_by_file.get(rel_path, [])
+                    node["cics_resources"] = cics_by_file.get(rel_path, [])
             except sqlite3.Error as fc_err:
                 print(f"⚠️ Could not rehydrate functions/classes (structure counts may drift): {fc_err}")
 

@@ -1,5 +1,7 @@
 # ==============================================================================
 # GitGalaxy Core: Mainframe Boundary Extraction (#3200, #3201, #3246, #3211-followup, #3250)
+# (+ #3351-#3354: EXEC CICS resource operations, extracted by core/cics_resources.py
+#  and returned from extract_boundary as `cics_resources`)
 #
 # PURPOSE:
 # The counted rules tell you THAT a COBOL program calls something and THAT a JCL
@@ -9,6 +11,9 @@
 #
 #   1. invocation  -- COBOL `CALL`, CICS `LINK`/`XCTL PROGRAM(...)`, JCL
 #                     `EXEC PGM=`: who runs whom (#3200).
+#                     A CICS LINK/XCTL/RETURN TRANSID site also carries
+#                     the record it passes -- `COMMAREA(x)` with its
+#                     `LENGTH(...)`/`DATALENGTH(...)` as written (#3355).
 #   2. dataset     -- COBOL `SELECT ... ASSIGN TO <ddname>` with the `OPEN`
 #                     modes actually used, and the JCL `DD` statement that binds
 #                     that ddname to a real dataset (#3201). A JCL DSN built
@@ -74,6 +79,10 @@ from typing import Any, Optional
 # #3344: the DB2 DECLARE TABLE / DCLGEN channel lives in its own module (it is
 # not a DATA DIVISION construct) and rides out of extract_boundary as `sql_tables`.
 from gitgalaxy.core.bms_screen_fields import bms_screen_fields
+
+# #3351-#3354: CICS resource operations (FILE/MAP/QUEUE/CONTAINER/CHANNEL) live in
+# their own module and ride out of extract_boundary as `cics_resources`.
+from gitgalaxy.core.cics_resources import cobol_move_literals, extract_cics_resources
 from gitgalaxy.core.db2_declare_table import extract_sql_tables
 
 # The dialects that carry a top-level `boundary_extraction` declaration. It is
@@ -166,6 +175,20 @@ _CICS_TRANSID_VERB = re.compile(r"\bEXEC[ \t\n]+CICS[ \t\n]+(RETURN|START|RUN)\b
 # `05 WS-TRANID PIC X(4) VALUE 'CC00'`). A name with no readable VALUE (populated
 # at runtime, `VALUE SPACES`) resolves to None -- data, not a gap.
 _CICS_TRANSID_OPERAND = re.compile(r"\bTRANSID[ \t\n]*\([ \t\n]*(?:'([^']*)'|\"([^\"]*)\"|([A-Z][A-Z0-9-]*))", re.I)
+
+# #3355: the COMMAREA contract operands of a LINK/XCTL/RETURN block -- which
+# record the call passes (`COMMAREA(x)`) and how many bytes it says it passes
+# (`LENGTH(...)`, and LINK's `DATALENGTH(...)`). Each keyword is delimited by COBOL
+# name-character boundaries, so `DFHCOMMAREA(` is not a COMMAREA operand and
+# `DATALENGTH(` / `INPUTMSGLEN(` are not LENGTH. The operand body is read by a
+# paren-balanced scan (`LENGTH(LENGTH OF X)`, `COMMAREA(WS-AREA(1:10))`) capped at
+# `_CICS_OPERAND_LIMIT`, inside the already END-EXEC-bounded block.
+_CICS_CONTRACT_OPERANDS = (
+    ("commarea", re.compile(r"(?<![A-Z0-9-])COMMAREA[ \t\n]*\(", re.I)),
+    ("commarea_length", re.compile(r"(?<![A-Z0-9-])LENGTH[ \t\n]*\(", re.I)),
+    ("commarea_datalength", re.compile(r"(?<![A-Z0-9-])DATALENGTH[ \t\n]*\(", re.I)),
+)
+_CICS_OPERAND_LIMIT = 160
 
 # A JCL statement: `//name operation operands`. The name field is optional --
 # unnamed DD and EXEC statements are valid and common.
@@ -266,6 +289,12 @@ _VALUE_CLAUSE = re.compile(
     r"\bVALUE[ \t\n]+(?:IS[ \t\n]+)?(?:'([^']*)'|\"([^\"]*)\"|([A-Z0-9][A-Z0-9+.-]*))",
     re.I,
 )
+# #3355: `COPY <member>` inside one data-description entry's window -- the
+# copybook that expands at that point (`01 DFHCOMMAREA.` + `COPY INQCUST.`). The
+# member is recorded on the entry it follows (`copy_members`); expanding it is the
+# reader's job (galaxy_ir), exactly as for every other cross-file layout. Quotes
+# and a trailing `OF/IN library` are allowed; the member name is what is kept.
+_COPY_IN_ENTRY = re.compile(r"(?<![A-Z0-9-])COPY[ \t\n]+['\"]?([A-Z0-9@#$][A-Z0-9@#$-]*)", re.I)
 # The special levels: 88 condition-names and 66 RENAMES describe the item above
 # them rather than nesting by level number, so they attach to the last real
 # item and are never pushed as a potential parent themselves.
@@ -381,6 +410,39 @@ def _cobol_value_map(code_stream: str) -> dict[str, str]:
     return values
 
 
+def _cics_contract_operands(block: str) -> dict[str, str]:
+    """The COMMAREA / LENGTH / DATALENGTH operands of one CICS block, as written (#3355).
+
+    `block` is the text between the verb and END-EXEC. Each operand body is read
+    to its balancing `)` (at most `_CICS_OPERAND_LIMIT` chars -- an unbalanced
+    paren yields nothing rather than a runaway), whitespace-collapsed and
+    upper-cased. Only the operands the block carries are returned, so a site with
+    no COMMAREA keeps exactly the shape it had before #3355.
+    """
+    out: dict[str, str] = {}
+    for key, pattern in _CICS_CONTRACT_OPERANDS:
+        match = pattern.search(block)
+        if not match:
+            continue
+        depth, body_end = 1, None
+        limit = min(len(block), match.end() + _CICS_OPERAND_LIMIT)
+        for i in range(match.end(), limit):
+            ch = block[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    body_end = i
+                    break
+        if body_end is None:
+            continue
+        body = " ".join(block[match.end() : body_end].split()).upper()
+        if body:
+            out[key] = body
+    return out
+
+
 def _cobol_calls(code_stream: str, values: dict[str, str]) -> list[dict[str, Any]]:
     """Every COBOL invocation site: `CALL`, and CICS `LINK`/`XCTL PROGRAM(...)`."""
     calls: list[dict[str, Any]] = []
@@ -409,6 +471,8 @@ def _cobol_calls(code_stream: str, values: dict[str, str]) -> list[dict[str, Any
         if end != -1:
             block = block[:end]
         operand_match = _CICS_PROGRAM_OPERAND.search(block)
+        # #3355: the record this transfer passes, and its declared length(s).
+        contract = _cics_contract_operands(block)
         if not operand_match:
             # A LINK with no PROGRAM operand is a CHANNEL-only transfer or
             # malformed source. Recorded with no operand: the site exists.
@@ -419,6 +483,7 @@ def _cobol_calls(code_stream: str, values: dict[str, str]) -> list[dict[str, Any
                     "operand": None,
                     "target": None,
                     "line": _line_of(match.start()),
+                    **contract,
                 }
             )
             continue
@@ -435,6 +500,7 @@ def _cobol_calls(code_stream: str, values: dict[str, str]) -> list[dict[str, Any
                 "operand": operand or None,
                 "target": (target or None),
                 "line": _line_of(match.start()),
+                **contract,
             }
         )
 
@@ -499,6 +565,11 @@ def _cobol_calls(code_stream: str, values: dict[str, str]) -> list[dict[str, Any
                 "operand": operand or None,
                 "target": (target or None),
                 "line": _line_of(match.start()),
+                # #3355: `RETURN TRANSID(t) COMMAREA(x)` hands x to the next task
+                # of t. Plain RETURN (no TRANSID) draws no row, and none is added
+                # for it: that would change the call graph (#3355 keeps it
+                # byte-identical) for a COMMAREA with no named receiver.
+                **_cics_contract_operands(block),
             }
         )
 
@@ -659,6 +730,19 @@ def _cobol_records(code_stream: str) -> list[dict[str, Any]]:
                 # period the character class swallowed (`VALUE 0.` -> `0`, not `0.`).
                 value = value_match.group(3).rstrip(".")
 
+        # #3355: the copybook(s) that expand right after this entry. Searched only
+        # up to the next section header / FD and the PROCEDURE DIVISION, so a
+        # section-level `LINKAGE SECTION.` + `COPY X.` (a COPY that belongs to no
+        # entry) and a procedure-division COPY are never attributed to the entry
+        # above them.
+        copy_stop = min(stop, level_match.end() + _ENTRY_LIMIT, data_end)
+        for offsets in (section_offsets, fd_offsets):
+            nxt = bisect.bisect_right(offsets, level_match.end())
+            if nxt < len(offsets):
+                copy_stop = min(copy_stop, offsets[nxt])
+        copy_window = code_stream[level_match.end() : max(copy_stop, level_match.end())]
+        copy_members = [m.group(1).upper() for m in _COPY_IN_ENTRY.finditer(copy_window)]
+
         section, fd_name = _context(start)
         records.append(
             {
@@ -676,6 +760,8 @@ def _cobol_records(code_stream: str) -> list[dict[str, Any]]:
                 "redefines": redefines,
                 "value": value,
                 "line": _line_of(start),
+                # Presence-keyed: an entry with no COPY after it keeps its pre-#3355 shape.
+                **({"copy_members": ",".join(copy_members)} if copy_members else {}),
             }
         )
     return records
@@ -1648,6 +1734,43 @@ def _jcl_csd_resources(code_stream: str) -> list[dict[str, Any]]:
     return _csd_resources(code_stream)
 
 
+def _pli_value_map(records: list[dict[str, Any]]) -> dict[str, str]:
+    """PL/I name -> its `INIT`/`VALUE` string (first declaration wins), the PL/I
+    analog of `_cobol_value_map` for CICS operand resolution (#3351-#3354).
+
+    `_pli_records` has already unquoted a string INIT; a numeric one (`INIT(0)`)
+    is never a resource name and is skipped."""
+    values: dict[str, str] = {}
+    for item in records:
+        value = item.get("value")
+        name = item.get("name")
+        if not name or not isinstance(value, str):
+            continue
+        text = value.strip()
+        if text and not re.fullmatch(r"[-+]?[0-9.]+", text):
+            values.setdefault(name.upper(), text)
+    return values
+
+
+def _cics_resources(code_stream: str, values: dict[str, str], dialect: str) -> list[dict[str, Any]]:
+    """The CICS FILE/MAP/QUEUE/CONTAINER/CHANNEL operations of one file (#3351-#3354).
+
+    Operands resolve through the same-file VALUE map (as LINK targets do), then a
+    single MOVEd literal (COBOL only); an `EXEC CICS` inside a literal is skipped.
+    """
+    if "CICS" not in code_stream.upper():
+        return []
+    newlines = [i for i, ch in enumerate(code_stream) if ch == "\n"]
+
+    def _shielded(offset: int) -> bool:
+        index = bisect.bisect_left(newlines, offset)
+        line_start = newlines[index - 1] + 1 if index else 0
+        return _opens_inside_literal(code_stream, line_start, offset)
+
+    moves = cobol_move_literals(code_stream) if dialect == "cobol" else {}
+    return extract_cics_resources(code_stream, values, moves, dialect, _shielded)
+
+
 def extract_boundary(dialect: str, code_stream: str) -> dict[str, list[dict[str, Any]]]:
     """The named invocation, dataset, record-layout and transaction facts for one mainframe file.
 
@@ -1665,6 +1788,9 @@ def extract_boundary(dialect: str, code_stream: str) -> dict[str, list[dict[str,
     #3344: cobol and pli additionally carry `sql_tables` -- the DB2 `EXEC SQL
     DECLARE <table> TABLE (...)` columns (db2_declare_table). Callers read it
     with a default, so the dialects that cannot embed SQL simply omit it.
+    #3351-#3354: cobol and pli also carry `cics_resources` -- every EXEC CICS
+    command naming a FILE, MAP, QUEUE, CONTAINER or passed CHANNEL
+    (cics_resources), read with a default the same way.
     """
     if not code_stream:
         return {"calls": [], "datasets": [], "records": [], "transactions": []}
@@ -1676,6 +1802,7 @@ def extract_boundary(dialect: str, code_stream: str) -> dict[str, list[dict[str,
             "records": _cobol_records(code_stream),
             "transactions": [],
             "sql_tables": extract_sql_tables(code_stream, "cobol"),  # #3344
+            "cics_resources": _cics_resources(code_stream, values, "cobol"),  # #3351-#3354
         }
     if dialect == "jcl":
         boundary = _jcl_boundary(code_stream)
@@ -1693,12 +1820,14 @@ def extract_boundary(dialect: str, code_stream: str) -> dict[str, list[dict[str,
             "csd_resources": _csd_resources(code_stream),
         }
     if dialect == "pli":
+        pli_records = _pli_records(code_stream)
         return {
             "calls": [],
             "datasets": [],
-            "records": _pli_records(code_stream),
+            "records": pli_records,
             "transactions": [],
             "sql_tables": extract_sql_tables(code_stream, "pli"),  # #3344
+            "cics_resources": _cics_resources(code_stream, _pli_value_map(pli_records), "pli"),  # #3351-#3354
         }
     if dialect == "bms":
         # #3347: BMS map field layouts ride their own key (`screen_fields`), read

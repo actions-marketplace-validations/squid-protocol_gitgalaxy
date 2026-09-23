@@ -33,7 +33,23 @@
 # (csd_resource_data: FILE -> DSNAME, TDQUEUE TYPE/DDNAME/DSNAME, DB2TRAN ->
 # DB2ENTRY -> PLAN, MAPSET, LIBRARY, URIMAP/WEBSERVICE..., per
 # EngineFile.csd_resources; joined by cics_file_datasets (CICS file -> dataset
-# -> the batch lineage), tdqueue_datasets and transaction_db2_plans).
+# -> the batch lineage), tdqueue_datasets and transaction_db2_plans),
+# and since #3355 the COMMAREA contract: each CICS LINK/XCTL/RETURN TRANSID
+# site's `COMMAREA(x)` and `LENGTH(...)`/`DATALENGTH(...)` operands as written
+# (call_site_data.commarea/commarea_length/commarea_datalength, per
+# EngineCall), plus the COPY member(s) expanding after each data entry
+# (record_data.copy_members). The join itself -- the caller's record x, COPY
+# expanded, against the callee's LINKAGE DFHCOMMAREA, with byte lengths and a
+# field-shape comparison -- is computed HERE (GalaxyIR.commarea_contracts), not
+# stored: a length or shape mismatch is reported as data, never adjudicated,
+# and since #3351-#3354 every EXEC CICS command that names a resource
+# (cics_resource_data, per EngineFile.cics_resources): FILE I/O, SEND/RECEIVE
+# MAP (joined to the BMS map's screen fields by GalaxyIR.screen_bindings), TS/TD
+# queues and channels/containers (producer -> consumer programs by
+# GalaxyIR.queue_flows / container_flows; FILE and TD-queue operations joined to
+# the #3356 CSD DSNAME and on to batch lineage by cics_file_lineage /
+# tdqueue_lineage), each name read through its VALUE (or a single MOVEd
+# literal) the way LINK targets are.
 # NOT in the DB, so still owned by the forge tools:
 # reachability-based dead code. `usage_status` is a same-file "name mentioned
 # elsewhere" test, not reachability -- it is carried as data and must not be fed
@@ -93,6 +109,13 @@ class EngineCall:
     target: Optional[str]
     resolves_to: Optional[str]
     line: int
+    # #3355: the COMMAREA contract operands of a CICS LINK/XCTL/RETURN TRANSID
+    # site, as written (upper-cased, whitespace-collapsed): the record passed and
+    # the LENGTH/DATALENGTH expressions. None when the site states none, and on a
+    # DB written before the columns existed.
+    commarea: Optional[str] = None
+    commarea_length: Optional[str] = None
+    commarea_datalength: Optional[str] = None
 
 
 @dataclass
@@ -177,6 +200,9 @@ class EngineDataItem:
     line: int
     children: list = field(default_factory=list)  # EngineDataItem
     attributes: Optional[str] = None  # #3250: PL/I attribute text; None for COBOL
+    # #3355: the COPY member(s) that expand right after this entry, comma-separated
+    # (`01 DFHCOMMAREA.` + `COPY INQCUST.` -> 'INQCUST'); None when no COPY follows.
+    copy_members: Optional[str] = None
 
     @property
     def is_group(self) -> bool:
@@ -320,6 +346,51 @@ class EngineCsdResource:
 
 
 @dataclass
+class EngineCicsResource:
+    """One EXEC CICS command that names a resource (#3351-#3354), from `cics_resource_data`.
+
+    `kind` is FILE | MAP | QUEUE | CONTAINER | CHANNEL and `access` its direction
+    (read | write | update | delete | browse | unlock | move | pass). `operand` is
+    the name operand as written; `name` its resolved value -- the literal, the
+    data-name's VALUE, or the single literal MOVEd to it (`resolution` says which)
+    -- and None when that is `ambiguous` (the MOVEd literals are in `candidates`),
+    `unresolved` or an `expression`. `qualifier` is a MAP's mapset, a QUEUE's
+    TS/TD, a CONTAINER's channel, or the program/transaction a CHANNEL is passed
+    to; `qualifier_operand` the same operand as written (None for a QUEUE).
+    `record` is the INTO/FROM/SET data area (`record_clause` says which).
+    """
+
+    verb: str
+    kind: str
+    access: str
+    operand: Optional[str]
+    name: Optional[str]
+    resolution: Optional[str]
+    candidates: Optional[str]
+    qualifier_operand: Optional[str]
+    qualifier: Optional[str]
+    record_clause: Optional[str]
+    record: Optional[str]
+    attributes: Optional[str]
+    line: int
+
+    @property
+    def names(self) -> set:
+        """Every name this command can touch: its resolved name, or its MOVE candidates."""
+        if self.name:
+            return {self.name.upper()}
+        return {c.upper() for c in (self.candidates or "").split(",") if c}
+
+    @property
+    def mapset(self) -> Optional[str]:
+        """A MAP's mapset: MAPSET as resolved, or -- when the command writes no
+        MAPSET -- the map name itself, which is the CICS default."""
+        if self.kind != "MAP":
+            return None
+        return self.qualifier if self.qualifier_operand else self.name
+
+
+@dataclass
 class EngineFile:
     file_path: str
     language: str
@@ -336,6 +407,7 @@ class EngineFile:
     sql_tables: list = field(default_factory=list)  # EngineSqlTable, #3344
     screen_fields: list = field(default_factory=list)  # EngineScreenField, flat source order, #3347
     csd_resources: list = field(default_factory=list)  # EngineCsdResource, source order, #3356
+    cics_resources: list = field(default_factory=list)  # EngineCicsResource, source order, #3351-#3354
 
     @property
     def is_program(self) -> bool:
@@ -764,12 +836,709 @@ class GalaxyIR:
         out.sort(key=lambda e: (e["transid"] or "", e["defined_in"], e["line"]))
         return out
 
+    # ---- #3355: the COMMAREA contract ----------------------------------------
+    def _copybook_file(self, member: str, *contexts: EngineFile) -> Optional[EngineFile]:
+        """The copybook file a `COPY member` in one of `contexts` resolved to.
+
+        Read off each context's resolved COPY edges (copy_deps) by file stem, in
+        order -- the file holding the COPY first, then the program it expands
+        into. None when no edge names it (a system copybook, or one not in the
+        repository): the layout is then reported unexpanded, never guessed.
+        """
+        for ctx in contexts:
+            hits = [p for p in ctx.copy_deps if Path(p).stem.upper() == member]
+            if len(hits) == 1 and hits[0] in self.files:
+                return self.files[hits[0]]
+        return None
+
+    def _copy_roots(self, member: str, ef: EngineFile, origin: EngineFile, depth: int) -> tuple:
+        """(copybook file, its record roots) for `COPY member`, or (None, [])."""
+        cb = self._copybook_file(member, ef, origin) if depth < _COPY_DEPTH else None
+        if cb is None:
+            return None, []
+        return cb, [r for r in cb.records if r.level not in (66, 88)]
+
+    def _expanded_children(self, ef: EngineFile, item: EngineDataItem, origin: EngineFile, depth: int) -> list:
+        """(file, item) children of `item` with every COPY member expanded in place.
+
+        A COPY in a group's own window expands before that group's children
+        (`01 DFHCOMMAREA.` + `COPY INQCUST.`); a COPY after an elementary child
+        expands as that child's following siblings. Only copybook roots deeper
+        than `item` join it. A COPY of records at `item`'s level or above CLOSES
+        it: the copybook opened a new record, so the entries after the COPY
+        belong to that record, not to `item` -- carddemo's `COPY COCOM01Y.` +
+        `05 CDEMO-CPVD-INFO.` below `WS-FRAUD-DATA`, which the engine's same-file
+        level stack (it cannot see the copybook's levels) threads under
+        WS-FRAUD-DATA. A member that did not resolve comes back as (None, member)
+        when it sits in `item`'s own window, so the caller can report it.
+        """
+        kids: list = []
+
+        def _copies(owner: EngineDataItem) -> bool:
+            """Append `owner`'s COPY members; True when one closes `item`."""
+            for member in (owner.copy_members or "").split(","):
+                if not member:
+                    continue
+                cb, roots = self._copy_roots(member, ef, origin, depth)
+                if cb is None:
+                    if owner is item:
+                        kids.append((None, member))
+                    continue
+                if roots and all(r.level > item.level for r in roots):
+                    kids.extend((cb, root) for root in roots)
+                elif roots:
+                    return True
+            return False
+
+        if not _is_elementary(item) and _copies(item):
+            return kids
+        for child in item.children:
+            kids.append((ef, child))
+            if _is_elementary(child) and _copies(child):
+                break
+        return kids
+
+    def _copy_extension(self, ef: EngineFile, cb: EngineFile) -> list:
+        """The entries of program `ef` that continue copybook `cb`'s LAST record.
+
+        `COPY COCOM01Y.` (whose `01 CARDDEMO-COMMAREA` ends mid-record) followed
+        by `05 CDEMO-CPVD-INFO.` in the program: the 05 continues the copied
+        record. The engine threads it under whatever group was open before the
+        COPY; this finds the entries after the closing COPY (see
+        `_expanded_children`) so the copied record's layout can carry them.
+        """
+        member = Path(cb.file_path).stem.upper()
+        roots = [r for r in cb.records if r.level not in (66, 88)]
+        if not roots:
+            return []
+        by_ordinal = {it.ordinal: it for it in ef.data_items}
+        for it in ef.data_items:
+            if member not in (it.copy_members or "").split(","):
+                continue
+            group = it if not _is_elementary(it) else by_ordinal.get(it.parent_ordinal)
+            if group is None or not all(r.level <= group.level for r in roots):
+                continue
+            if group is it:
+                return [(ef, c) for c in it.children]
+            siblings = group.children
+            return [(ef, c) for c in siblings[siblings.index(it) + 1 :]] if it in siblings else []
+        return []
+
+    def record_layout(self, ef: EngineFile, item: EngineDataItem, extension: Optional[list] = None) -> dict:
+        """One record's storage layout, COPY-expanded, from the DB alone (#3355).
+
+        Returns `bytes` (None when any width is unknown), `variable` (an OCCURS
+        DEPENDING ON inside it), `fields` (every elementary item in storage order:
+        `name`, `level`, `pic`, `usage`, `class`, `offset`, `bytes`, `occurs`,
+        `file`), `unexpanded` (COPY members that did not resolve to a copybook in
+        the repository) and `copybooks` (the ones that did). A REDEFINES item
+        overlays storage and is skipped, like 66/88 entries. Fields inside an
+        OCCURS group are listed once; the group's width carries the repetition.
+        `extension` is (file, item) entries appended to the record's own children
+        (a copied record continued in the program -- `_copy_extension`).
+        """
+        fields: list = []
+        unexpanded: list = []
+        copybooks: list = []
+        state = {"variable": False, "unknown": False}
+        extension_files = sorted({f.file_path for f, _ in extension or []})
+
+        def _walk(owner: EngineFile, it: EngineDataItem, offset: int, depth: int) -> int:
+            if it.level in (66, 88):
+                return 0
+            if it.occurs_depending_on:
+                state["variable"] = True
+            times = it.occurs_max or 1
+            # An elementary item's only children are its 88/66 conditions.
+            kids = [] if _is_elementary(it) else self._expanded_children(owner, it, ef, depth)
+            if it is item and extension:
+                kids = kids + list(extension)
+            if kids:
+                size = 0
+                for kid_file, kid in kids:
+                    if kid_file is None:
+                        unexpanded.append(kid)
+                        state["unknown"] = True
+                        continue
+                    if kid_file is not owner and kid_file.file_path not in copybooks + extension_files:
+                        copybooks.append(kid_file.file_path)
+                    if kid.redefines or kid.level in (66, 88):
+                        continue
+                    size += _walk(kid_file, kid, offset + size, depth + (kid_file is not owner))
+                return size * times
+            width = _elementary_bytes(it)
+            if width is None:
+                state["unknown"] = True
+                width = 0
+            fields.append(
+                {
+                    "name": it.name,
+                    "level": it.level,
+                    "pic": it.pic,
+                    "usage": it.usage,
+                    "class": _item_class(it),
+                    "offset": offset,
+                    "bytes": width * times,
+                    "occurs": it.occurs_max,
+                    "file": owner.file_path,
+                }
+            )
+            return width * times
+
+        total = _walk(ef, item, 0, 0)
+        return {
+            "bytes": None if state["unknown"] else total,
+            "variable": state["variable"],
+            "fields": fields,
+            "unexpanded": unexpanded,
+            "copybooks": copybooks,
+        }
+
+    def _find_item(self, ef: EngineFile, name: str, qualifier: Optional[str]) -> list:
+        """Every (file, item, extension) named `name` visible to program `ef`: its
+        own DATA DIVISION first, then the copybooks it COPYs (an 01-level COPY
+        carries the record's name only in the copybook -- carddemo's `COPY
+        COCOM01Y`), with the entries `ef` continues that record with
+        (`_copy_extension`) or None."""
+
+        def _matches(owner: EngineFile) -> list:
+            by_ordinal = {it.ordinal: it for it in owner.data_items}
+            out = []
+            for it in owner.data_items:
+                if it.name != name or it.level in (66, 88):
+                    continue
+                if qualifier:
+                    parent, seen = by_ordinal.get(it.parent_ordinal), 0
+                    while parent is not None and parent.name != qualifier and seen < 64:
+                        parent, seen = by_ordinal.get(parent.parent_ordinal), seen + 1
+                    if parent is None:
+                        continue
+                out.append((owner, it, None))
+            return out
+
+        found = _matches(ef)
+        if found:
+            return found
+        for path in ef.copy_deps:
+            cb = self.files.get(path)
+            if cb is None:
+                continue
+            for owner, it, _ in _matches(cb):
+                # The copied record the program continues past the COPY (its last root).
+                last = [r for r in cb.records if r.level not in (66, 88)][-1:]
+                found.append((owner, it, self._copy_extension(ef, cb) if last == [it] else None))
+        return found
+
+    def _dfhcommarea(self, callee: EngineFile) -> Optional[EngineDataItem]:
+        """The callee's LINKAGE SECTION `01 DFHCOMMAREA`, or None."""
+        for it in callee.records:
+            if it.name == "DFHCOMMAREA" and (it.section or "LINKAGE") == "LINKAGE":
+                return it
+        return None
+
+    def _transaction_program(self, transid: Optional[str]) -> Optional[str]:
+        """The one program file a transaction id routes to, via the CSD map."""
+        if not transid:
+            return None
+        hits = {t["resolves_to"] for t in self.transaction_map() if t["transid"] == transid and t["resolves_to"]}
+        return hits.pop() if len(hits) == 1 else None
+
+    def commarea_contracts(self, language: str = "cobol") -> list:
+        """The COMMAREA contract of every CICS LINK/XCTL (and RETURN TRANSID) site (#3355).
+
+        The caller passes record x (`COMMAREA(x)`); the callee receives it as its
+        LINKAGE `DFHCOMMAREA`. Both are read from record_data with COPY members
+        expanded (`record_layout`), and the callee is the site's existing call
+        resolution (`EngineCall.resolves_to`; for RETURN TRANSID the transaction's
+        program through the CSD map). One entry per site:
+
+          caller, line, verb, target, callee, commarea, commarea_length,
+          commarea_datalength,
+          status          -- paired | no_commarea | callee_unresolved |
+                             caller_record_unresolved | callee_no_dfhcommarea
+          caller_record / callee_record
+                          -- {name, file, bytes, variable, fields, unexpanded,
+                             copybooks} (fields = elementary-item count), or None
+          declared_length -- the LENGTH operand's byte count when it is a literal
+          same_copybook   -- both layouts expand the same copybook(s)
+          mismatches      -- [{kind, caller, callee}], kind in length |
+                             declared_length | shape
+
+        `paired` means both layouts were found; a mismatch is DATA for a
+        modernizer to read, not a verdict -- a callee that declares
+        `PIC X OCCURS 1 TO 32767 DEPENDING ON EIBCALEN` legitimately accepts any
+        length, which is why `variable` rides beside every byte count and no
+        length/shape mismatch is claimed against a variable-length side.
+        """
+        out = []
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            if f.language != language:
+                continue
+            for call in f.calls:
+                if call.verb not in _CONTRACT_VERBS:
+                    continue
+                if call.verb == "RETURN TRANSID" and not call.commarea:
+                    continue
+                callee_path = (
+                    self._transaction_program(call.target) if call.verb == "RETURN TRANSID" else call.resolves_to
+                )
+                entry: dict = {
+                    "caller": f.file_path,
+                    "line": call.line,
+                    "verb": call.verb,
+                    "target": call.target,
+                    "callee": callee_path,
+                    "commarea": call.commarea,
+                    "commarea_length": call.commarea_length,
+                    "commarea_datalength": call.commarea_datalength,
+                    "status": None,
+                    "caller_record": None,
+                    "callee_record": None,
+                    "declared_length": None,
+                    "same_copybook": None,
+                    "mismatches": [],
+                }
+                out.append(entry)
+                name, qualifier = _operand_name(call.commarea)
+                caller_layout = None
+                if name:
+                    found = self._find_item(f, name, qualifier)
+                    if found:
+                        owner, item, extension = found[0]
+                        caller_layout = self.record_layout(owner, item, extension)
+                        entry["caller_record"] = {
+                            "name": item.name,
+                            "file": owner.file_path,
+                            **{k: caller_layout[k] for k in ("bytes", "variable", "unexpanded", "copybooks")},
+                            "fields": len(caller_layout["fields"]),
+                        }
+                callee = self.files.get(callee_path) if callee_path else None
+                callee_item = self._dfhcommarea(callee) if callee is not None else None
+                callee_layout = None
+                if callee is not None and callee_item is not None:
+                    callee_layout = self.record_layout(callee, callee_item)
+                    entry["callee_record"] = {
+                        "name": callee_item.name,
+                        "file": callee.file_path,
+                        **{k: callee_layout[k] for k in ("bytes", "variable", "unexpanded", "copybooks")},
+                        "fields": len(callee_layout["fields"]),
+                    }
+                if not call.commarea:
+                    entry["status"] = "no_commarea"
+                elif callee is None:
+                    entry["status"] = "callee_unresolved"
+                elif caller_layout is None:
+                    entry["status"] = "caller_record_unresolved"
+                elif callee_layout is None:
+                    entry["status"] = "callee_no_dfhcommarea"
+                else:
+                    entry["status"] = "paired"
+
+                declared, _ = _declared_length(call.commarea_length, name)
+                entry["declared_length"] = declared
+                if caller_layout and declared is not None and caller_layout["bytes"] not in (None, declared):
+                    entry["mismatches"].append(
+                        {"kind": "declared_length", "caller": caller_layout["bytes"], "callee": declared}
+                    )
+                if caller_layout is not None and callee_layout is not None and entry["status"] == "paired":
+                    entry["same_copybook"] = bool(caller_layout["copybooks"]) and (
+                        caller_layout["copybooks"] == callee_layout["copybooks"]
+                    )
+                    entry["mismatches"] += _layout_mismatches(caller_layout, callee_layout)
+        return out
+
+    # ---- #3351-#3354: CICS resource joins ------------------------------------
+    def cics_resource_users(self, kind: str) -> dict[str, dict[str, list]]:
+        """Resource name -> access -> the files that touch it, for one CICS `kind`
+        (FILE | MAP | QUEUE | CONTAINER | CHANNEL). A QUEUE is keyed `TS:NAME` /
+        `TD:NAME` (the two are separate namespaces). An `ambiguous` name counts
+        under each of its MOVE candidates; an unresolved one under no name."""
+        out: dict[str, dict[str, list]] = {}
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            for op in f.cics_resources:
+                if op.kind != kind:
+                    continue
+                for name in sorted(op.names):
+                    key = f"{op.qualifier}:{name}" if kind == "QUEUE" else name
+                    users = out.setdefault(key, {}).setdefault(op.access, [])
+                    if f.file_path not in users:
+                        users.append(f.file_path)
+        return dict(sorted(out.items()))
+
+    def screen_bindings(self) -> list:
+        """Program -> BMS map: every SEND/RECEIVE MAP joined to the map's screen fields.
+
+        Each entry: `program`, `verb`, `map`, `mapset` (MAPSET, or the map name when
+        the command writes none -- the CICS default), `record` (the FROM/INTO
+        symbolic map), `line`, `bms_file` (the one BMS source defining that
+        mapset's map, else None), `bms_candidates` (every such source) and
+        `fields` (that map's EngineScreenField rows when `bms_file` is set). A map
+        whose name did not resolve, or whose mapset no scanned BMS source defines,
+        still appears with `bms_file` None -- that is a finding, not noise.
+        """
+        index: dict[tuple[str, str], list] = {}
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            if not f.screen_fields:
+                continue
+            by_ordinal = {sf.ordinal: sf for sf in f.screen_fields}
+            for sf in f.screen_fields:
+                if sf.kind != "map":
+                    continue
+                parent = by_ordinal.get(sf.parent_ordinal)
+                mapset = (parent.name or "") if parent is not None and parent.kind == "mapset" else ""
+                fields = [x for x in f.screen_fields if x.kind == "field" and x.parent_ordinal == sf.ordinal]
+                index.setdefault((mapset.upper(), (sf.name or "").upper()), []).append((f.file_path, fields))
+        out = []
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            for op in f.cics_resources:
+                if op.kind != "MAP":
+                    continue
+                mapset = op.mapset
+                hits = index.get(((mapset or "").upper(), (op.name or "").upper()), []) if op.name and mapset else []
+                out.append(
+                    {
+                        "program": f.file_path,
+                        "verb": op.verb,
+                        "map": op.name,
+                        "mapset": mapset,
+                        "record": op.record,
+                        "line": op.line,
+                        "bms_file": hits[0][0] if len(hits) == 1 else None,
+                        "bms_candidates": [h[0] for h in hits],
+                        "fields": hits[0][1] if len(hits) == 1 else [],
+                    }
+                )
+        return out
+
+    def queue_flows(self) -> list:
+        """Program -> program data flow through a CICS TS/TD queue (#3353).
+
+        Producer P WRITEQs queue Q and consumer C READQs the same queue of the same
+        type (TS and TD are separate namespaces); P != C. Each flow: `queue`,
+        `queue_type`, `producer`, `consumer`. Joined on the resolved name (or a
+        MOVE candidate), so an unresolved queue name draws no flow."""
+        flows: list[dict] = []
+        for key, users in self.cics_resource_users("QUEUE").items():
+            qtype, name = key.split(":", 1)
+            # `users` is keyed by access direction: writers produce, readers consume.
+            producers = [f for access, files in users.items() if access == "write" for f in files]
+            consumers = [f for access, files in users.items() if access == "read" for f in files]
+            flows.extend(
+                {"queue": name, "queue_type": qtype, "producer": producer, "consumer": consumer}
+                for producer in producers
+                for consumer in consumers
+                if producer != consumer
+            )
+        return flows
+
+    def _cics_ops_lineage(self, kind: str, csd_join: str, key: str) -> list:
+        """Program -> CICS resource of `kind` -> the CSD join `csd_join` (#3356).
+
+        One entry per (program, resource name): `program`, `name`, `accesses` and
+        `verbs` (sorted), `lines`, and `definitions` -- the `csd_join` rows whose
+        `key` names this resource (their DSNAME, JCL `bindings` and, for files,
+        `batch_programs`). `definitions` is empty when no CSD DEFINE in the
+        repository names the resource.
+        """
+        by_name: dict[str, list] = {}
+        for d in getattr(self, csd_join)():
+            by_name.setdefault(str(d.get(key) or "").upper(), []).append(d)
+        grouped: dict[tuple[str, str], dict] = {}
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            for op in f.cics_resources:
+                if op.kind != kind or (kind == "QUEUE" and op.qualifier != "TD"):
+                    continue
+                for name in sorted(op.names):
+                    entry = grouped.setdefault(
+                        (f.file_path, name),
+                        {"program": f.file_path, "name": name, "accesses": set(), "verbs": set(), "lines": []},
+                    )
+                    entry["accesses"].add(op.access)
+                    entry["verbs"].add(op.verb)
+                    entry["lines"].append(op.line)
+        out = []
+        for (_, name), e in sorted(grouped.items()):
+            out.append(
+                {
+                    **e,
+                    "accesses": sorted(e["accesses"]),
+                    "verbs": sorted(e["verbs"]),
+                    "definitions": list(by_name.get(name, [])),
+                }
+            )
+        return out
+
+    def cics_file_lineage(self) -> list:
+        """Online program -> CICS FILE -> dataset -> batch jobs and programs (#3351 + #3356).
+
+        Every program's EXEC CICS file operations, grouped per (program, file),
+        joined on the file name to `cics_file_datasets()` (the CSD `DEFINE FILE ...
+        DSNAME` and, through the dataset name, the JCL bindings and batch programs
+        that touch the same dataset). This closes transaction -> program -> file ->
+        dataset. A file no CSD defines keeps `definitions` empty.
+        """
+        return self._cics_ops_lineage("FILE", "cics_file_datasets", "file")
+
+    def tdqueue_lineage(self) -> list:
+        """Online program -> TD queue -> extrapartition dataset (#3353 + #3356).
+
+        Every WRITEQ/READQ/DELETEQ TD grouped per (program, queue), joined on the
+        queue name to `tdqueue_datasets()` (TYPE(EXTRA) queues: DSNAME, or the
+        region DDNAME with candidate JCL bindings). Intrapartition and undefined
+        queues keep `definitions` empty.
+        """
+        return self._cics_ops_lineage("QUEUE", "tdqueue_datasets", "queue")
+
+    def _program_file(self, name: Optional[str]) -> Optional[str]:
+        """The file declaring PROGRAM-ID `name`, when exactly one does."""
+        if not name:
+            return None
+        hits = [f.file_path for f in self.files.values() if name.upper() in {p.upper() for p in f.program_ids}]
+        return hits[0] if len(hits) == 1 else None
+
+    def _transaction_file(self, transid: Optional[str]) -> Optional[str]:
+        """The program file a transaction id routes to (CSD map), when exactly one."""
+        if not transid:
+            return None
+        hits = {
+            t.resolves_to
+            for f in self.files.values()
+            for t in f.transactions
+            if t.resolves_to and t.transid.upper() == transid.upper()
+        }
+        return next(iter(hits)) if len(hits) == 1 else None
+
+    def container_flows(self) -> list:
+        """Program -> program data flow through a CICS channel's containers (#3354).
+
+        Producer P PUTs (or MOVEs) container K and consumer C GETs K; P != C. Each
+        flow: `container`, `channel`, `producer`, `consumer` and `match`, how sure
+        the channel side is:
+          - `channel`: both commands name the same resolved channel;
+          - `handoff`: C reads its CURRENT channel (no CHANNEL operand) and P hands
+            a channel to C by LINK/XCTL PROGRAM(...) or START/RUN/RETURN TRANSID(...)
+            with that channel -- or, the return leg, P writes its current channel
+            and C handed P that channel; the invocation is resolved via PROGRAM-ID
+            / the CSD transaction map;
+          - `unverified`: the container names match but a channel is unresolved,
+            or C reads its current channel and no handoff from P was resolved.
+        Two resolved channels that differ never match. Containers match on the
+        resolved name or a MOVE candidate (an `ambiguous` producer that PUTs one
+        of CIPA..CIPI in a loop reaches every consumer of one of them).
+        """
+        handoffs: set[tuple[str, str, Optional[str]]] = set()
+        for f in self.files.values():
+            for op in f.cics_resources:
+                if op.kind != "CHANNEL":
+                    continue
+                if op.verb in ("LINK", "XCTL"):
+                    target = self._program_file(op.qualifier)
+                else:
+                    target = self._transaction_file(op.qualifier)
+                if target:
+                    handoffs.add((f.file_path, target, (op.name or "").upper() or None))
+        puts, gets = [], []
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            for op in f.cics_resources:
+                if op.kind != "CONTAINER" or not op.names:
+                    continue
+                channel = (op.qualifier or "").upper() or None
+                entry = (f.file_path, op.names, channel, op.qualifier_operand is not None)
+                if op.access in ("write", "move"):
+                    puts.append(entry)
+                elif op.access == "read":
+                    gets.append(entry)
+        rank = {"channel": 0, "handoff": 1, "unverified": 2}
+        best: dict[tuple[str, str, str], dict] = {}
+
+        def handed(src: str, dst: str, chan: Optional[str]) -> bool:
+            return any(a == src and b == dst and (chan is None or c in (None, chan)) for a, b, c in handoffs)
+
+        for p_file, p_names, p_chan, p_explicit in puts:
+            for c_file, c_names, c_chan, c_explicit in gets:
+                if p_file == c_file:
+                    continue
+                common = p_names & c_names
+                if not common:
+                    continue
+                if p_chan and c_chan:
+                    if p_chan != c_chan:
+                        continue
+                    match = "channel"
+                elif (not c_explicit and handed(p_file, c_file, p_chan)) or (
+                    not p_explicit and handed(c_file, p_file, c_chan)
+                ):
+                    match = "handoff"
+                else:
+                    match = "unverified"
+                for name in common:
+                    # One flow per (container, producer, consumer): the strongest match wins.
+                    prior = best.get((name, p_file, c_file))
+                    if prior is None or rank[match] < rank[prior["match"]]:
+                        best[(name, p_file, c_file)] = {
+                            "container": name,
+                            "channel": p_chan or c_chan,
+                            "producer": p_file,
+                            "consumer": c_file,
+                            "match": match,
+                        }
+        return [best[k] for k in sorted(best)]
+
     def lookup(self, path: Path, target_root: Path) -> Optional[EngineFile]:
         try:
             rel = path.resolve().relative_to(target_root.resolve()).as_posix()
         except ValueError:
             return None
         return self.files.get(rel)
+
+
+# ---- #3355: the COMMAREA contract join -------------------------------------
+# Byte widths, computed HERE from the record_data tree (the engine deliberately
+# computes none -- mainframe_boundary SCOPE). IBM Enterprise COBOL storage rules:
+# DISPLAY is one byte per picture position (S is an embedded sign, V/P take no
+# storage); PACKED-DECIMAL/COMP-3 is digits//2 + 1; BINARY/COMP/COMP-4/COMP-5 is
+# 2/4/8 bytes for 1-4/5-9/10-18 digits; COMP-1/COMP-2 are 4/8; POINTER/INDEX 4;
+# N/G (national/DBCS) positions are 2 bytes. Anything else is None -- unknown,
+# never guessed -- and an unknown width makes the enclosing record's width None.
+_CONTRACT_VERBS = ("LINK", "XCTL", "RETURN TRANSID")
+_COPY_DEPTH = 8  # nested COPY expansion bound (a copybook that COPYs itself ends here)
+
+
+def _pic_positions(pic: str) -> Optional[list]:
+    """The picture string expanded to one symbol per position (`X(3)9` -> X X X 9)."""
+    out: list = []
+    i, text = 0, pic.upper()
+    while i < len(text):
+        ch = text[i]
+        if ch == "(" and out:
+            close = text.find(")", i)
+            if close == -1 or not text[i + 1 : close].isdigit():
+                return None
+            out.extend(out[-1:] * (int(text[i + 1 : close]) - 1))
+            i = close + 1
+            continue
+        if text.startswith(("CR", "DB"), i):
+            out.extend([ch, ch])
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return out
+
+
+# The USAGEs that make an item elementary with no PIC. Any other PIC-less item is
+# a group, even with a USAGE of its own (`01 X USAGE DISPLAY.` applies to its
+# children) -- and even when the engine read a stray USAGE into it.
+_PICLESS_USAGES = ("COMP-1", "COMPUTATIONAL-1", "COMP-2", "COMPUTATIONAL-2", "POINTER", "INDEX")
+
+
+def _is_elementary(item: EngineDataItem) -> bool:
+    return bool(item.pic) or (item.usage or "").upper() in _PICLESS_USAGES
+
+
+def _item_class(item: EngineDataItem) -> str:
+    """A coarse storage class for shape comparison: X alnum, 9 zoned, P packed,
+    B binary, F float, N national, A address; `?` when unknown."""
+    usage = (item.usage or "DISPLAY").upper()
+    if usage in ("COMP-3", "COMPUTATIONAL-3", "PACKED-DECIMAL"):
+        return "P"
+    if usage in ("COMP", "COMPUTATIONAL", "COMP-4", "COMPUTATIONAL-4", "COMP-5", "COMPUTATIONAL-5", "BINARY"):
+        return "B"
+    if usage in ("COMP-1", "COMPUTATIONAL-1", "COMP-2", "COMPUTATIONAL-2"):
+        return "F"
+    if usage in ("POINTER", "INDEX"):
+        return "A"
+    pic = (item.pic or "").upper()
+    if not pic:
+        return "?"
+    if "N" in pic or "G" in pic or usage == "DISPLAY-1":
+        return "N"
+    if set(pic) & set("XA"):
+        return "X"
+    return "9"
+
+
+def _elementary_bytes(item: EngineDataItem) -> Optional[int]:
+    """One occurrence's storage width of an elementary item, or None when unknown."""
+    usage = (item.usage or "DISPLAY").upper()
+    if usage in ("COMP-1", "COMPUTATIONAL-1", "POINTER", "INDEX"):
+        return 4
+    if usage in ("COMP-2", "COMPUTATIONAL-2"):
+        return 8
+    if not item.pic:
+        return None
+    positions = _pic_positions(item.pic)
+    if positions is None:
+        return None
+    digits = sum(1 for p in positions if p == "9")
+    cls = _item_class(item)
+    if cls == "P":
+        return digits // 2 + 1
+    if cls == "B":
+        if not digits or digits > 18:
+            return None
+        return 2 if digits <= 4 else 4 if digits <= 9 else 8
+    storage = [p for p in positions if p not in ("S", "V", "P")]
+    width = sum(2 if p in ("N", "G") else 1 for p in storage)
+    return width or None
+
+
+def _layout_mismatches(caller: dict, callee: dict) -> list:
+    """Length and field-shape differences between two `record_layout`s, as data.
+
+    Nothing is claimed against a variable-length side (an OCCURS DEPENDING ON:
+    the carddemo `PIC X OCCURS 1 TO 32767 DEPENDING ON EIBCALEN` idiom accepts
+    any length by design). `shape` compares each elementary field's (offset,
+    width, storage class) in order -- names differ legitimately between caller
+    and callee -- and points at the first diverging field on each side.
+    """
+    if caller["variable"] or callee["variable"]:
+        return []
+    out = []
+    if None not in (caller["bytes"], callee["bytes"]) and caller["bytes"] != callee["bytes"]:
+        out.append({"kind": "length", "caller": caller["bytes"], "callee": callee["bytes"]})
+    shape_a = [(x["offset"], x["bytes"], x["class"]) for x in caller["fields"]]
+    shape_b = [(x["offset"], x["bytes"], x["class"]) for x in callee["fields"]]
+    if shape_a and shape_b and shape_a != shape_b:
+        at = next((i for i, (a, b) in enumerate(zip(shape_a, shape_b)) if a != b), min(len(shape_a), len(shape_b)))
+        out.append(
+            {
+                "kind": "shape",
+                "caller": caller["fields"][at]["name"] if at < len(shape_a) else None,
+                "callee": callee["fields"][at]["name"] if at < len(shape_b) else None,
+            }
+        )
+    return out
+
+
+def _operand_name(operand: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """`COMMAREA(x)`'s data-name and its qualifier: `A OF B(1)` -> ('A', 'B')."""
+    if not operand:
+        return None, None
+    tokens = operand.replace("(", " ( ").split()
+    name = tokens[0] if tokens and tokens[0][:1].isalpha() else None
+    qual = None
+    if len(tokens) >= 3 and tokens[1] in ("OF", "IN") and tokens[2][:1].isalpha():
+        qual = tokens[2]
+    return name, qual
+
+
+def _declared_length(expr: Optional[str], record: Optional[str]) -> tuple[Optional[int], Optional[str]]:
+    """The byte count a LENGTH/DATALENGTH operand states, and how it states it.
+
+    `+100` / `100` -> (100, 'literal'); `LENGTH OF <the passed record>` ->
+    (None, 'length_of_record') -- equal to the record by construction; anything
+    else (a data-name, `LENGTH OF` another item) -> (None, 'expression').
+    """
+    if not expr:
+        return None, None
+    text = expr.strip().lstrip("+")
+    if text.isdigit():
+        return int(text), "literal"
+    parts = text.split()
+    if len(parts) >= 3 and parts[0] == "LENGTH" and parts[1] == "OF" and record and parts[2] == record:
+        return None, "length_of_record"
+    return None, "expression"
 
 
 def _has_column(cur: sqlite3.Cursor, table: str, column: str) -> bool:
@@ -865,16 +1634,25 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
         # database has no such table, so a missing table is "no data", never an
         # error -- the refraction tools must keep reading an older scan.
         if _has_table(cur, "call_site_data"):
-            for file_id, verb, form, operand, target, dst_id, line in cur.execute(
-                "SELECT src_file_id, verb, form, operand, target, dst_file_id, line_number "
-                "FROM call_site_data WHERE repo_name = ? AND commit_hash = ? ORDER BY src_file_id, line_number, id",
+            # #3355: the COMMAREA contract operands are NULL on a DB written before them.
+            commarea_cols = (
+                "commarea, commarea_length, commarea_datalength"
+                if _has_column(cur, "call_site_data", "commarea")
+                else "NULL, NULL, NULL"
+            )
+            for file_id, verb, form, operand, target, dst_id, line, commarea, c_len, c_dlen in cur.execute(
+                "SELECT src_file_id, verb, form, operand, target, dst_file_id, line_number, "  # noqa: S608 -- commarea_cols is one of two literals; values are bound
+                f"{commarea_cols} FROM call_site_data WHERE repo_name = ? AND commit_hash = ? "
+                "ORDER BY src_file_id, line_number, id",
                 (repo_name, commit_hash),
             ):
                 if file_id not in by_id:
                     continue
                 resolved = by_id[dst_id].file_path if dst_id in by_id else None
                 by_id[file_id].calls.append(
-                    EngineCall(verb or "", form or "", operand, target, resolved, int(line or 0))
+                    EngineCall(
+                        verb or "", form or "", operand, target, resolved, int(line or 0), commarea, c_len, c_dlen
+                    )
                 )
 
         # #3201: the dataset boundary, both the COBOL and the JCL half.
@@ -913,6 +1691,8 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
         if _has_table(cur, "record_data"):
             # #3250: `attributes` is NULL on a DB written before the column existed.
             attributes_col = "attributes" if _has_column(cur, "record_data", "attributes") else "NULL"
+            # #3355: `copy_members` likewise.
+            copy_col = "copy_members" if _has_column(cur, "record_data", "copy_members") else "NULL"
             for (
                 file_id,
                 ordinal,
@@ -930,10 +1710,12 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
                 val,
                 line,
                 attrs,
+                copies,
             ) in cur.execute(
                 "SELECT file_id, ordinal, parent_ordinal, level_number, item_name, section, fd_name, pic, "  # noqa: S608 -- attributes_col is one of two literals; values are bound
                 "usage, occurs_min, occurs_max, occurs_depending_on, redefines, value_literal, line_number, "
-                f"{attributes_col} FROM record_data WHERE repo_name = ? AND commit_hash = ? ORDER BY file_id, ordinal",
+                f"{attributes_col}, {copy_col} FROM record_data WHERE repo_name = ? AND commit_hash = ? "
+                "ORDER BY file_id, ordinal",
                 (repo_name, commit_hash),
             ):
                 if file_id not in by_id:
@@ -955,6 +1737,7 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
                         value=val,
                         line=int(line or 0),
                         attributes=attrs,
+                        copy_members=copies,
                     )
                 )
             # Thread children onto parents and collect the roots. `data_items` is
@@ -1071,6 +1854,34 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
                         program=row[13],
                         attributes=row[14],
                         line=int(row[15] or 0),
+                    )
+                )
+        # #3351-#3354: CICS resource operations. A pre-channel database has no such
+        # table, so a missing table is "no CICS resources", never an error.
+        if _has_table(cur, "cics_resource_data"):
+            for row in cur.execute(
+                "SELECT file_id, verb, resource_kind, access, name_operand, resource_name, name_resolution, "
+                "name_candidates, qualifier_operand, qualifier, record_clause, record_name, attributes, line_number "
+                "FROM cics_resource_data WHERE repo_name = ? AND commit_hash = ? ORDER BY file_id, line_number, id",
+                (repo_name, commit_hash),
+            ):
+                if row[0] not in by_id:
+                    continue
+                by_id[row[0]].cics_resources.append(
+                    EngineCicsResource(
+                        verb=row[1] or "",
+                        kind=row[2] or "",
+                        access=row[3] or "",
+                        operand=row[4],
+                        name=row[5],
+                        resolution=row[6],
+                        candidates=row[7],
+                        qualifier_operand=row[8],
+                        qualifier=row[9],
+                        record_clause=row[10],
+                        record=row[11],
+                        attributes=row[12],
+                        line=int(row[13] or 0),
                     )
                 )
     finally:
