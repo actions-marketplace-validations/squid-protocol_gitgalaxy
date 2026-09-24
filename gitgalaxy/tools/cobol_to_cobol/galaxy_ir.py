@@ -89,6 +89,16 @@
 # procedure's steps and job_dataset_flow pairs the DDs that create a dataset with
 # the DDs (of later steps, or of other jobs) that read it. Scheduler order is not
 # in the repository, so cross-job edges are candidates.
+# Since #3454, batch CALL USING contracts: each CALL's USING list
+# (call_site_data.using_args) and each program's PROCEDURE DIVISION / ENTRY USING
+# parameters (entry_point_data, per EngineFile.entry_points); GalaxyIR.call_contracts
+# pairs them by position -- arity, and each argument's byte length through
+# record_layout -- the batch counterpart of commarea_contracts.
+# Since #3450, IMS DL/I calls (dli_call_data, per EngineFile.dli_calls): EXEC DLI
+# commands and CALL 'CBLTDLI' with their operands as written; GalaxyIR.ims_calls
+# resolves a CBLTDLI function code and each SSA's segment / qualification
+# through the COPY-expanded working-storage VALUEs, and ims_segment_access is the
+# program x segment matrix (the IMS counterpart of sql_table_access).
 # NOT in the DB, so still owned by the forge tools:
 # reachability-based dead code. `usage_status` is a same-file "name mentioned
 # elsewhere" test, not reachability -- it is carried as data and must not be fed
@@ -156,6 +166,28 @@ class EngineCall:
     commarea: Optional[str] = None
     commarea_length: Optional[str] = None
     commarea_datalength: Optional[str] = None
+    # #3454: a batch CALL's USING list, comma-joined by position (call_using.py).
+    using_args: Optional[str] = None
+
+    @property
+    def using(self) -> list:
+        """The USING arguments in order (`CONTENT:X` / `VALUE:X` keep their mode)."""
+        return [a for a in (self.using_args or "").split(",") if a]
+
+
+@dataclass
+class EngineEntryPoint:
+    """A program entry point (#3454), from `entry_point_data`: the PROCEDURE
+    DIVISION or an `ENTRY 'X'`, with its USING `params` (comma-joined, or None)."""
+
+    kind: str
+    entry_name: Optional[str]
+    params: Optional[str]
+    line: int
+
+    @property
+    def parameters(self) -> list:
+        return [p for p in (self.params or "").split(",") if p]
 
 
 @dataclass
@@ -605,6 +637,23 @@ class EngineJobFlow:
 
 
 @dataclass
+class EngineDliCall:
+    """One IMS DL/I call (#3450), from `dli_call_data`, operands as written
+    (see core/dli_calls.py); resolution is GalaxyIR.ims_calls'."""
+
+    interface: str
+    function: Optional[str]
+    function_operand: Optional[str]
+    pcb: Optional[str]
+    io_area: Optional[str]
+    segments: Optional[str]
+    ssas: Optional[str]
+    where: Optional[str]
+    psb: Optional[str]
+    line: int
+
+
+@dataclass
 class EngineFile:
     file_path: str
     language: str
@@ -630,6 +679,8 @@ class EngineFile:
     file_control: list = field(default_factory=list)  # EngineFileControl, source order, #3455
     vsam_defines: list = field(default_factory=list)  # EngineVsamDefine, source order, #3455
     job_flow: list = field(default_factory=list)  # EngineJobFlow, source order, #3451
+    entry_points: list = field(default_factory=list)  # EngineEntryPoint, source order, #3454
+    dli_calls: list = field(default_factory=list)  # EngineDliCall, source order, #3450
 
     @property
     def is_program(self) -> bool:
@@ -2222,6 +2273,222 @@ class GalaxyIR:
                 out.append({"dataset": name, "producer": p, "consumer": c, "same_job": same})
         return out
 
+    def _item_bytes(self, ef: EngineFile, operand: str) -> tuple[Optional[int], bool, Optional[str]]:
+        """(bytes, variable, name) of one USING operand as seen from `ef`: a data
+        item (COPY-expanded record_layout), a literal's own length, or (None, False,
+        None) for ADDRESS OF / LENGTH OF / OMITTED and names not found."""
+        text = operand.split(":", 1)[1] if operand.split(":", 1)[0] in ("CONTENT", "VALUE") else operand
+        if text[:1] in "'\"":
+            return len(text) - 2, False, text
+        if text.startswith(("ADDRESS OF", "LENGTH OF")) or text == "OMITTED":
+            return None, False, text
+        name, _, qual = text.partition(" OF ")
+        found = self._find_item(ef, name, qual.split(" OF ")[0] or None)
+        if not found:
+            return None, False, name
+        owner, item, extension = found[0]
+        layout = self.record_layout(owner, item, extension)
+        return layout["bytes"], bool(layout["variable"]), name
+
+    def call_contracts(self, language: str = "cobol") -> list:
+        """Every batch CALL paired with its callee's USING parameters (#3454).
+
+        One entry per CALL site that passes a USING list or reaches a program in the
+        repository: `caller`, `line`, `target`, `callee` (file), `entry` (PROCEDURE,
+        or the ENTRY literal the target names), `status` -- paired | arity_mismatch |
+        callee_unresolved | callee_no_using | caller_no_using -- and `args`, one per
+        position: `argument` / `parameter` as written with their `caller_bytes` /
+        `callee_bytes` (None when not computable) and `length_match` (True / False
+        when both are fixed-length and known, else None). A length difference is
+        data for a modernizer, not a verdict: a callee may declare a larger area
+        than the caller passes and only read part of it.
+        """
+        out = []
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            if f.language != language:
+                continue
+            for call in f.calls:
+                if call.verb != "CALL" or not (call.using or call.resolves_to):
+                    continue
+                callee = self.files.get(call.resolves_to or "")
+                entry = None
+                if callee is not None:
+                    named = [
+                        e
+                        for e in callee.entry_points
+                        if e.kind == "ENTRY" and e.entry_name == (call.target or "").upper()
+                    ]
+                    entry = named[0] if named else next((e for e in callee.entry_points if e.kind == "PROCEDURE"), None)
+                params = entry.parameters if entry else []
+                if callee is None:
+                    status = "callee_unresolved"
+                elif not params and call.using:
+                    status = "callee_no_using"
+                elif params and not call.using:
+                    status = "caller_no_using"
+                elif len(params) != len(call.using):
+                    status = "arity_mismatch"
+                else:
+                    status = "paired"
+                args = []
+                for i in range(max(len(call.using), len(params))):
+                    a = call.using[i] if i < len(call.using) else None
+                    p = params[i] if i < len(params) else None
+                    a_bytes, a_var, _ = self._item_bytes(f, a) if a else (None, False, None)
+                    p_bytes, p_var, _ = (
+                        self._item_bytes(callee, p) if (p and callee is not None) else (None, False, None)
+                    )
+                    known = a_bytes is not None and p_bytes is not None and not a_var and not p_var
+                    args.append(
+                        {
+                            "position": i + 1,
+                            "argument": a,
+                            "parameter": p,
+                            "caller_bytes": a_bytes,
+                            "callee_bytes": p_bytes,
+                            "length_match": (a_bytes == p_bytes) if known else None,
+                        }
+                    )
+                out.append(
+                    {
+                        "caller": f.file_path,
+                        "line": call.line,
+                        "target": call.target,
+                        "callee": callee.file_path if callee is not None else None,
+                        "entry": (entry.entry_name or entry.kind) if entry else None,
+                        "status": status,
+                        "args": args,
+                    }
+                )
+        return out
+
+    def _value_text(self, ef: EngineFile, name: Optional[str]) -> Optional[str]:
+        """The text data-name `name` holds at load: its VALUE literal, or for a group
+        its elementary children's VALUEs in order, each padded / cut to its width
+        (`?` for a child with no VALUE). None when the item or a width is unknown."""
+        if not name:
+            return None
+        found = self._find_item(ef, name.split(" OF ")[0], None)
+        if not found:
+            return None
+        _owner, item, _ext = found[0]
+
+        def lit(v: Optional[str], width: int) -> str:
+            if v is None:
+                return "?" * width
+            u = v.strip()
+            if u.upper() in ("SPACE", "SPACES"):
+                return " " * width
+            if u.upper() in ("ZERO", "ZEROS", "ZEROES"):
+                return "0" * width
+            if len(u) >= 2 and u[0] in "'\"" and u[-1] == u[0]:
+                u = u[1:-1]
+            return u.ljust(width)[:width]
+
+        if not item.children:
+            width = _elementary_bytes(item)
+            return lit(item.value, width) if width else (item.value or "").strip("'\"") or None
+        parts: list[str] = []
+
+        def walk(it: EngineDataItem) -> bool:
+            for child in it.children:
+                if child.level in (66, 88) or child.redefines:
+                    continue
+                if child.children:
+                    if not walk(child):
+                        return False
+                    continue
+                width = _elementary_bytes(child)
+                if width is None:
+                    return False
+                parts.append(lit(child.value, width))
+            return True
+
+        return "".join(parts) if walk(item) else ("".join(parts) or None)
+
+    def ims_calls(self) -> list:
+        """Every IMS DL/I call, resolved (#3450). Each: `file`, `line`, `interface`,
+        `function` (the EXEC command, or a CBLTDLI function operand's VALUE -- GU,
+        ISRT, ... -- None when unresolved), `access` (read / insert / update /
+        delete / control), `pcb`, `io_area`, and `segments`: per SEGMENT / SSA the
+        `segment` name and its `qualification` (an EXEC WHERE, or an SSA's
+        `(FIELD OP` -- the key field and operator), `command_codes` (an SSA's `*..`)
+        and `ssa` (the SSA data-name)."""
+        access = {
+            "GU": "read", "GHU": "read", "GN": "read", "GHN": "read", "GNP": "read", "GHNP": "read",
+            "ISRT": "insert", "REPL": "update", "DLET": "delete",
+        }  # fmt: skip
+        out = []
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            for d in f.dli_calls:
+                function = d.function
+                if d.interface == "CALL" and d.function_operand:
+                    value = self._value_text(f, d.function_operand)
+                    function = value.strip() or None if value and "?" not in value else None
+                segments = []
+                if d.interface == "EXEC":
+                    wheres = (d.where or "").split(";") if d.where else []
+                    for i, seg in enumerate([x for x in (d.segments or "").split(",") if x]):
+                        # A WHERE qualifies the SEGMENT before it; a path call's
+                        # last WHEREs line up with its last segments.
+                        offset = len([x for x in (d.segments or "").split(",") if x]) - len(wheres)
+                        qual = wheres[i - offset] if 0 <= i - offset < len(wheres) else None
+                        segments.append({"segment": seg, "qualification": qual, "command_codes": None, "ssa": None})
+                else:
+                    for ssa in [x for x in (d.ssas or "").split(",") if x]:
+                        text = self._value_text(f, ssa) or ""
+                        seg = text[:8].strip() or None
+                        mark = text[8:9]
+                        qual = codes = None
+                        if mark == "*":
+                            codes = text[9 : text.find("(", 9) if "(" in text[9:] else len(text)].strip() or None
+                            rest = text[text.find("(", 9) :] if "(" in text[9:] else ""
+                        else:
+                            rest = text[8:]
+                        if rest.startswith("("):
+                            qual = f"{rest[1:9].strip()} {rest[9:11].strip()}".strip() or None
+                        segments.append(
+                            {"segment": seg if seg and "?" not in seg else None, "qualification": qual,
+                             "command_codes": codes, "ssa": ssa}
+                        )  # fmt: skip
+                out.append(
+                    {
+                        "file": f.file_path,
+                        "line": d.line,
+                        "interface": d.interface,
+                        "function": function,
+                        "access": access.get(function or "", "control" if function else None),
+                        "pcb": d.pcb,
+                        "io_area": d.io_area,
+                        "psb": d.psb,
+                        "segments": segments,
+                    }
+                )
+        return out
+
+    def ims_segment_access(self) -> list:
+        """The program x IMS segment matrix (#3450): one entry per (file, segment)
+        with its sorted `accesses` (read / insert / update / delete) and `pcbs`. A
+        path call acts on its last segment and reads the parents it positions
+        through; an unqualified GN / GNP with no
+        segment reaches the PCB's database, which needs the PSB (not scanned)."""
+        by: dict[tuple[str, str], dict] = {}
+        for c in self.ims_calls():
+            if c["access"] in (None, "control"):
+                continue
+            named = [s_ for s_ in c["segments"] if s_["segment"]]
+            for i, s_ in enumerate(named):
+                e = by.setdefault(
+                    (c["file"], s_["segment"]),
+                    {"file": c["file"], "segment": s_["segment"], "accesses": set(), "pcbs": set()},
+                )
+                # A path call acts on its LAST segment; the parents before it are
+                # only located (read) to position there.
+                e["accesses"].add(c["access"] if i == len(named) - 1 else "read")
+                if c["pcb"]:
+                    e["pcbs"].add(c["pcb"])
+        return [dict(e, accesses=sorted(e["accesses"]), pcbs=sorted(e["pcbs"])) for _, e in sorted(by.items())]
+
     def lookup(self, path: Path, target_root: Path) -> Optional[EngineFile]:
         try:
             rel = path.resolve().relative_to(target_root.resolve()).as_posix()
@@ -2478,9 +2745,11 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
                 if _has_column(cur, "call_site_data", "commarea")
                 else "NULL, NULL, NULL"
             )
-            for file_id, verb, form, operand, target, dst_id, line, commarea, c_len, c_dlen in cur.execute(
-                "SELECT src_file_id, verb, form, operand, target, dst_file_id, line_number, "  # noqa: S608 -- commarea_cols is one of two literals; values are bound
-                f"{commarea_cols} FROM call_site_data WHERE repo_name = ? AND commit_hash = ? "
+            # #3454: the USING list is NULL on a DB written before it.
+            using_col = "using_args" if _has_column(cur, "call_site_data", "using_args") else "NULL"
+            for file_id, verb, form, operand, target, dst_id, line, commarea, c_len, c_dlen, using in cur.execute(
+                "SELECT src_file_id, verb, form, operand, target, dst_file_id, line_number, "  # noqa: S608 -- commarea_cols / using_col are fixed literals; values are bound
+                f"{commarea_cols}, {using_col} FROM call_site_data WHERE repo_name = ? AND commit_hash = ? "
                 "ORDER BY src_file_id, line_number, id",
                 (repo_name, commit_hash),
             ):
@@ -2489,7 +2758,16 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
                 resolved = by_id[dst_id].file_path if dst_id in by_id else None
                 by_id[file_id].calls.append(
                     EngineCall(
-                        verb or "", form or "", operand, target, resolved, int(line or 0), commarea, c_len, c_dlen
+                        verb or "",
+                        form or "",
+                        operand,
+                        target,
+                        resolved,
+                        int(line or 0),
+                        commarea,
+                        c_len,
+                        c_dlen,
+                        using,
                     )
                 )
 
@@ -2742,6 +3020,37 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
                         line=int(row[13] or 0),
                     )
                 )
+        # #3450: IMS DL/I calls. A pre-#3450 database has none.
+        if _has_table(cur, "dli_call_data"):
+            for row in cur.execute(
+                "SELECT file_id, interface, function, function_operand, pcb, io_area, segments, ssas, where_text, psb, "
+                "line_number FROM dli_call_data WHERE repo_name = ? AND commit_hash = ? ORDER BY file_id, line_number, id",
+                (repo_name, commit_hash),
+            ):
+                if row[0] in by_id:
+                    by_id[row[0]].dli_calls.append(
+                        EngineDliCall(
+                            interface=row[1] or "",
+                            function=row[2],
+                            function_operand=row[3],
+                            pcb=row[4],
+                            io_area=row[5],
+                            segments=row[6],
+                            ssas=row[7],
+                            where=row[8],
+                            psb=row[9],
+                            line=int(row[10] or 0),
+                        )
+                    )
+        # #3454: program entry points. A pre-#3454 database has none.
+        if _has_table(cur, "entry_point_data"):
+            for file_id, kind, name, params, line in cur.execute(
+                "SELECT file_id, kind, entry_name, params, line_number FROM entry_point_data "
+                "WHERE repo_name = ? AND commit_hash = ? ORDER BY file_id, line_number, id",
+                (repo_name, commit_hash),
+            ):
+                if file_id in by_id:
+                    by_id[file_id].entry_points.append(EngineEntryPoint(kind or "", name, params, int(line or 0)))
         # #3451: JCL job flow. A pre-#3451 database has none.
         if _has_table(cur, "job_flow_data"):
             for row in cur.execute(

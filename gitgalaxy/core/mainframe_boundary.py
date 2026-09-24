@@ -82,10 +82,12 @@ from gitgalaxy.core.bms_screen_fields import bms_screen_fields
 
 # #3351-#3354: CICS resource operations (FILE/MAP/QUEUE/CONTAINER/CHANNEL) live in
 # their own module and ride out of extract_boundary as `cics_resources`.
+from gitgalaxy.core.call_using import blank_stream, call_using_args, entry_points
 from gitgalaxy.core.cics_resources import cobol_move_literals, extract_cics_resources
 from gitgalaxy.core.cics_tasks import extract_cics_tasks
 from gitgalaxy.core.db2_declare_table import extract_sql_tables
 from gitgalaxy.core.db2_sql_statements import extract_sql_statements
+from gitgalaxy.core.dli_calls import extract_dli_calls
 from gitgalaxy.core.file_control import cobol_file_control, jcl_vsam_defines
 from gitgalaxy.core.job_flow import jcl_job_flow
 from gitgalaxy.core.job_submits import cobol_job_cards, jcl_intrdr_dds
@@ -511,6 +513,16 @@ def _cobol_calls(code_stream: str, values: dict[str, str]) -> list[dict[str, Any
             }
         )
 
+    blanked: list[str] = []
+
+    def _using(end: int) -> dict[str, str]:
+        """#3454: the CALL's USING list, only when it has one (so a CALL without
+        USING keeps its pre-#3454 shape). The sequence-blanked stream is built once."""
+        if not blanked:
+            blanked.append(blank_stream(code_stream))
+        args = call_using_args(blanked[0], end)
+        return {"using_args": args} if args else {}
+
     # 2. CALL 'LITERAL'
     for match in _CALL_LITERAL.finditer(code_stream):
         if _shielded(match.start()):
@@ -524,6 +536,7 @@ def _cobol_calls(code_stream: str, values: dict[str, str]) -> list[dict[str, Any
                 "operand": literal or None,
                 "target": literal or None,
                 "line": _line_of(match.start()),
+                **_using(match.end()),  # #3454
             }
         )
 
@@ -539,6 +552,7 @@ def _cobol_calls(code_stream: str, values: dict[str, str]) -> list[dict[str, Any
                 "operand": operand,
                 "target": values.get(operand),
                 "line": _line_of(match.start()),
+                **_using(match.end()),  # #3454
             }
         )
 
@@ -1804,6 +1818,20 @@ def _cics_tasks(
     return extract_cics_tasks(code_stream, values, moves, pics, dialect, _shielded)
 
 
+def _dli_calls(code_stream: str) -> list[dict[str, Any]]:
+    """IMS DL/I calls of one COBOL file (#3450): EXEC DLI and CALL 'CBLTDLI'."""
+    if "DLI" not in code_stream.upper():
+        return []
+    newlines = [i for i, ch in enumerate(code_stream) if ch == "\n"]
+
+    def _shielded(offset: int) -> bool:
+        index = bisect.bisect_left(newlines, offset)
+        line_start = newlines[index - 1] + 1 if index else 0
+        return _opens_inside_literal(code_stream, line_start, offset)
+
+    return extract_dli_calls(code_stream, _shielded)
+
+
 def _uow_handlers(code_stream: str, values: dict[str, str]) -> list[dict[str, Any]]:
     """Commit / rollback points, HANDLE CONDITION / ABEND / AID handlers, explicit
     ABENDs and RESP checks of one COBOL file (#3453)."""
@@ -1897,6 +1925,8 @@ def extract_boundary(dialect: str, code_stream: str) -> dict[str, list[dict[str,
             "sql_tables": extract_sql_tables(code_stream, "cobol"),  # #3344
             "sql_statements": extract_sql_statements(code_stream, "cobol"),  # #3446
             "cics_resources": _cics_resources(code_stream, values, "cobol"),  # #3351-#3354
+            "entry_points": entry_points(code_stream),  # #3454
+            "dli_calls": _dli_calls(code_stream),  # #3450
             "cics_tasks": _cics_tasks(code_stream, values, records, "cobol"),  # #3449
             "job_submits": _cobol_job_cards(code_stream),  # #3448
             "mq_calls": _mq_calls(code_stream, values),  # #3447
