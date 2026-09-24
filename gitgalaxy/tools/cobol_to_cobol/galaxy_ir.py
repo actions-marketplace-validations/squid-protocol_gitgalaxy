@@ -59,6 +59,17 @@
 # channel and CHILD/REQID token, FETCH/FREE joins, RETRIEVE, DELAY, POST, WAIT
 # and ENQ/DEQ; GalaxyIR.async_tasks joins each spawn to the CSD transactions and
 # programs it reaches, the containers it passes and the FETCHes that collect it.
+# Since #3448, job submission through the internal reader (job_submit_data, per
+# EngineFile.job_submits): the JCL JOB/EXEC cards a COBOL program holds as
+# literals and the JCL DDs routed to SYSOUT=(x,INTRDR); GalaxyIR.job_submissions
+# joins a CICS `WRITEQ TD` to an extrapartition TDQUEUE and on to the job it
+# submits, and a batch INTRDR step to the JCL member it copies there.
+# Since #3447, IBM MQ calls (mq_call_data, per EngineFile.mq_calls): each
+# MQOPEN/MQPUT/MQPUT1/MQGET/MQCLOSE with the queue read through its object
+# descriptor (or the MQOPEN its handle came from), the direction and options;
+# GalaxyIR.mq_queues lists every program's queue endpoints -- `trigger` and
+# `reply_to` named as runtime queues -- and mq_flows pairs producers with
+# consumers of the same named queue.
 # NOT in the DB, so still owned by the forge tools:
 # reachability-based dead code. `usage_status` is a same-file "name mentioned
 # elsewhere" test, not reachability -- it is carried as data and must not be fed
@@ -454,6 +465,47 @@ class EngineCicsTask:
 
 
 @dataclass
+class EngineJobSubmit:
+    """One piece of job-submission evidence (#3448), from `job_submit_data`.
+
+    `kind` JOB: a COBOL literal job card, `name` the job name. `kind` EXEC: a
+    COBOL literal EXEC card, `step` its step and `target` the PROC / PGM
+    (`target_kind`). `kind` INTRDR: a JCL DD routed to the internal reader,
+    `step` / `name` its step and ddname, `target` the step's SYSUT1 DSN.
+    """
+
+    kind: str
+    step: Optional[str]
+    name: Optional[str]
+    target_kind: Optional[str]
+    target: Optional[str]
+    line: int
+
+
+@dataclass
+class EngineMqCall:
+    """One IBM MQ call (#3447), from `mq_call_data`.
+
+    `queue` is the queue name when one literal determines it; otherwise
+    `resolution` says why not -- `trigger` (the queue whose MQ trigger started the
+    transaction, MQTM-QNAME), `reply_to` (the requester's MQMD-REPLYTOQ),
+    `ambiguous` (`candidates`) or `unresolved`. A PUT/GET/CLOSE inherits both from
+    the MQOPEN its `handle` was matched to (`open_line`).
+    """
+
+    verb: str
+    direction: Optional[str]
+    operand: Optional[str]
+    queue: Optional[str]
+    resolution: Optional[str]
+    candidates: Optional[str]
+    handle: Optional[str]
+    open_line: Optional[int]
+    options: Optional[str]
+    line: int
+
+
+@dataclass
 class EngineFile:
     file_path: str
     language: str
@@ -473,6 +525,8 @@ class EngineFile:
     csd_resources: list = field(default_factory=list)  # EngineCsdResource, source order, #3356
     cics_resources: list = field(default_factory=list)  # EngineCicsResource, source order, #3351-#3354
     cics_tasks: list = field(default_factory=list)  # EngineCicsTask, source order, #3449
+    job_submits: list = field(default_factory=list)  # EngineJobSubmit, source order, #3448
+    mq_calls: list = field(default_factory=list)  # EngineMqCall, source order, #3447
 
     @property
     def is_program(self) -> bool:
@@ -1567,6 +1621,159 @@ class GalaxyIR:
                 )
         return out
 
+    def _jcl_member(self, name: Optional[str], proc: bool) -> tuple[Optional[str], list]:
+        """(the one JCL file named `name`, every candidate). A PROC prefers a
+        procedure member (`.prc`/`.proc`, or a `proc` directory); a job the rest."""
+        if not name:
+            return None, []
+        hits = sorted(
+            f.file_path
+            for f in self.files.values()
+            if f.language == "jcl" and Path(f.file_path).stem.upper() == name.upper()
+        )
+
+        def is_proc(p: str) -> bool:
+            return Path(p).suffix.lower() in (".prc", ".proc") or "proc" in {x.lower() for x in Path(p).parts[:-1]}
+
+        preferred = [p for p in hits if is_proc(p) == proc] or hits
+        return (preferred[0] if len(preferred) == 1 else None), hits
+
+    def job_submissions(self) -> list:
+        """Every job submission to the internal reader the repository shows (#3448).
+
+        Online -> batch (`via` 'tdq'): program P writes (`WRITEQ TD`) queue Q, and
+        the CSD defines Q as an extrapartition TDQUEUE (TYPE(EXTRA)). That is a
+        submission when either
+          - `region_jcl`: some JCL in the repository routes Q's DDNAME to
+            SYSOUT=(x,INTRDR) (the CICS region's own startup JCL), or
+          - `job_card`: P holds a literal JCL job card -- it builds the job it
+            writes (CardDemo CORPT00C: `//TRNRPT00 JOB`, `EXEC PROC=TRANREPT`).
+        An extrapartition queue with neither is an ordinary output queue and is
+        not reported.
+        Batch -> batch (`via` 'intrdr_dd'): a JCL step routes a DD to
+        SYSOUT=(x,INTRDR); the job it submits is the member of that step's SYSUT1
+        library (`LIB(INTRDRJ2)`), resolved to the JCL file of that name.
+
+        Each entry: `submitter` (file), `via`, `line`, `queue` / `ddname` (tdq) or
+        `step` / `dd` / `source` (intrdr_dd), `transactions` (the CSD transactions
+        that enter the submitter), `jobs` (job names), `runs` (each EXEC target
+        with `kind`, `name`, `resolves_to`, `candidates`) and `evidence`.
+        """
+        intrdr_ddnames = {
+            (j.name or "").upper() for f in self.files.values() for j in f.job_submits if j.kind == "INTRDR"
+        }
+        tdqs = {
+            r.name.upper(): r
+            for f in self.files.values()
+            for r in f.csd_resources
+            if r.resource_type == "TDQUEUE" and (r.queue_type or "").upper().startswith("EXTRA")
+        }
+        entry: dict[str, set[str]] = {}
+        for f in self.files.values():
+            for t in f.transactions:
+                if t.resolves_to:
+                    entry.setdefault(t.resolves_to, set()).add(t.transid.upper())
+        out = []
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            jobs = [j.name for j in f.job_submits if j.kind == "JOB" and j.name]
+            runs = []
+            for j in f.job_submits:
+                if j.kind == "EXEC":
+                    one, cands = self._jcl_member(j.target, j.target_kind == "PROC")
+                    runs.append({"kind": j.target_kind, "name": j.target, "resolves_to": one, "candidates": cands})
+            for op in f.cics_resources:
+                if op.kind != "QUEUE" or op.access != "write" or (op.qualifier or "").upper() != "TD":
+                    continue
+                for qname in sorted(op.names & set(tdqs)):
+                    tdq = tdqs[qname]
+                    evidence = []
+                    if (tdq.ddname or "").upper() in intrdr_ddnames:
+                        evidence.append("region_jcl")
+                    if jobs:
+                        evidence.append("job_card")
+                    if not evidence:
+                        continue
+                    out.append(
+                        {
+                            "submitter": f.file_path,
+                            "via": "tdq",
+                            "line": op.line,
+                            "queue": qname,
+                            "ddname": tdq.ddname,
+                            "transactions": sorted(entry.get(f.file_path, set())),
+                            "jobs": jobs,
+                            "runs": runs,
+                            "evidence": evidence,
+                        }
+                    )
+            for j in f.job_submits:
+                if j.kind != "INTRDR":
+                    continue
+                member = None
+                if j.target and "(" in j.target and j.target.endswith(")"):
+                    member = j.target.rsplit("(", 1)[1][:-1]
+                    member = None if member.lstrip("+-").isdigit() else member  # a GDG generation
+                one, cands = self._jcl_member(member, False)
+                out.append(
+                    {
+                        "submitter": f.file_path,
+                        "via": "intrdr_dd",
+                        "line": j.line,
+                        "step": j.step,
+                        "dd": j.name,
+                        "source": j.target,
+                        "transactions": [],
+                        "jobs": [member] if member else [],
+                        "runs": [{"kind": "JOB", "name": member, "resolves_to": one, "candidates": cands}]
+                        if member
+                        else [],
+                        "evidence": ["sysout_intrdr"],
+                    }
+                )
+        return out
+
+    def mq_queues(self) -> list:
+        """Every program's MQ queue endpoints (#3447): one entry per (file, queue,
+        direction) for the calls that move messages -- MQPUT / MQPUT1 (`put`) and
+        MQGET (`get`, or `browse` when opened for browse). `queue` is the name, or
+        `<trigger>` / `<reply_to>` / `<ambiguous>` / `<unresolved>` for a queue the
+        source does not name; `lines` are the calls."""
+        out: dict[tuple[str, str, str], dict] = {}
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            opened = {q.line: q for q in f.mq_calls if q.verb == "MQOPEN"}
+            for q in f.mq_calls:
+                if q.verb not in ("MQPUT", "MQPUT1", "MQGET"):
+                    continue
+                direction = q.direction or ""
+                if q.verb == "MQGET" and q.open_line in opened and opened[q.open_line].direction == "browse":
+                    direction = "browse"
+                name = q.queue or f"<{q.resolution or 'unresolved'}>"
+                e = out.setdefault(
+                    (f.file_path, name, direction),
+                    {
+                        "file": f.file_path,
+                        "queue": name,
+                        "direction": direction,
+                        "resolution": q.resolution,
+                        "lines": [],
+                    },
+                )
+                e["lines"].append(q.line)
+        return [out[k] for k in sorted(out)]
+
+    def mq_flows(self) -> list:
+        """Producer -> consumer pairs through a NAMED queue (#3447): a program that
+        puts to Q and a different program that gets (or browses) Q. Runtime queues
+        (`<trigger>`, `<reply_to>`) never pair: their names are not in the source."""
+        ends = [e for e in self.mq_queues() if not e["queue"].startswith("<")]
+        return [
+            {"queue": p["queue"], "producer": p["file"], "consumer": c["file"], "mode": c["direction"]}
+            for p in ends
+            if p["direction"] == "put"
+            for c in ends
+            if c["direction"] in ("get", "browse") and c["queue"] == p["queue"] and c["file"] != p["file"]
+        ]
+
     def lookup(self, path: Path, target_root: Path) -> Optional[EngineFile]:
         try:
             rel = path.resolve().relative_to(target_root.resolve()).as_posix()
@@ -2087,6 +2294,40 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
                         line=int(row[13] or 0),
                     )
                 )
+        # #3447: IBM MQ calls. A pre-#3447 database has none.
+        if _has_table(cur, "mq_call_data"):
+            for row in cur.execute(
+                "SELECT file_id, verb, direction, queue_operand, queue_name, queue_resolution, queue_candidates, "
+                "handle, open_line, options, line_number "
+                "FROM mq_call_data WHERE repo_name = ? AND commit_hash = ? ORDER BY file_id, line_number, id",
+                (repo_name, commit_hash),
+            ):
+                if row[0] in by_id:
+                    by_id[row[0]].mq_calls.append(
+                        EngineMqCall(
+                            verb=row[1] or "",
+                            direction=row[2],
+                            operand=row[3],
+                            queue=row[4],
+                            resolution=row[5],
+                            candidates=row[6],
+                            handle=row[7],
+                            open_line=int(row[8]) if row[8] is not None else None,
+                            options=row[9],
+                            line=int(row[10] or 0),
+                        )
+                    )
+        # #3448: job-submission evidence. A pre-#3448 database has none.
+        if _has_table(cur, "job_submit_data"):
+            for file_id, kind, step, name, tkind, target, line in cur.execute(
+                "SELECT file_id, kind, step_name, submit_name, target_kind, target, line_number "
+                "FROM job_submit_data WHERE repo_name = ? AND commit_hash = ? ORDER BY file_id, line_number, id",
+                (repo_name, commit_hash),
+            ):
+                if file_id in by_id:
+                    by_id[file_id].job_submits.append(
+                        EngineJobSubmit(kind or "", step, name, tkind, target, int(line or 0))
+                    )
         # #3449: CICS task control. A pre-#3449 database has no such table, so a
         # missing table is "no task commands", never an error.
         if _has_table(cur, "cics_task_data"):

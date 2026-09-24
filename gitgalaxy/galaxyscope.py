@@ -685,6 +685,8 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
             csd_resources: list = []  # #3356: every CSD DEFINE record (csd deck / DFHCSDUP JCL)
             cics_resources: list = []  # #3351-#3354: CICS FILE/MAP/QUEUE/CONTAINER/CHANNEL ops
             cics_tasks: list = []  # #3449: CICS task control (RUN/START/FETCH/RETRIEVE/DELAY/ENQ)
+            job_submits: list = []  # #3448: embedded JCL cards (cobol) / INTRDR DDs (jcl)
+            mq_calls: list = []  # #3447: IBM MQ calls (cobol)
 
             # 1. Extract raw file dependencies. An inert (static-asset) language
             # normally skips this whole phase, but one that explicitly DECLARES
@@ -762,6 +764,10 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
                     cics_resources = boundary.get("cics_resources", [])
                     # #3449: CICS task control (cobol/pli only).
                     cics_tasks = boundary.get("cics_tasks", [])
+                    # #3448: job submission evidence (cobol JCL-card literals, jcl INTRDR DDs).
+                    job_submits = boundary.get("job_submits", [])
+                    # #3447: IBM MQ calls (cobol only).
+                    mq_calls = boundary.get("mq_calls", [])
                 except Exception:
                     logging.exception("Boundary extraction failed for language '%s'.", lang_id)
 
@@ -836,6 +842,10 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
             "cics_resources": cics_resources,
             # #3449: CICS task control -> cics_task_data.
             "cics_tasks": cics_tasks,
+            # #3448: job submission evidence -> job_submit_data.
+            "job_submits": job_submits,
+            # #3447: IBM MQ calls -> mq_call_data.
+            "mq_calls": mq_calls,
             "popularity_hits": popularity_hits,
             "regex_telemetry": (logic_data.pop("regex_telemetry", {}) if is_profiling else {}),
         }

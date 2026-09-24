@@ -304,6 +304,38 @@ class AuditRecorder:
                 }
                 for t in tasks
             ]
+        submits = file_data.get("job_submits") or []
+        if submits:
+            # #3448: job-submission evidence, mirroring job_submit_data.
+            block["Job Submission"] = [
+                {
+                    "Kind": j.get("kind"),
+                    "Step": j.get("step"),
+                    "Name": j.get("name"),
+                    "Target Kind": j.get("target_kind"),
+                    "Target": j.get("target"),
+                    "Line": j.get("line", 0),
+                }
+                for j in submits
+            ]
+        mq = file_data.get("mq_calls") or []
+        if mq:
+            # #3447: IBM MQ calls, mirroring mq_call_data.
+            block["MQ Calls"] = [
+                {
+                    "Verb": q.get("verb"),
+                    "Direction": q.get("direction"),
+                    "Operand": q.get("operand"),
+                    "Queue": q.get("queue"),
+                    "Resolution": q.get("resolution"),
+                    "Candidates": q.get("candidates"),
+                    "Handle": q.get("handle"),
+                    "Open Line": q.get("open_line"),
+                    "Options": q.get("options"),
+                    "Line": q.get("line", 0),
+                }
+                for q in mq
+            ]
         return block
 
     def generate_report(
