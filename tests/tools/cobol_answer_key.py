@@ -8,11 +8,13 @@ tools and the engine's master DB against it.
     python tests/tools/cobol_answer_key.py score <repo> --key key.json [--db master.db] [--md out.md]
     python tests/tools/cobol_answer_key.py add-pli <repo> --key key.json
     python tests/tools/cobol_answer_key.py add-sql-tables <repo> --key key.json
+    python tests/tools/cobol_answer_key.py add-sql-access <repo> --key key.json
     python tests/tools/cobol_answer_key.py add-bms <repo> --key key.json
     python tests/tools/cobol_answer_key.py add-jcl <repo> --key key.json
     python tests/tools/cobol_answer_key.py add-csd <repo> --key key.json
     python tests/tools/cobol_answer_key.py add-commarea <repo> --key key.json
     python tests/tools/cobol_answer_key.py add-cics <repo> --key key.json
+    python tests/tools/cobol_answer_key.py add-cics-tasks <repo> --key key.json
     python tests/tools/cobol_answer_key.py sample --key key.json [--n 25] [--seed S] [--out checklist.md]
 
 `add-pli` (#3250) drafts the PL/I DECLARE record layouts of every PL/I source in
@@ -30,6 +32,10 @@ every other field -- and a program already `commareas_validated` -- untouched.
 
 `add-cics` (#3351-#3354) drafts every COBOL source's EXEC CICS
 FILE/MAP/QUEUE/CONTAINER/CHANNEL operations into `cics_resources`, the add-pli way.
+
+`add-cics-tasks` (#3449) drafts every COBOL source's CICS task-control commands
+(RUN/START/FETCH/RETRIEVE/DELAY/ENQ ...) and the CSD transactions each RUN/START
+reaches into `cics_tasks`, the add-pli way.
 
 AUTHORITY. `draft` computes CANDIDATE values with its own fixed-format reading
 (Area A headers, PERFORM ... THRU, GO TO, SECTION fall-through, terminal
@@ -892,6 +898,171 @@ def draft_sql_tables(repo: Path) -> dict[str, dict[str, Any]]:
                 out[p.relative_to(repo).as_posix()] = {
                     "columns": cols,
                     "sql_tables_validated": False,
+                    "verification": {"status": "draft", "notes": []},
+                }
+    return out
+
+
+# ==============================================================================
+# Embedded SQL table access (#3446)
+# ==============================================================================
+# This tool's own reading of what each program DOES to DB2 tables: a TOKEN walk
+# over its own `_sql_prepared` code (not the engine's regex anchors), sharing the
+# engine's CONTRACT only. Access per table: read (FROM / JOIN / a subquery /
+# MERGE USING / a DECLAREd cursor's SELECT, which OPEN and FETCH reach), insert,
+# update, delete, merge, lock. INCLUDE, DECLARE ... TABLE and WHENEVER are not
+# statements; dynamic SQL names no table.
+_SQL_ACCESS_TOKEN = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'?|:[A-Z0-9_-]+|[A-Z@#$][A-Z0-9_@#$-]*|[(),.;]|\S", re.I)
+_SQL_CLAUSE_WORDS = {
+    "WHERE",
+    "GROUP",
+    "ORDER",
+    "HAVING",
+    "FETCH",
+    "FOR",
+    "WITH",
+    "UNION",
+    "EXCEPT",
+    "INTERSECT",
+    "JOIN",
+    "INNER",
+    "LEFT",
+    "RIGHT",
+    "FULL",
+    "CROSS",
+    "ON",
+    "OPTIMIZE",
+    "QUERYNO",
+    "SKIP",
+    "SET",
+    "VALUES",
+    "INTO",
+    "OUTER",
+}
+_SQL_NOT_TABLE = {"FINAL", "NEW", "OLD", "TABLE", "LATERAL", "UNNEST", "XMLTABLE", "SELECT"}
+_SQL_CURSOR_NOISE = {
+    "NEXT",
+    "PRIOR",
+    "FIRST",
+    "LAST",
+    "CURRENT",
+    "FROM",
+    "INTO",
+    "ROWSET",
+    "STARTING",
+    "AT",
+    "ABSOLUTE",
+    "RELATIVE",
+    "USING",
+    "DESCRIPTOR",
+    "FOR",
+    "ROWS",
+    "INSENSITIVE",
+    "SENSITIVE",
+}
+
+
+def _sql_statement_regions(code: str, pli: bool) -> list[str]:
+    """The text of each EXEC SQL statement (after `EXEC SQL`, before its end)."""
+    out = []
+    pos = 0
+    start_rx = re.compile(r"(?<![A-Z0-9_@#$-])EXEC\s+SQL(?![A-Z0-9_@#$-])", re.I)
+    end_rx = re.compile(r";" if pli else r"(?<![A-Z0-9_@#$-])END-EXEC(?![A-Z0-9_@#$-])", re.I)
+    while True:
+        m = start_rx.search(code, pos)
+        if not m:
+            return out
+        e = end_rx.search(code, m.end())
+        if not e:
+            return out
+        out.append(re.sub(r"--[^\n]*", "", code[m.end() : e.start()]))
+        pos = e.end()
+
+
+def _qualified_at(toks: list[str], i: int) -> tuple[str, int]:
+    """(`A.B.C` name starting at toks[i], index after it)."""
+    parts = [toks[i]]
+    j = i + 1
+    while j + 1 < len(toks) and toks[j] == "." and re.match(r'[A-Z@#$"]', toks[j + 1], re.I):
+        parts.append(toks[j + 1])
+        j += 2
+    return ".".join(_sql_unquote(x) for x in parts), j
+
+
+def sql_table_access(text: str, pli: bool = False) -> list[str]:
+    """Sorted `access TABLE` strings for one source file, this tool's own reading."""
+    code = _sql_prepared(text, pli)
+    found: set[str] = set()
+    cursors: dict[str, set[str]] = {}
+    used: list[str] = []
+    targets = {"INSERT": "insert", "UPDATE": "update", "DELETE": "delete", "MERGE": "merge", "LOCK": "lock"}
+    for region in _sql_statement_regions(code, pli):
+        toks = [t for t in _SQL_ACCESS_TOKEN.findall(region) if not t.startswith(("'", ":"))]
+        if not toks:
+            continue
+        up = [t.upper() for t in toks]
+        verb = up[0]
+        if verb in ("INCLUDE", "WHENEVER"):
+            continue
+        if verb in ("OPEN", "FETCH", "CLOSE"):
+            names = [t for t in up[1:] if re.fullmatch(r"[A-Z][A-Z0-9_-]*", t) and t not in _SQL_CURSOR_NOISE]
+            if verb != "CLOSE" and names:
+                used.append(names[0])
+            continue
+        declared = None
+        if verb == "DECLARE":
+            if "CURSOR" not in up[:12]:
+                continue  # DECLARE ... TABLE / STATEMENT: not a statement here
+            declared = up[1]
+        reads: set[str] = set()
+        i = 0
+        while i < len(up):
+            t = up[i]
+            if i == 0 and t in targets:
+                j = 1
+                while j < len(up) and up[j] in ("INTO", "FROM", "TABLE"):
+                    j += 1
+                if j < len(up) and up[j] != "(":
+                    name, i = _qualified_at(toks, j)
+                    found.add(f"{targets[t]} {name}")
+                    continue
+            if t in ("FROM", "JOIN") or (t == "USING" and verb == "MERGE"):
+                j = i + 1
+                while j < len(up):
+                    if up[j] == "(" or up[j] in _SQL_NOT_TABLE:
+                        break
+                    name, j = _qualified_at(toks, j)
+                    reads.add(name)
+                    if j < len(up) and up[j] == "AS":
+                        j += 1
+                    if j < len(up) and up[j] not in _SQL_CLAUSE_WORDS and re.match(r"[A-Z]", up[j]):
+                        j += 1  # an alias
+                    if j < len(up) and up[j] == ",":
+                        j += 1
+                        continue
+                    break
+                i = j
+                continue
+            i += 1
+        if declared:
+            cursors.setdefault(declared, set()).update(reads)
+        found.update(f"read {r}" for r in reads)
+    for c in used:
+        found.update(f"read {r}" for r in cursors.get(c, ()))
+    return sorted(found)
+
+
+def draft_sql_access(repo: Path) -> dict[str, dict[str, Any]]:
+    """Drafted table access for every COBOL/PL/I source with embedded SQL (#3446).
+    Adjudicates nothing until signed off with `sql_access_validated`."""
+    out: dict[str, dict[str, Any]] = {}
+    for p in sorted(repo.rglob("*")):
+        if p.is_file() and p.suffix.lower() in SQL_TABLE_EXTS and ".git" not in p.parts:
+            acc = sql_table_access(p.read_text(encoding="utf-8", errors="ignore"), p.suffix.lower() in PLI_EXTS)
+            if acc:
+                out[p.relative_to(repo).as_posix()] = {
+                    "accesses": acc,
+                    "sql_access_validated": False,
                     "verification": {"status": "draft", "notes": []},
                 }
     return out
@@ -1763,6 +1934,232 @@ def draft_cics(repo: Path) -> dict[str, dict[str, Any]]:
 
 
 # ==============================================================================
+# CICS task control (#3449)
+# ==============================================================================
+# This tool's own reading of the CICS task-control commands: RUN, START (and
+# START ATTACH), FETCH CHILD / FETCH ANY, FREE CHILD, RETRIEVE, CANCEL, DELAY,
+# POST, WAIT EVENT / WAIT EXTERNAL / WAITCICS, ENQ and DEQ. Same contract as the
+# engine's core/cics_tasks.py, none of its code: commands are found with the CICS
+# section's own `_CICS_EXEC` / `_CICS_OPTION` over the literal-blanked twin, and
+# a target resolves through `_cics_value_of`, then one MOVEd literal, then -- the
+# #3449 addition -- the STRING statements that build it. A STRING is read here
+# as a whole sentence cut at INTO (this reader's own regex walk), and each source
+# becomes its literal text, `[0-9]`/`?` per character of a DELIMITED BY SIZE
+# data-name's PIC (this reader's own PIC lookup), or `*`.
+_TASK_TWO = {("FETCH", "CHILD"), ("FETCH", "ANY"), ("FREE", "CHILD"), ("WAIT", "EVENT"), ("WAIT", "EXTERNAL")}
+_TASK_ONE = {"RUN", "START", "RETRIEVE", "CANCEL", "DELAY", "POST", "WAITCICS", "ENQ", "DEQ"}
+_TASK_TARGET = {"RUN": "TRANSID", "START": "TRANSID", "START ATTACH": "TRANSID", "CANCEL": "TRANSID"}
+_TASK_TARGET.update({"ENQ": "RESOURCE", "DEQ": "RESOURCE"})
+_TASK_TOKEN = {"RUN": "CHILD", "START": "REQID", "CANCEL": "REQID", "DELAY": "REQID", "POST": "REQID"}
+_TASK_WHEN = ("INTERVAL", "TIME", "AFTER", "AT", "FOR", "UNTIL", "HOURS", "MINUTES", "SECONDS", "MILLISECS")
+_KEY_STRING = re.compile(rf"\bSTRING\b(.{{1,1500}}?)\bINTO\s+({NAME})", re.S)
+_KEY_STRING_SRC = re.compile(
+    rf"('[^']*'|\"[^\"]*\"|{NAME}(?:\s*\([^()]*\))?)(?:\s+DELIMITED\s+(?:BY\s+)?('[^']*'|{NAME}))?"
+)
+
+
+def _key_pic(src: Source, ident: str) -> Optional[str]:
+    """`ident`'s PIC string, first declaration wins (this reader's own lookup)."""
+    m = re.search(
+        rf"(?m)^\s*\d{{1,2}}\s+{re.escape(ident)}\s+[^.]{{0,200}}?\bPIC(?:TURE)?\s+(?:IS\s+)?(\S+)", src.raw_text
+    )
+    return m.group(1).rstrip(".") if m else None
+
+
+def _key_pic_glob(pic: Optional[str]) -> str:
+    if not pic:
+        return "*"
+    body = pic.upper()
+    body = body[1:] if body.startswith("S") else body
+    parts = re.findall(r"([9XA])(?:\((\d+)\))?", body)
+    if not parts or "".join(c + (f"({n})" if n else "") for c, n in parts) != body:
+        return "*"
+    width = sum(int(n or 1) for _, n in parts)
+    return ("[0-9]" if {c for c, _ in parts} == {"9"} else "?") * width
+
+
+def _key_string_globs(src: Source) -> dict[str, set[str]]:
+    """Receiver -> the fnmatch patterns its STRING statements build."""
+    out: dict[str, set[str]] = {}
+    for m in _KEY_STRING.finditer(src.raw_text):
+        body = m.group(1)
+        if re.search(r"\.\s", _blank_literals(body)):
+            continue  # a sentence ended before INTO: not one STRING statement
+        glob = ""
+        for sm in _KEY_STRING_SRC.finditer(body):
+            item, delim = sm.group(1), sm.group(2)
+            if item.upper() in ("DELIMITED", "BY", "SIZE"):
+                continue
+            if item[0] in "'\"":
+                text = item[1:-1]
+                if delim and delim.upper() != "SIZE":
+                    cut = delim[1:-1] if delim[0] in "'\"" else (" " if delim.upper().startswith("SPACE") else None)
+                    glob += re.sub(r"([\[\]*?])", r"[\1]", text.split(cut)[0] if cut else text)
+                    if not cut or cut not in text:
+                        glob += "*"
+                else:
+                    glob += re.sub(r"([\[\]*?])", r"[\1]", text)
+            elif delim and delim.upper() == "SIZE" and "(" not in item:
+                glob += _key_pic_glob(_key_pic(src, item))
+            else:
+                glob += "*"
+        glob = re.sub(r"\*+", "*", glob)
+        if re.search(r"[A-Z0-9]", re.sub(r"\[[^\]]*\]", "", glob)):
+            out.setdefault(m.group(2), set()).add(glob)
+    return out
+
+
+def cics_task_ops(path: Path) -> list[dict[str, Any]]:
+    """Every CICS task-control command in one COBOL source, this tool's own reading."""
+    src = Source(path)
+    moves: dict[str, set[str]] = {}
+    for m in _CICS_MOVE.finditer(src.raw_text):
+        lit = (m.group(1) if m.group(1) is not None else m.group(2) or "").strip()
+        if lit:
+            moves.setdefault(m.group(3), set()).add(lit)
+    globs = _key_string_globs(src)
+
+    def resolve(operand: Optional[str], built: bool) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        if operand is None:
+            return None, None, None
+        op = operand.strip()
+        if op[:1] in "'\"" and len(op) > 1 and op[-1] == op[0]:
+            return (op[1:-1].strip() or None), "literal", None
+        if not re.fullmatch(NAME, op) or op[0].isdigit():
+            return None, "expression", None
+        value = _cics_value_of(src, op)
+        if value:
+            return value, "value", None
+        found = set(moves.get(op, set()))
+        if len(found) == 1 and not (built and globs.get(op)):
+            return next(iter(found)), "move", None
+        every = found | (globs.get(op, set()) if built else set())
+        if not every:
+            return None, "unresolved", None
+        wild = any(re.search(r"[*?\[]", re.sub(r"\[[\[\]*?]\]", "", c)) for c in every)
+        if len(every) == 1 and not wild:
+            return next(iter(every)), "string", None
+        return None, ("pattern" if wild else "ambiguous"), ",".join(sorted(every))
+
+    out: list[dict[str, Any]] = []
+    for m in _CICS_EXEC.finditer(src.text):
+        end = _CICS_END.search(src.text, m.end())
+        body = src.raw_text[m.end() : end.start() if end else len(src.raw_text)]
+        opts: list[tuple[str, Optional[str]]] = [
+            (o.group(1), " ".join(o.group(2)[1:-1].split()) if o.group(2) else None)
+            for o in _CICS_OPTION.finditer(body)
+        ]
+        if not opts or opts[0][1] is not None:
+            continue
+        first, second = opts[0][0], (opts[1] if len(opts) > 1 else (None, None))
+        if (first, second[0]) in _TASK_TWO and (second[1] is None or first in ("FETCH", "FREE")):
+            verb, rest = f"{first} {second[0]}", opts[2:]
+            token = second[1] if first in ("FETCH", "FREE") else None
+        elif first == "START" and second == ("ATTACH", None):
+            verb, rest, token = "START ATTACH", opts[2:], None
+        elif first in _TASK_ONE:
+            verb, rest, token = first, opts[1:], None
+        else:
+            continue
+        d: dict[str, Optional[str]] = {}
+        for k, v in rest:
+            d.setdefault(k, v)
+        if verb in _TASK_TOKEN:
+            token = d.get(_TASK_TOKEN[verb])
+        target = _TASK_TARGET.get(verb)
+        name, resolution, candidates = resolve(d.get(target) if target else None, target == "TRANSID")
+        clause = next((c for c in ("FROM", "INTO", "SET") if d.get(c)), None)
+        out.append(
+            {
+                "verb": verb,
+                "name": name,
+                "resolution": resolution,
+                "candidates": candidates,
+                "channel": resolve(d.get("CHANNEL"), False)[0],
+                "token": token.upper() if token else None,
+                "record_clause": clause,
+                "record": d[clause].upper() if clause and d.get(clause) else None,
+                "timing": " ".join(f"{k}({v})" if v is not None else k for k, v in rest if k in _TASK_WHEN) or None,
+                "line": src.line_of(m.start()),
+            }
+        )
+    return out
+
+
+def cics_task_keys(rows: list[dict[str, Any]]) -> set[str]:
+    """One comparison unit per command: `L<line> VERB T=<target> ch=<channel>
+    tok=<token> CLAUSE=RECORD @<timing>`; an unresolved target is
+    `<resolution[:candidates]>`. Works on this reader's rows and the engine's."""
+    out = set()
+    for r in rows:
+        if r.get("name"):
+            target = r["name"].upper()
+        elif r.get("resolution"):
+            cands = r.get("candidates")
+            target = f"<{r['resolution']}{':' + cands.upper() if cands else ''}>"
+        else:
+            target = "-"
+        record = f" {r['record_clause']}={(r.get('record') or '').upper()}" if r.get("record_clause") else ""
+        timing = f" @{r['timing'].upper()}" if r.get("timing") else ""
+        out.add(
+            f"L{r['line']} {r['verb']} T={target} ch={(r.get('channel') or '-').upper()} "
+            f"tok={(r.get('token') or '-').upper()}{record}{timing}"
+        )
+    return out
+
+
+def engine_task_row(t: Any) -> dict[str, Any]:
+    """An engine `EngineCicsTask` in this reader's row shape (for the unit key)."""
+    return {
+        "verb": t.verb,
+        "name": t.name,
+        "resolution": t.resolution,
+        "candidates": t.candidates,
+        "channel": t.channel,
+        "token": t.token,
+        "record_clause": t.record_clause,
+        "record": t.record,
+        "timing": t.timing,
+        "line": t.line,
+    }
+
+
+def task_children(rows: list[dict[str, Any]], transids: set[str]) -> set[str]:
+    """`VERB TRANSID` for every CSD transaction a RUN/START target can be: the
+    resolved name, or each defined transid a candidate literal / pattern matches."""
+    import fnmatch
+
+    out = set()
+    for r in rows:
+        if r["verb"] not in ("RUN", "START", "START ATTACH"):
+            continue
+        cands = [r["name"]] if r.get("name") else [c for c in (r.get("candidates") or "").split(",") if c]
+        for t in transids:
+            if any(fnmatch.fnmatchcase(t, c.upper()) for c in cands):
+                out.add(f"{r['verb']} {t}")
+    return out
+
+
+def draft_cics_tasks(repo: Path) -> dict[str, dict[str, Any]]:
+    """Drafted CICS task control for every COBOL source that issues any (#3449),
+    with the CSD transactions each RUN/START reaches (`children`). Adjudicates
+    nothing until signed off with `cics_tasks_validated`."""
+    transids = {t for tx in _key_transactions(repo).values() for t in tx}
+    out: dict[str, dict[str, Any]] = {}
+    for p in sorted(repo.rglob("*")):
+        if p.is_file() and p.suffix.lower() in CICS_EXTS and ".git" not in p.parts:
+            rows = cics_task_ops(p)
+            if rows:
+                out[p.relative_to(repo).as_posix()] = {
+                    "operations": rows,
+                    "children": sorted(task_children(rows, transids)),
+                    "cics_tasks_validated": False,
+                    "verification": {"status": "draft", "notes": []},
+                }
+    return out
+
+
+# ==============================================================================
 # Draft
 # ==============================================================================
 def _operand(src: Source, offset: int) -> tuple[str, str]:
@@ -2116,6 +2513,10 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
         # Truth is this tool's own terminator-cut reader; no forge reads them;
         # engine is sql_table_data.
         "DB2 table columns",
+        # #3446: which tables each program reads / inserts / updates / deletes.
+        # Truth is this tool's own token walk; no forge reads it; engine is
+        # sql_statement_data through GalaxyIR.sql_table_access().
+        "DB2 table access",
         # #3347: BMS screen-field layout units (mapset/map/field with position,
         # length and attributes), per map source. Truth is this tool's own BMS
         # reader; there is no BMS forge; engine is screen_field_data.
@@ -2132,6 +2533,14 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
         # COBOL source. Truth is this tool's own EXEC CICS reader; no forge reads
         # them; engine is cics_resource_data.
         "CICS resources",
+        # #3449: CICS task-control commands (RUN/START/FETCH/RETRIEVE/DELAY/ENQ
+        # ...), per COBOL source. Truth is this tool's own reader; no forge; engine
+        # is cics_task_data.
+        "CICS task control",
+        # #3449: the CSD transactions each RUN/START reaches, a STRING-built id
+        # expanded against the deck (`RUN OCR1`..`RUN OCR5`). Truth is this tool's
+        # own pattern + CSD read; engine is GalaxyIR.async_tasks().
+        "async children",
     ]
     agg: dict[str, dict[str, list[set]]] = {f: {"truth": [], "forge": [], "engine": []} for f in fields}
 
@@ -2275,6 +2684,19 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
             pli_record_fields(engine_items, "parent_ordinal") if engine_items is not None else None,
         )
 
+    engine_access: dict[str, set[str]] = {}
+    if ir is not None:
+        for row in ir.sql_table_access():
+            engine_access.setdefault(row["file"], set()).update(f"{a} {row['table']}" for a in row["accesses"])
+    for rel, k in key.get("sql_access", {}).items():
+        add(
+            "DB2 table access",
+            rel,
+            set(k.get("accesses", [])),
+            None,
+            engine_access.get(rel, set()) if ir is not None and rel in ir.files else None,
+        )
+
     for rel, k in key.get("sql_tables", {}).items():
         ef = ir.files.get(rel) if ir else None
         add(
@@ -2349,6 +2771,23 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
             None,
             cics_resource_keys([engine_cics_row(op) for op in ef.cics_resources]) if ef else None,
         )
+
+    engine_children: dict[str, set[str]] = {}
+    if ir is not None:
+        for spawn in ir.async_tasks():
+            engine_children.setdefault(spawn["parent"], set()).update(
+                f"{spawn['verb']} {c['transid'].upper()}" for c in spawn["children"]
+            )
+    for rel, k in key.get("cics_tasks", {}).items():
+        ef = ir.files.get(rel) if ir else None
+        add(
+            "CICS task control",
+            rel,
+            cics_task_keys(k.get("operations", [])),
+            None,
+            cics_task_keys([engine_task_row(t) for t in ef.cics_tasks]) if ef else None,
+        )
+        add("async children", rel, set(k.get("children", [])), None, engine_children.get(rel, set()) if ef else None)
 
     result: dict[str, Any] = {
         "corpus": key["corpus"],
@@ -2442,6 +2881,9 @@ def main() -> int:
     a = sub.add_parser("add-pli")
     a.add_argument("repo", type=Path)
     a.add_argument("--key", type=Path, required=True)
+    qa = sub.add_parser("add-sql-access")
+    qa.add_argument("repo", type=Path)
+    qa.add_argument("--key", type=Path, required=True)
     q = sub.add_parser("add-sql-tables")
     q.add_argument("repo", type=Path)
     q.add_argument("--key", type=Path, required=True)
@@ -2460,6 +2902,9 @@ def main() -> int:
     x = sub.add_parser("add-cics")
     x.add_argument("repo", type=Path)
     x.add_argument("--key", type=Path, required=True)
+    xt = sub.add_parser("add-cics-tasks")
+    xt.add_argument("repo", type=Path)
+    xt.add_argument("--key", type=Path, required=True)
     sp = sub.add_parser("sample")
     sp.add_argument("--key", type=Path, required=True)
     sp.add_argument("--n", type=int, default=25)
@@ -2506,6 +2951,16 @@ def main() -> int:
         key["pli_programs"] = existing
         args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
         print(f"drafted {len(existing)} PL/I files -> {args.key}")
+        return 0
+    if args.cmd == "add-sql-access":
+        # #3446: same rule as add-sql-tables -- refresh drafts, never clobber a sign-off.
+        existing_acc = key.get("sql_access", {})
+        for rel, entry in draft_sql_access(repo).items():
+            if not existing_acc.get(rel, {}).get("sql_access_validated"):
+                existing_acc[rel] = entry
+        key["sql_access"] = existing_acc
+        args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+        print(f"drafted {len(existing_acc)} SQL table-access files -> {args.key}")
         return 0
     if args.cmd == "add-sql-tables":
         # #3344: same rule as add-pli -- refresh drafts, never clobber a sign-off.
@@ -2571,6 +3026,16 @@ def main() -> int:
         key["cics_resources"] = ops
         args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
         print(f"drafted {len(ops)} CICS files -> {args.key}")
+        return 0
+    if args.cmd == "add-cics-tasks":
+        # #3449: the add-pli discipline -- refresh drafts, keep signed-off files.
+        tasks = key.get("cics_tasks", {})
+        for rel, entry in draft_cics_tasks(repo).items():
+            if not tasks.get(rel, {}).get("cics_tasks_validated"):
+                tasks[rel] = entry
+        key["cics_tasks"] = tasks
+        args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+        print(f"drafted {len(tasks)} CICS task-control files -> {args.key}")
         return 0
     result, md = score(repo, key, args.db)
     if args.md:

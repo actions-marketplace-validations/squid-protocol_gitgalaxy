@@ -8085,5 +8085,7 @@
         "multiroot/sam/SAM2.cbl"
       ]
     }
-  ]
+  ],
+  "sql_access": {},
+  "cics_tasks": {}
 }

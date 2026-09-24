@@ -80,10 +80,13 @@ TRUTH_FLAGS: dict[str, tuple[str, str]] = {
     "entry transactions": ("programs", "transactions_validated"),
     "PL/I record fields": ("pli_programs", "records_validated"),
     "DB2 table columns": ("sql_tables", "sql_tables_validated"),
+    "DB2 table access": ("sql_access", "sql_access_validated"),
     "BMS screen fields": ("bms_maps", "fields_validated"),
     "JCL resolved DSNs": ("jcl_jobs", "dsns_validated"),
     "CSD resources": ("csd_decks", "resources_validated"),
     "CICS resources": ("cics_resources", "cics_validated"),
+    "CICS task control": ("cics_tasks", "cics_tasks_validated"),
+    "async children": ("cics_tasks", "cics_tasks_validated"),
 }
 
 

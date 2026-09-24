@@ -22,7 +22,11 @@
 # call_site_data), since #3344 the DB2 table shapes programs bind to
 # (sql_table_data: every `EXEC SQL DECLARE <table> TABLE (...)` column -- SQL
 # type, length/scale, nullability -- inline or DCLGEN-generated, per
-# EngineFile.sql_tables), since #3347 the BMS screen-field layouts
+# EngineFile.sql_tables), since #3446 what programs DO to those tables
+# (sql_statement_data: every embedded SQL statement with its verb, the tables
+# it reads/inserts/updates/deletes, cursor and host variables, per
+# EngineFile.sql_statements, joined into GalaxyIR.sql_table_access()),
+# since #3347 the BMS screen-field layouts
 # (screen_field_data: every mapset/map/field with POS, LENGTH, ATTRB,
 # PICIN/PICOUT, INITIAL, OCCURS -- the source of the symbolic-map copybooks, per
 # EngineFile.screen_fields), and since #3345 each JCL DD's DSN with its symbolic
@@ -49,7 +53,12 @@
 # GalaxyIR.queue_flows / container_flows; FILE and TD-queue operations joined to
 # the #3356 CSD DSNAME and on to batch lineage by cics_file_lineage /
 # tdqueue_lineage), each name read through its VALUE (or a single MOVEd
-# literal) the way LINK targets are.
+# literal) the way LINK targets are, and since #3449 CICS task control
+# (cics_task_data, per EngineFile.cics_tasks): RUN/START children with their
+# transid -- or the fnmatch pattern a STRING builds it from (`OCR[0-9]`) -- the
+# channel and CHILD/REQID token, FETCH/FREE joins, RETRIEVE, DELAY, POST, WAIT
+# and ENQ/DEQ; GalaxyIR.async_tasks joins each spawn to the CSD transactions and
+# programs it reaches, the containers it passes and the FETCHes that collect it.
 # NOT in the DB, so still owned by the forge tools:
 # reachability-based dead code. `usage_status` is a same-file "name mentioned
 # elsewhere" test, not reachability -- it is carried as data and must not be fed
@@ -280,6 +289,22 @@ class EngineSqlTable:
 
 
 @dataclass
+class EngineSqlStatement:
+    """One (embedded SQL statement, table) row (#3446), flat out of
+    `sql_statement_data`. `table` is None for a statement naming none (OPEN /
+    FETCH / CLOSE a cursor, COMMIT, CALL); `access` is read / insert / update /
+    delete / merge / lock. Rows of one statement share `ordinal`."""
+
+    ordinal: int
+    verb: str
+    table: Optional[str]
+    access: Optional[str]
+    cursor: Optional[str]
+    host_variables: list
+    line: int
+
+
+@dataclass
 class EngineScreenField:
     """One BMS macro statement of a map source (#3347): a DFHMSD mapset, a DFHMDI
     map or a DFHMDF field, flat out of `screen_field_data`.
@@ -391,6 +416,44 @@ class EngineCicsResource:
 
 
 @dataclass
+class EngineCicsTask:
+    """One CICS task-control command (#3449), flat out of `cics_task_data`.
+
+    `verb` is RUN | START | START ATTACH | FETCH CHILD | FETCH ANY | FREE CHILD |
+    RETRIEVE | CANCEL | DELAY | POST | WAIT EVENT | WAIT EXTERNAL | WAITCICS |
+    ENQ | DEQ. `target_kind` is TRANSID or RESOURCE; `name` the target resolved
+    (literal / VALUE / MOVE / the one literal a STRING builds) and None when
+    `resolution` is `pattern` / `ambiguous` / `unresolved` / `expression` --
+    `candidates` then holds the MOVEd literals and STRING-built fnmatch patterns.
+    `channel` is CHANNEL resolved (passed by RUN/START, returned by FETCH),
+    `token` the CHILD / ANY / REQID data-name, `record` the FROM/INTO/SET area.
+    """
+
+    verb: str
+    target_kind: Optional[str]
+    operand: Optional[str]
+    name: Optional[str]
+    resolution: Optional[str]
+    candidates: Optional[str]
+    channel_operand: Optional[str]
+    channel: Optional[str]
+    token: Optional[str]
+    record_clause: Optional[str]
+    record: Optional[str]
+    timing: Optional[str]
+    attributes: Optional[str]
+    line: int
+
+    def matches(self, name: str) -> bool:
+        """Whether `name` can be this command's target: the resolved name, or a
+        candidate literal / fnmatch pattern."""
+        want = name.upper()
+        if self.name:
+            return self.name.upper() == want
+        return any(fnmatch.fnmatchcase(want, c.upper()) for c in (self.candidates or "").split(",") if c)
+
+
+@dataclass
 class EngineFile:
     file_path: str
     language: str
@@ -405,9 +468,11 @@ class EngineFile:
     records: list = field(default_factory=list)  # EngineDataItem tree roots (01/77), #3246
     transactions: list = field(default_factory=list)  # EngineTransaction, #3211-followup
     sql_tables: list = field(default_factory=list)  # EngineSqlTable, #3344
+    sql_statements: list = field(default_factory=list)  # EngineSqlStatement, source order, #3446
     screen_fields: list = field(default_factory=list)  # EngineScreenField, flat source order, #3347
     csd_resources: list = field(default_factory=list)  # EngineCsdResource, source order, #3356
     cics_resources: list = field(default_factory=list)  # EngineCicsResource, source order, #3351-#3354
+    cics_tasks: list = field(default_factory=list)  # EngineCicsTask, source order, #3449
 
     @property
     def is_program(self) -> bool:
@@ -1210,6 +1275,46 @@ class GalaxyIR:
                 )
         return out
 
+    def sql_table_access(self) -> list:
+        """The program x DB2 table read/write matrix (#3446).
+
+        One entry per (file, table): `file`, `table`, `accesses` (sorted: read /
+        insert / update / delete / merge / lock), `lines` and `via_cursor` (the
+        cursors through which the file reads it). A cursor's reads are counted
+        where it is DECLAREd; an OPEN / FETCH of that cursor in the same file adds
+        its lines. Statements in a copybook stay on the copybook, and joining
+        them to the includer is the consumer's job (copy_deps), as for records.
+        """
+        out: list[dict] = []
+        for f in self.files.values():
+            if not f.sql_statements:
+                continue
+            cursor_tables: dict[str, list[str]] = {}
+            for st in f.sql_statements:
+                if st.verb == "DECLARE CURSOR" and st.cursor and st.table:
+                    cursor_tables.setdefault(st.cursor, []).append(st.table)
+            by_table: dict[str, dict] = {}
+            for st in f.sql_statements:
+                targets = [(st.table, st.access)] if st.table else []
+                if not st.table and st.verb in ("OPEN", "FETCH") and st.cursor in cursor_tables:
+                    targets = [(t, "read") for t in cursor_tables[st.cursor]]
+                for table, access in targets:
+                    row = by_table.setdefault(
+                        table,
+                        {"file": f.file_path, "table": table, "accesses": set(), "lines": [], "via_cursor": set()},
+                    )
+                    if access:
+                        row["accesses"].add(access)
+                    row["lines"].append(st.line)
+                    if st.cursor and access == "read":
+                        row["via_cursor"].add(st.cursor)
+            for row in by_table.values():
+                row["accesses"] = sorted(row["accesses"])
+                row["via_cursor"] = sorted(row["via_cursor"])
+                row["lines"] = sorted(set(row["lines"]))
+                out.append(row)
+        return out
+
     def queue_flows(self) -> list:
         """Program -> program data flow through a CICS TS/TD queue (#3353).
 
@@ -1383,6 +1488,84 @@ class GalaxyIR:
                             "match": match,
                         }
         return [best[k] for k in sorted(best)]
+
+    def async_tasks(self) -> list:
+        """Every RUN / START / START ATTACH of a child transaction, joined (#3449).
+
+        Each entry: `parent` (file), `verb`, `line`, `operand`, `resolution` and
+        `candidates` as extracted, then
+          - `children`: the CSD transactions the target can be -- the resolved
+            name, or every defined transaction a candidate literal / pattern
+            matches (`OCR[0-9]` -> OCR1..OCR5, never OCRA) -- each with its
+            `transid`, `program` and `resolves_to` (the program's file or None);
+          - `channel` and `containers`: the channel passed and the containers the
+            parent PUTs/MOVEs on it (same resolved channel name);
+          - `token` and `joins`: the FETCH CHILD / FREE CHILD with the same token,
+            and every FETCH ANY in the parent (it can collect any child it RAN);
+          - `retrieves`: for a START / START ATTACH, each child program's
+            RETRIEVE (file, line, record) -- the other end of the START's data.
+        A target no transaction matches keeps `children` empty: the child is
+        outside this repository, or its id is not determined by the source.
+        """
+        txns = [(t, f) for f in self.files.values() for t in f.transactions]
+        out = []
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            for op in f.cics_tasks:
+                if op.verb not in ("RUN", "START", "START ATTACH"):
+                    continue
+                children = []
+                seen = set()
+                for t, _deck in sorted(txns, key=lambda x: (x[0].transid, x[1].file_path)):
+                    key = (t.transid.upper(), (t.program or "").upper())
+                    if key in seen or not op.matches(t.transid):
+                        continue
+                    seen.add(key)
+                    children.append({"transid": t.transid, "program": t.program, "resolves_to": t.resolves_to})
+                channel = (op.channel or "").upper() or None
+                containers = sorted(
+                    {
+                        n
+                        for r in f.cics_resources
+                        if r.kind == "CONTAINER"
+                        and r.access in ("write", "move")
+                        and channel
+                        and (r.qualifier or "").upper() == channel
+                        for n in r.names
+                    }
+                )
+                joins = []
+                for j in f.cics_tasks:
+                    if j.verb == "FETCH ANY" and op.verb == "RUN":
+                        joins.append({"verb": j.verb, "line": j.line, "token": j.token, "match": "any"})
+                    elif j.verb in ("FETCH CHILD", "FREE CHILD") and op.token and j.token == op.token:
+                        joins.append({"verb": j.verb, "line": j.line, "token": j.token, "match": "token"})
+                retrieves: list[dict] = []
+                if op.verb != "RUN":
+                    for c in children:
+                        cf = self.files.get(c["resolves_to"] or "")
+                        if cf is not None:
+                            retrieves.extend(
+                                {"file": cf.file_path, "line": r.line, "record": r.record}
+                                for r in cf.cics_tasks
+                                if r.verb == "RETRIEVE"
+                            )
+                out.append(
+                    {
+                        "parent": f.file_path,
+                        "verb": op.verb,
+                        "line": op.line,
+                        "operand": op.operand,
+                        "resolution": op.resolution,
+                        "candidates": op.candidates,
+                        "children": children,
+                        "channel": op.channel,
+                        "containers": containers,
+                        "token": op.token,
+                        "joins": joins,
+                        "retrieves": retrieves,
+                    }
+                )
+        return out
 
     def lookup(self, path: Path, target_root: Path) -> Optional[EngineFile]:
         try:
@@ -1797,6 +1980,26 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
                         int(line or 0),
                     )
                 )
+        # #3446: embedded SQL statements. A pre-#3446 database has no such table,
+        # so a missing table is "no data", never an error.
+        if _has_table(cur, "sql_statement_data"):
+            for file_id, ordinal, verb, tname, access, cursor_name, host, line in cur.execute(
+                "SELECT file_id, stmt_ordinal, verb, table_name, access, cursor_name, host_variables, line_number "
+                "FROM sql_statement_data WHERE repo_name = ? AND commit_hash = ? ORDER BY file_id, id",
+                (repo_name, commit_hash),
+            ):
+                if file_id in by_id:
+                    by_id[file_id].sql_statements.append(
+                        EngineSqlStatement(
+                            int(ordinal or 0),
+                            verb or "",
+                            tname,
+                            access,
+                            cursor_name,
+                            [h for h in (host or "").split(",") if h],
+                            int(line or 0),
+                        )
+                    )
         # #3347: BMS screen-field layouts. A pre-#3347 database has no such table,
         # so a missing table is "no screen fields", never an error.
         if _has_table(cur, "screen_field_data"):
@@ -1882,6 +2085,36 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
                         record=row[11],
                         attributes=row[12],
                         line=int(row[13] or 0),
+                    )
+                )
+        # #3449: CICS task control. A pre-#3449 database has no such table, so a
+        # missing table is "no task commands", never an error.
+        if _has_table(cur, "cics_task_data"):
+            for row in cur.execute(
+                "SELECT file_id, verb, target_kind, target_operand, target_name, target_resolution, "
+                "target_candidates, channel_operand, channel_name, token, record_clause, record_name, timing, "
+                "attributes, line_number "
+                "FROM cics_task_data WHERE repo_name = ? AND commit_hash = ? ORDER BY file_id, line_number, id",
+                (repo_name, commit_hash),
+            ):
+                if row[0] not in by_id:
+                    continue
+                by_id[row[0]].cics_tasks.append(
+                    EngineCicsTask(
+                        verb=row[1] or "",
+                        target_kind=row[2],
+                        operand=row[3],
+                        name=row[4],
+                        resolution=row[5],
+                        candidates=row[6],
+                        channel_operand=row[7],
+                        channel=row[8],
+                        token=row[9],
+                        record_clause=row[10],
+                        record=row[11],
+                        timing=row[12],
+                        attributes=row[13],
+                        line=int(row[14] or 0),
                     )
                 )
     finally:

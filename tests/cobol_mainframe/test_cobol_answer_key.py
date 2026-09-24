@@ -786,3 +786,66 @@ def test_small_corpus_keys_are_fully_censused(key_path):
 
     cov = cv.coverage(json.loads(key_path.read_text(encoding="utf-8")))
     assert not cov["missing"], f"not censused: {cov['missing'][:5]}"
+
+
+def test_sql_table_access_reader_is_independent_and_joins_cursors():
+    """#3446: the key's own token walk over EXEC SQL: tables per access, a cursor's
+    reads reached through OPEN / FETCH, literals and INCLUDE ignored. Lines stay
+    within column 72, as fixed-format source must."""
+    src = (
+        "       PROCEDURE DIVISION.\n"
+        "           EXEC SQL INCLUDE SQLCA END-EXEC.\n"
+        "           EXEC SQL DECLARE C1 CURSOR FOR\n"
+        "                SELECT A FROM ACCOUNT X, CUST Y END-EXEC.\n"
+        "           EXEC SQL OPEN C1 END-EXEC.\n"
+        "           EXEC SQL DELETE FROM CARDDEMO.TT\n"
+        "                WHERE K = 'FROM FAKE' END-EXEC.\n"
+        "           EXEC SQL INSERT INTO HIST\n"
+        "                SELECT * FROM LIVE END-EXEC.\n"
+    )
+    assert all(len(line) <= 72 for line in src.splitlines())
+    assert ak.sql_table_access(src) == [
+        "delete CARDDEMO.TT",
+        "insert HIST",
+        "read ACCOUNT",
+        "read CUST",
+        "read LIVE",
+    ]
+
+
+def test_cics_task_reader_is_independent_and_expands_string_ids(tmp_path):
+    """#3449: the key's own task-control reader -- a STRING-built transid is a
+    PIC-sized pattern expanded against the key's own CSD read (never OCRA), a
+    DISPLAY literal is not a command, and the unit keys match the engine's shape."""
+    (tmp_path / "BANK.csd").write_text(
+        " DEFINE TRANSACTION(OCR1) GROUP(B)\n        PROGRAM(C1)\n"
+        " DEFINE TRANSACTION(OCRA) GROUP(B)\n        PROGRAM(MENU)\n",
+        encoding="utf-8",
+    )
+    src = (
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. PARENT.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01 WS-N                 PIC 9.\n"
+        "       01 WS-T                 PIC X(4).\n"
+        "       PROCEDURE DIVISION.\n"
+        "           MOVE 'CHAN1' TO WS-CH.\n"
+        "           STRING 'OCR' DELIMITED BY SIZE, WS-N DELIMITED BY SIZE\n"
+        "              INTO WS-T END-STRING.\n"
+        "           EXEC CICS RUN TRANSID(WS-T) CHANNEL(WS-CH)\n"
+        "                CHILD(WS-TKN) END-EXEC.\n"
+        "           DISPLAY 'EXEC CICS FETCH ANY failed'.\n"
+        "           EXEC CICS DELAY FOR SECONDS(3) END-EXEC.\n"
+        "           EXEC CICS RETRIEVE INTO(MQTM) NOHANDLE END-EXEC.\n"
+    )
+    assert all(len(line) <= 72 for line in src.splitlines())
+    (tmp_path / "PARENT.cbl").write_text(src, encoding="utf-8")
+    entry = ak.draft_cics_tasks(tmp_path)["PARENT.cbl"]
+    assert sorted(ak.cics_task_keys(entry["operations"])) == [
+        "L11 RUN T=<pattern:OCR[0-9]> ch=CHAN1 tok=WS-TKN",
+        "L14 DELAY T=- ch=- tok=- @FOR SECONDS(3)",
+        "L15 RETRIEVE T=- ch=- tok=- INTO=MQTM",
+    ]
+    assert entry["children"] == ["RUN OCR1"]
+    assert entry["cics_tasks_validated"] is False

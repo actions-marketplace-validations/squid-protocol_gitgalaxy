@@ -194,6 +194,21 @@ class AuditRecorder:
                 }
                 for c in sql_tables
             ]
+        # #3446: embedded SQL statements, mirroring sql_statement_data.
+        sql_statements = file_data.get("sql_statements") or []
+        if sql_statements:
+            block["SQL Statements"] = [
+                {
+                    "Statement": s.get("ordinal"),
+                    "Verb": s.get("verb"),
+                    "Table": s.get("table"),
+                    "Access": s.get("access"),
+                    "Cursor": s.get("cursor"),
+                    "Host Variables": s.get("host_variables"),
+                    "Line": s.get("line", 0),
+                }
+                for s in sql_statements
+            ]
         screen = file_data.get("screen_fields") or []
         if screen:
             # #3347: BMS mapset/map/field rows, mirroring screen_field_data.
@@ -265,6 +280,29 @@ class AuditRecorder:
                     "Line": op.get("line", 0),
                 }
                 for op in cics
+            ]
+        tasks = file_data.get("cics_tasks") or []
+        if tasks:
+            # #3449: CICS task control (RUN/START/FETCH/RETRIEVE/DELAY/ENQ ...),
+            # mirroring cics_task_data.
+            block["CICS Tasks"] = [
+                {
+                    "Verb": t.get("verb"),
+                    "Target Kind": t.get("target_kind"),
+                    "Operand": t.get("operand"),
+                    "Name": t.get("name"),
+                    "Resolution": t.get("resolution"),
+                    "Candidates": t.get("candidates"),
+                    "Channel Operand": t.get("channel_operand"),
+                    "Channel": t.get("channel"),
+                    "Token": t.get("token"),
+                    "Record Clause": t.get("record_clause"),
+                    "Record": t.get("record"),
+                    "Timing": t.get("timing"),
+                    "Attributes": t.get("attributes"),
+                    "Line": t.get("line", 0),
+                }
+                for t in tasks
             ]
         return block
 
