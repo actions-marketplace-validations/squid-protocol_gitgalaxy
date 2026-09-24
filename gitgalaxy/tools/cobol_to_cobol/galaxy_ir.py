@@ -114,6 +114,13 @@
 # symbolic map its BMS source generates (core/bms_symbolic.py, parsed by the
 # record parser; EngineFile.symbolic_copies, never in `files`), so screen fields
 # resolve to storage; GalaxyIR.symbolic_map_layouts lists every generated map.
+# Since #3494, the CSD's REMOTESYSTEM definitions and call sites' SYSID
+# (call_site_data.sysid): GalaxyIR.remote_programs / remote_calls (DPL, remote
+# START) / remote_resources (function-shipped FILE / TD / TS queues).
+# Since #3493, GalaxyIR.dynamic_call_targets lists the programs a data-name LINK /
+# XCTL / CALL can name (its VALUE, an OCCURS table over a VALUE-filled REDEFINES,
+# MOVEd literals), GalaxyIR.navigation is the CICS program-to-program flow, and
+# completeness counts a data-name site as resolved when a candidate is here.
 # Since #3492 the file-I/O verbs are data moves too (READ INTO: the FD record ->
 # the area; WRITE FROM: the area -> the record), an FD's 01 records share one
 # storage key, and they carry a field's offset as a group MOVE does.
@@ -186,6 +193,8 @@ class EngineCall:
     commarea_datalength: Optional[str] = None
     # #3454: a batch CALL's USING list, comma-joined by position (call_using.py).
     using_args: Optional[str] = None
+    # #3494: a CICS LINK / START's SYSID(...) as written (the region it ships to).
+    sysid: Optional[str] = None
 
     @property
     def using(self) -> list:
@@ -1196,7 +1205,8 @@ class GalaxyIR:
         supplies -- IDCAMS, DFHAID, EIBCALEN: not a gap) and named `gaps`:
 
           program calls   CALL / LINK / XCTL / EXEC PGM sites reaching a program in
-                          the repository; gaps: missing program, dynamic target,
+                          the repository (a data-item target counts when a candidate
+                          it can hold does, #3493); gaps: missing program, dynamic target,
                           non-COBOL program not linked (an engine gap)
           copybooks       COBOL COPY members answered by a copybook (or a generated
                           symbolic map, #3490); gap: missing copybook
@@ -1226,6 +1236,11 @@ class GalaxyIR:
         # Program calls (JCL EXEC PGM included).
         calls = [(f, c) for f in self.files.values() for c in f.calls if c.verb not in TRANSACTION_ROUTING_VERBS]
         any_stem = {Path(p).stem.upper() for p in self.files}
+        dynamic = self.dynamic_call_targets()
+        # A data-item target resolves when some candidate it can hold is a program here (#3493).
+        dyn_ok = {
+            (d["copybook"] or d["file"], d["line"]) for d in dynamic if any(c["resolves_to"] for c in d["candidates"])
+        }
         ch: dict = {"resolved": 0, "total": 0, "system": 0,
               "gaps": {"missing program": 0, "dynamic target": 0, "non-COBOL program not linked": 0}}  # fmt: skip
         for f, c in calls:
@@ -1241,6 +1256,8 @@ class GalaxyIR:
             elif c.target:
                 ch["gaps"]["missing program"] += 1
                 note("application programs (source or load-module list)", f"{c.target} ({f.file_path}:{c.line})")
+            elif (f.file_path, c.line) in dyn_ok:
+                ch["resolved"] += 1
             else:
                 ch["gaps"]["dynamic target"] += 1
             ch["total"] += 1
@@ -1268,6 +1285,9 @@ class GalaxyIR:
         tmap = self.transaction_map()
         reached = {t["resolves_to"] for t in tmap if t["resolves_to"]}
         reached |= {c.resolves_to for f in self.files.values() for c in f.calls if c.resolves_to and c.verb != "CALL"}
+        reached |= {
+            c["resolves_to"] for d in dynamic if d["verb"] != "CALL" for c in d["candidates"] if c["resolves_to"]
+        }
         for c in (c for f in self.files.values() for c in f.calls if c.verb in TRANSACTION_ROUTING_VERBS):
             prog = self._transaction_program(c.target) if c.target else None
             if prog:
@@ -2666,6 +2686,246 @@ class GalaxyIR:
 
         return "".join(parts) if walk(item) else ("".join(parts) or None)
 
+    # ---- #3493: data-driven LINK / XCTL / CALL targets --------------------------
+    def _table_values(self, ef: EngineFile, name: str) -> list:
+        """The per-occurrence VALUEs of `name` when it is an element of an OCCURS
+        table that REDEFINES a VALUE-filled group (carddemo COMEN02Y's
+        CDEMO-MENU-OPT-PGMNAME over CDEMO-MENU-OPTIONS-DATA), else []."""
+        found = self._find_item(ef, name, None)
+        if len(found) != 1:
+            return []
+        owner, item, _ = found[0]
+        by_ordinal = {it.ordinal: it for it in owner.data_items}
+        chain, cur = [item], by_ordinal.get(item.parent_ordinal)
+        while cur is not None and len(chain) < 64:
+            chain.append(cur)
+            cur = by_ordinal.get(cur.parent_ordinal)
+        table = next((it for it in chain if it.occurs_max), None)
+        base = next((it for it in chain[chain.index(table) :] if it.redefines), None) if table else None
+        if table is None or base is None:
+            return []
+        text = self._value_text(owner, base.redefines)
+        if not text:
+            return []
+
+        def width(it: EngineDataItem) -> Optional[int]:
+            if not it.children:
+                return _elementary_bytes(it)
+            total = 0
+            for c in it.children:
+                if c.level in (66, 88) or c.redefines:
+                    continue
+                w = width(c)
+                if w is None:
+                    return None
+                total += w * (c.occurs_max or 1)
+            return total
+
+        def offset_in(group: EngineDataItem, target: EngineDataItem) -> Optional[int]:
+            off = 0
+            for c in group.children:
+                if c.level in (66, 88) or c.redefines:
+                    continue
+                if c is target:
+                    return off
+                if target in _descendants(c):
+                    inner = offset_in(c, target)
+                    return None if inner is None else off + inner
+                w = width(c)
+                if w is None:
+                    return None
+                off += w * (c.occurs_max or 1)
+            return None
+
+        per, size = width(table), _elementary_bytes(item)
+        start = 0 if table is base else offset_in(base, table)
+        inner = offset_in(table, item)
+        if not per or not size or start is None or inner is None:
+            return []
+        out = []
+        for i in range(table.occurs_max or 0):
+            piece = text[start + i * per + inner : start + i * per + inner + size]
+            if len(piece) == size and piece.strip() and "?" not in piece:
+                out.append(piece.strip())
+        return out
+
+    # ---- #3494: remote programs and function shipping (DPL, SYSID, REMOTESYSTEM) --
+    def _remote_definitions(self) -> dict:
+        """(resource type, name) -> the CSD definitions that make it remote: each
+        `system` (REMOTESYSTEM), `remote_name` (REMOTENAME / REMOTETRANSID, else
+        the name), `group`, `defined_in` (the CSD / JCL deck), `line`."""
+        out: dict = {}
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            for r in f.csd_resources:
+                attrs = r.attributes or ""
+                system = _csd_operand(attrs, "REMOTESYSTEM")
+                if not system:
+                    continue
+                remote = _csd_operand(attrs, "REMOTENAME") or _csd_operand(attrs, "REMOTETRANSID") or r.name
+                out.setdefault(((r.resource_type or "").upper(), (r.name or "").upper()), []).append(
+                    {
+                        "system": system,
+                        "remote_name": remote,
+                        "group": r.group,
+                        "defined_in": f.file_path,
+                        "line": r.line,
+                    }
+                )
+        return out
+
+    def remote_programs(self) -> dict:
+        """Program name -> its remote CSD definitions (#3494): a LINK to it from a
+        region that installs one of those groups is a Distributed Program Link to
+        `system`. The same program is often local in the region that owns it (the
+        AOR / DOR) and remote in the region that routes to it (the TOR), so both
+        can be true -- which region a caller runs in is the CICS topology's (the
+        SIT GRPLIST), not the source's."""
+        return {name: defs for (kind, name), defs in sorted(self._remote_definitions().items()) if kind == "PROGRAM"}
+
+    def remote_calls(self) -> list:
+        """Every LINK / XCTL / START that can leave the region (#3494): the site names
+        a SYSID, or its program (static, or a data-driven candidate, #3493) or its
+        transaction has a REMOTESYSTEM definition. Each: `file`, `line`, `verb`,
+        `program`, `sysid` (as written, or None), `remote` (the CSD definitions)."""
+        defs = self._remote_definitions()
+        out = []
+
+        def add(file: str, line: int, verb: str, program: Optional[str], sysid: Optional[str], kind: str) -> None:
+            remote = defs.get((kind, (program or "").upper()), [])
+            if sysid or remote:
+                out.append(
+                    {"file": file, "line": line, "verb": verb, "program": program, "sysid": sysid, "remote": remote}
+                )
+
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            for c in f.calls:
+                if c.verb in ("LINK", "XCTL") and c.form != "identifier":
+                    add(f.file_path, c.line, c.verb, c.target, c.sysid, "PROGRAM")
+                elif c.verb in ("START TRANSID", "RUN TRANSID"):
+                    add(f.file_path, c.line, c.verb, c.target, c.sysid, "TRANSACTION")
+        sysids = {(f.file_path, c.line): c.sysid for f in self.files.values() for c in f.calls if c.sysid}
+        for d in self.dynamic_call_targets():
+            if d["verb"] in ("LINK", "XCTL"):
+                for cand in d["candidates"]:
+                    add(d["file"], d["line"], d["verb"], cand["program"], sysids.get((d["file"], d["line"])), "PROGRAM")
+        return out
+
+    def remote_resources(self) -> list:
+        """Function shipping (#3494): every CICS FILE / queue operation whose
+        resource has a REMOTESYSTEM definition (FILE, TDQUEUE, TSMODEL). Each:
+        `file`, `line`, `verb`, `kind`, `name`, `remote` (the CSD definitions)."""
+        defs = self._remote_definitions()
+        ts_models = [(name, d) for (kind, name), d in defs.items() if kind == "TSMODEL"]
+        out = []
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            for op in f.cics_resources:
+                name = (op.name or "").upper()
+                if not name:
+                    continue
+                if op.kind == "FILE":
+                    remote = defs.get(("FILE", name), [])
+                elif op.kind == "QUEUE" and (op.qualifier or "").upper() == "TD":
+                    remote = defs.get(("TDQUEUE", name), [])
+                elif op.kind == "QUEUE":
+                    # A TS queue is remote through the TSMODEL whose prefix it matches.
+                    remote = [x for model, d in ts_models for x in d if name.startswith(model.rstrip("*"))]
+                else:
+                    continue
+                if remote:
+                    out.append({"file": f.file_path, "line": op.line, "verb": op.verb, "kind": op.kind, "name": name,
+                                "remote": remote})  # fmt: skip
+        return out
+
+    def navigation(self) -> list:
+        """The CICS program-to-program flow (#3493): one edge per LINK / XCTL site
+        and RETURN / START TRANSID routing, static or data-driven. Each: `from`,
+        `line`, `verb`, `to` (a file, or None), `program` (the name), `via` --
+        static | transaction (TRANSID through the CSD) | value | table | moves --
+        and `remote_systems` (#3494: the REMOTESYSTEMs the CSD defines the program
+        with; a LINK from a region installing that definition is a DPL)."""
+        out = []
+        for f in sorted(self.files.values(), key=lambda x: x.file_path):
+            for c in f.calls:
+                if c.verb in TRANSACTION_ROUTING_VERBS and c.target:
+                    out.append({"from": f.file_path, "line": c.line, "verb": c.verb, "program": c.target,
+                                "to": self._transaction_program(c.target), "via": "transaction"})  # fmt: skip
+                elif c.verb in ("LINK", "XCTL") and c.form != "identifier" and (c.resolves_to or c.target):
+                    # A data-name site (even one bound through its VALUE) comes from
+                    # dynamic_call_targets below, so no edge is listed twice.
+                    out.append({"from": f.file_path, "line": c.line, "verb": c.verb, "program": c.target,
+                                "to": c.resolves_to, "via": "static"})  # fmt: skip
+        out.extend(
+            {"from": d["file"], "line": d["line"], "verb": d["verb"], "program": cand["program"],
+             "to": cand["resolves_to"], "via": cand["via"]}
+            for d in self.dynamic_call_targets()
+            if d["verb"] in ("LINK", "XCTL")
+            for cand in d["candidates"]
+        )  # fmt: skip
+        # #3494: the regions a LINK may ship the program to (its REMOTESYSTEMs).
+        remote = self.remote_programs()
+        for e in out:
+            e["remote_systems"] = sorted({d["system"] for d in remote.get((e["program"] or "").upper(), [])})
+        return out
+
+    def dynamic_call_targets(self) -> list:
+        """Every LINK / XCTL / CALL whose program is a data item, with the programs
+        it can name (#3493) -- a site the call resolver already bound through a VALUE
+        is listed too, its VALUE one candidate. Per site: `file`, `copybook` (a procedure copybook's
+        site, resolved in `file`), `line`, `verb`, `operand`, `candidates` -- each
+        `program`, `resolves_to` (its file, or None), `via` (value | table | moves) --
+        and `other_sources`: items MOVEd into the operand whose content is not known
+        here (a COMMAREA field such as CDEMO-FROM-PROGRAM: "back to the caller")."""
+        by_pid = {pid.upper(): f.file_path for f in self.files.values() if f.is_program for pid in f.program_ids}
+        includers: dict = {}
+        for f in self.files.values():
+            for dep in f.copy_deps:
+                includers.setdefault(dep, []).append(f)
+        moves: dict = {}
+        for fl in self.data_flows():
+            key = (fl["file"], fl["target"].split(" OF ")[0])
+            moves.setdefault(key, []).append(fl)
+        out = []
+        for home in sorted(self.files.values(), key=lambda x: x.file_path):
+            for c in home.calls:
+                if c.form != "identifier" or not c.operand:
+                    continue  # a literal target is static; every data-name site is listed
+                if c.verb in TRANSACTION_ROUTING_VERBS:
+                    continue
+                name = c.operand.split("(")[0].split(" OF ")[0].strip().upper()
+                scopes = [home] if home.is_program or not includers.get(home.file_path) else includers[home.file_path]
+                for f in sorted(scopes, key=lambda x: x.file_path):
+                    cands: dict = {}
+                    others: set = set()
+                    value = self._value_text(f, name)
+                    if value and value.strip() and "?" not in value:
+                        cands.setdefault(value.strip(), "value")
+                    for v in self._table_values(f, name):
+                        cands.setdefault(v, "table")
+                    for fl in moves.get((f.file_path, name), []):
+                        if fl["source_kind"] == "literal" and (fl["source"] or "")[:1] in "'\"":
+                            cands.setdefault(fl["source"].strip("'\"").strip().upper(), "moves")
+                        elif fl["source_kind"] == "item":
+                            v = self._value_text(f, fl["source"].split(" OF ")[0])
+                            if v and v.strip() and "?" not in v:
+                                cands.setdefault(v.strip().upper(), "moves")
+                            else:
+                                others.add(fl["source"])
+                    out.append(
+                        {
+                            "file": f.file_path,
+                            "copybook": None if f is home else home.file_path,
+                            "line": c.line,
+                            "verb": c.verb,
+                            "operand": c.operand,
+                            "candidates": [
+                                {"program": p, "resolves_to": by_pid.get(p.upper()), "via": via}
+                                for p, via in sorted(cands.items())
+                            ],
+                            "other_sources": sorted(others),
+                        }
+                    )
+        return out
+
     def ims_calls(self) -> list:
         """Every IMS DL/I call, resolved (#3450). Each: `file`, `line`, `interface`,
         `function` (the EXEC command, or a CBLTDLI function operand's VALUE -- GU,
@@ -3283,6 +3543,21 @@ _SYSTEM_NAME = re.compile(
 )
 
 
+def _csd_operand(attributes: str, key: str) -> Optional[str]:
+    """`KEY(value)` out of a CSD definition's kept attribute text (case-insensitive)."""
+    m = re.search(rf"(?<![A-Z0-9]){key}\(\s*([^)\s]+)\s*\)", attributes, re.I)
+    return m.group(1).upper() if m else None
+
+
+def _descendants(item: EngineDataItem) -> list:
+    out, stack = [], list(item.children)
+    while stack:
+        it = stack.pop()
+        out.append(it)
+        stack.extend(it.children)
+    return out
+
+
 def _in_order(wanted: list, path: tuple) -> bool:
     """Every name of `wanted` appears in `path`, in the same (outward) order."""
     at = 0
@@ -3502,9 +3777,24 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
             )
             # #3454: the USING list is NULL on a DB written before it.
             using_col = "using_args" if _has_column(cur, "call_site_data", "using_args") else "NULL"
-            for file_id, verb, form, operand, target, dst_id, line, commarea, c_len, c_dlen, using in cur.execute(
-                "SELECT src_file_id, verb, form, operand, target, dst_file_id, line_number, "  # noqa: S608 -- commarea_cols / using_col are fixed literals; values are bound
-                f"{commarea_cols}, {using_col} FROM call_site_data WHERE repo_name = ? AND commit_hash = ? "
+            # #3494: SYSID likewise.
+            sysid_col = "sysid" if _has_column(cur, "call_site_data", "sysid") else "NULL"
+            for (
+                file_id,
+                verb,
+                form,
+                operand,
+                target,
+                dst_id,
+                line,
+                commarea,
+                c_len,
+                c_dlen,
+                using,
+                sysid,
+            ) in cur.execute(
+                "SELECT src_file_id, verb, form, operand, target, dst_file_id, line_number, "  # noqa: S608 -- commarea_cols / using_col / sysid_col are fixed literals; values are bound
+                f"{commarea_cols}, {using_col}, {sysid_col} FROM call_site_data WHERE repo_name = ? AND commit_hash = ? "
                 "ORDER BY src_file_id, line_number, id",
                 (repo_name, commit_hash),
             ):
@@ -3523,6 +3813,7 @@ def load_galaxy_ir(db_path: Path, repo_name: Optional[str] = None) -> GalaxyIR:
                         c_len,
                         c_dlen,
                         using,
+                        sysid,
                     )
                 )
 

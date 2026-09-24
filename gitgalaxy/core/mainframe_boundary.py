@@ -204,12 +204,17 @@ _CICS_CONTRACT_OPERANDS = (
     ("commarea", re.compile(r"(?<![A-Z0-9-])COMMAREA[ \t\n]*\(", re.I)),
     ("commarea_length", re.compile(r"(?<![A-Z0-9-])LENGTH[ \t\n]*\(", re.I)),
     ("commarea_datalength", re.compile(r"(?<![A-Z0-9-])DATALENGTH[ \t\n]*\(", re.I)),
+    # #3494: the region a LINK / START ships to (Distributed Program Link).
+    ("sysid", re.compile(r"(?<![A-Z0-9-])SYSID[ \t\n]*\(", re.I)),
 )
 _CICS_OPERAND_LIMIT = 160
 
 # A JCL statement: `//name operation operands`. The name field is optional --
 # unnamed DD and EXEC statements are valid and common.
-_JCL_STATEMENT = re.compile(r"^//([A-Z0-9_#$@]*)[ \t]+([A-Z]+)(?:[ \t]+(.*))?$", re.I)
+# `<NAME>` is an installation placeholder of template JCL (IBM samples such as
+# CICS GENAPP ship `//<CMASAPPL> JOB` / `DSN=<USRHLQ>.GENAPP.KSDSCUST`): kept as
+# written, like an unresolved symbol, so the job and its datasets are not lost.
+_JCL_STATEMENT = re.compile(r"^//([A-Z0-9_#$@<>]*)[ \t]+([A-Z]+)(?:[ \t]+(.*))?$", re.I)
 # `EXEC PGM=X`. `EXEC name` / `EXEC PROC=name` invoke a PROCEDURE, not a
 # program: jcl.py's `api` rule already owns that relation and #3200 asks for
 # PGM= specifically.
@@ -219,7 +224,7 @@ _JCL_EXEC_PGM = re.compile(r"\bPGM=([A-Z0-9_#$@]+)", re.I)
 # `_dependency_capture` already excludes both for the same reason. `+` is in the
 # class for a relative GDG generation (`DSN=X.BKUP(+1)`), which it used to cut to
 # `X.BKUP(` (#3345).
-_JCL_DSN = re.compile(r"\bDSN(?:AME)?=(?!(?:&&|\*))([A-Z0-9_#$@.&()+-]+)", re.I)
+_JCL_DSN = re.compile(r"\bDSN(?:AME)?=(?!(?:&&|\*))([A-Z0-9_#$@.&()+<>-]+)", re.I)
 
 # ---- #3345: JCL symbolic-parameter resolution -------------------------------
 # A symbol reference: `&NAME` (1-8 chars) with an optional delimiting period that

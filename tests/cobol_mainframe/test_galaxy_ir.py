@@ -6,8 +6,10 @@ JCL member) backs every test, so the reader is pinned against the schema the
 engine actually writes rather than a hand-built imitation of it.
 """
 
+import os
 import shutil
 import sqlite3
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -2013,3 +2015,141 @@ def test_lineage_runs_file_to_file_through_read_into_and_write_from(io_scanned):
     assert ("WS-NAME", "READ", []) in got
     assert any(item in ("OUT-REC",) and verb == "WRITE" and "file FD OUT-FILE" in ep for item, verb, ep in got)
     assert got[0] == ("IN-NAME", None, ["file FD IN-FILE"])
+
+
+# ---- #3493: data-driven LINK / XCTL targets ------------------------------------
+MENU_CPY = """\
+       01 MENU-OPTIONS.
+         05 MENU-DATA.
+           10 FILLER               PIC 9(02) VALUE 1.
+           10 FILLER               PIC X(08) VALUE 'PGMAAA'.
+           10 FILLER               PIC 9(02) VALUE 2.
+           10 FILLER               PIC X(08) VALUE 'PGMBBB'.
+           10 FILLER               PIC 9(02) VALUE 3.
+           10 FILLER               PIC X(08) VALUE SPACES.
+         05 MENU-TABLE REDEFINES MENU-DATA.
+           10 MENU-OPT OCCURS 3 TIMES.
+             15 MENU-OPT-NUM       PIC 9(02).
+             15 MENU-OPT-PGM       PIC X(08).
+"""
+MENU_PGM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MENUPGM.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-OPT             PIC 9(02).
+       01 WS-NEXT            PIC X(08).
+       01 LIT-SIGNON         PIC X(08) VALUE 'SIGNON'.
+       COPY MENUCPY.
+       LINKAGE SECTION.
+       01 DFHCOMMAREA.
+          05 CA-FROM-PGM     PIC X(08).
+       PROCEDURE DIVISION.
+           EXEC CICS XCTL PROGRAM(MENU-OPT-PGM(WS-OPT)) END-EXEC.
+           MOVE 'PGMBBB' TO WS-NEXT.
+           MOVE LIT-SIGNON TO WS-NEXT.
+           MOVE CA-FROM-PGM TO WS-NEXT.
+           EXEC CICS XCTL PROGRAM(WS-NEXT) END-EXEC.
+"""
+STUB = "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. {}.\n       PROCEDURE DIVISION.\n           GOBACK.\n"
+
+
+@pytest.fixture(scope="module")
+def menu_scanned(tmp_path_factory):
+    base = tmp_path_factory.mktemp("galaxy_ir_menu")
+    repo = base / "menu"
+    files = {"cbl/MENUPGM.cbl": MENU_PGM, "cpy/MENUCPY.cpy": MENU_CPY}
+    files.update({f"cbl/{p}.cbl": STUB.format(p) for p in ("PGMAAA", "PGMBBB", "SIGNON")})
+    for rel, text in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return scan_to_db(repo, base / "scan")
+
+
+def test_dynamic_targets_from_tables_values_and_moves(menu_scanned):
+    ir = load_galaxy_ir(menu_scanned)
+    got = {
+        (d["line"], d["operand"].split("(")[0]): ([(c["program"], c["via"], bool(c["resolves_to"])) for c in d["candidates"]], d["other_sources"])
+        for d in ir.dynamic_call_targets()
+    }  # fmt: skip
+    assert got == {
+        # The menu table's two non-blank program slots (the third is SPACES).
+        (13, "MENU-OPT-PGM"): ([("PGMAAA", "table", True), ("PGMBBB", "table", True)], []),
+        # A literal MOVE and a VALUE-holding item's MOVE; the COMMAREA field is "back to the caller".
+        (17, "WS-NEXT"): ([("PGMBBB", "moves", True), ("SIGNON", "moves", True)], ["CA-FROM-PGM"]),
+    }
+    edges = {(e["line"], e["program"], e["via"]) for e in ir.navigation()}
+    assert {(13, "PGMAAA", "table"), (13, "PGMBBB", "table"), (17, "SIGNON", "moves")} <= edges
+    calls = ir.completeness()["channels"]["program calls"]
+    assert calls["gaps"]["dynamic target"] == 0 and calls["resolved"] >= 2
+
+
+# ---- #3494: remote programs and function shipping ------------------------------
+DPL_CSD = """\
+ DEFINE PROGRAM(BIZPGM) GROUP(TORGRP)
+        LANGUAGE(COBOL) REMOTESYSTEM(AOR1)
+ DEFINE PROGRAM(BIZPGM) GROUP(AORGRP)
+        LANGUAGE(COBOL)
+ DEFINE FILE(CUSTF) GROUP(TORGRP)
+        REMOTESYSTEM(FOR1) REMOTENAME(CUSTMAST)
+ DEFINE TDQUEUE(AUDQ) GROUP(TORGRP) TYPE(REMOTE)
+        REMOTESYSTEM(QOR1) REMOTENAME(AUDT)
+"""
+DPL_FRONT = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FRONT.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-AREA            PIC X(100).
+       01 WS-REC             PIC X(80).
+       PROCEDURE DIVISION.
+           EXEC CICS LINK PROGRAM('BIZPGM') COMMAREA(WS-AREA) END-EXEC.
+           EXEC CICS LINK PROGRAM('LOCALP') SYSID('ABCD') END-EXEC.
+           EXEC CICS READ FILE('CUSTF') INTO(WS-REC) RIDFLD(WS-AREA) END-EXEC.
+           EXEC CICS WRITEQ TD QUEUE('AUDQ') FROM(WS-REC) END-EXEC.
+           GOBACK.
+"""
+
+
+@pytest.fixture(scope="module")
+def dpl_scanned(tmp_path_factory):
+    base = tmp_path_factory.mktemp("galaxy_ir_dpl")
+    repo = base / "dpl"
+    files = {"csd/TOR.csd": DPL_CSD, "cbl/FRONT.cbl": DPL_FRONT, "cbl/BIZPGM.cbl": STUB.format("BIZPGM")}
+    for rel, text in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return scan_to_db(repo, base / "scan")
+
+
+def test_remote_programs_calls_and_function_shipping(dpl_scanned):
+    ir = load_galaxy_ir(dpl_scanned)
+    assert {k: [d["system"] for d in v] for k, v in ir.remote_programs().items()} == {"BIZPGM": ["AOR1"]}
+    calls = {(c["program"], c["sysid"], tuple(d["system"] for d in c["remote"])) for c in ir.remote_calls()}
+    # BIZPGM is remote per the CSD (and local in AORGRP -- both are reported by region);
+    # LOCALP names its SYSID on the site.
+    assert calls == {("BIZPGM", None, ("AOR1",)), ("LOCALP", "'ABCD'", ())}
+    shipped = {
+        (r["kind"], r["name"], r["remote"][0]["system"], r["remote"][0]["remote_name"]) for r in ir.remote_resources()
+    }
+    assert shipped == {("FILE", "CUSTF", "FOR1", "CUSTMAST"), ("QUEUE", "AUDQ", "QOR1", "AUDT")}
+    edge = next(e for e in ir.navigation() if e["program"] == "BIZPGM")
+    assert edge["remote_systems"] == ["AOR1"]
+
+
+_GENAPP = Path(os.environ.get("LANGUAGE_CRUCIBLE_PATH", "/nonexistent")) / "data"
+
+
+@pytest.mark.skipif(not (_GENAPP / "jcl" / "cics-genapp").is_dir(), reason="language-crucible cics-genapp not present")
+def test_genapp_tor_aor_dor_topology(tmp_path):
+    """IBM's CICS GENAPP: its CSD decks route business programs to AOR1 and data
+    programs to DOR1 -- 23 remote programs, 35 LINK sites that can leave the region."""
+    repo = tmp_path / "genapp"
+    shutil.copytree(_GENAPP / "jcl" / "cics-genapp", repo / "jcl")
+    shutil.copytree(_GENAPP / "cobol" / "cics-genapp", repo / "cobol")
+    ir = load_galaxy_ir(scan_to_db(repo, tmp_path / "scan"))
+    systems = {k: {d["system"] for d in v} for k, v in ir.remote_programs().items()}
+    assert len(systems) == 23 and systems["LGIPOL01"] == {"AOR1"} and systems["LGIPDB01"] == {"DOR1"}
+    assert len(ir.remote_calls()) == 35
