@@ -398,6 +398,15 @@
           },
           "truth": "draft"
         },
+        "file I/O moves": {
+          "engine": {
+            "got": 146,
+            "tp": 146,
+            "truth": 146
+          },
+          "forge": null,
+          "truth": "cross_verified"
+        },
         "file control": {
           "engine": {
             "got": 54,
@@ -466,6 +475,15 @@
             "tp": 1839,
             "truth": 1839
           },
+          "truth": "draft"
+        },
+        "symbolic maps": {
+          "engine": {
+            "got": 5307,
+            "tp": 5307,
+            "truth": 5307
+          },
+          "forge": null,
           "truth": "draft"
         },
         "units": {
@@ -1206,6 +1224,11 @@
           },
           "truth": "cross_verified"
         },
+        "file I/O moves": {
+          "engine": null,
+          "forge": null,
+          "truth": "draft"
+        },
         "file control": {
           "engine": {
             "got": 1,
@@ -1270,6 +1293,15 @@
             "tp": 1851,
             "truth": 1851
           },
+          "truth": "draft"
+        },
+        "symbolic maps": {
+          "engine": {
+            "got": 1320,
+            "tp": 1320,
+            "truth": 1320
+          },
+          "forge": null,
           "truth": "draft"
         },
         "units": {
@@ -1528,6 +1560,15 @@
           },
           "truth": "cross_verified"
         },
+        "file I/O moves": {
+          "engine": {
+            "got": 63,
+            "tp": 63,
+            "truth": 63
+          },
+          "forge": null,
+          "truth": "cross_verified"
+        },
         "file control": {
           "engine": {
             "got": 12,
@@ -1592,6 +1633,11 @@
             "tp": 163,
             "truth": 163
           },
+          "truth": "draft"
+        },
+        "symbolic maps": {
+          "engine": null,
+          "forge": null,
           "truth": "draft"
         },
         "units": {

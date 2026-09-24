@@ -24,6 +24,8 @@ tools and the engine's master DB against it.
     python tests/tools/cobol_answer_key.py add-dli <repo> --key key.json
     python tests/tools/cobol_answer_key.py add-ims-gen <repo> --key key.json
     python tests/tools/cobol_answer_key.py add-data-moves <repo> --key key.json
+    python tests/tools/cobol_answer_key.py add-symbolic-maps <repo> --key key.json
+    python tests/tools/cobol_answer_key.py add-io-moves <repo> --key key.json
     python tests/tools/cobol_answer_key.py sample --key key.json [--n 25] [--seed S] [--out checklist.md]
 
 `add-pli` (#3250) drafts the PL/I DECLARE record layouts of every PL/I source in
@@ -3899,7 +3901,37 @@ def _mv_statement_pairs(verb: str, body: str) -> list[tuple[Optional[tuple], tup
     return [p for p in pairs if p[1][1] == "item"]
 
 
-def data_move_rows(path: Path) -> list[dict[str, Any]]:
+_IO_VERBS = ("READ", "RETURN", "WRITE", "REWRITE", "RELEASE", "ACCEPT")  # #3492
+
+
+def _io_statement_pairs(verb: str, body: str) -> list[tuple[Optional[tuple], tuple, bool]]:
+    """#3492: READ / RETURN f ... INTO t (f's record -> t), WRITE / REWRITE /
+    RELEASE r FROM s (s -> r), ACCEPT t [FROM w [w]] (w -> t, SYSIN when no FROM)."""
+    lits: list[str] = []
+
+    def park(m: re.Match) -> str:
+        lits.append(m.group(0))
+        return f"'{len(lits) - 1}'"
+
+    body = _MV_LITERAL.sub(park, body)
+    if verb in ("READ", "RETURN"):
+        m = re.match(rf"\s*({_MV_NAME})\b.*?(?<![A-Z0-9-])INTO\s+(.*)$", body, re.S)
+        t = _mv_operands(m.group(2), False, lits)[:1] if m else []
+        return [((m.group(1), "file", False), t[0], False)] if m and t and t[0][1] == "item" else []
+    if verb in ("WRITE", "REWRITE", "RELEASE"):
+        m = re.match(rf"\s*({_MV_NAME})\s+FROM\s+(.*)$", body, re.S)
+        src = _mv_operands(m.group(2), False, lits)[:1] if m else []
+        return [(src[0], (m.group(1), "item", False), False)] if m and src else []
+    m = re.match(rf"\s*({_MV_NAME}(?:\s+(?:OF|IN)\s+{_MV_NAME})*)(?:\s+FROM\s+(.*))?$", body, re.S)
+    if not m:
+        return []
+    words = re.findall(_MV_NAME, m.group(2) or "")[:2] if m.group(2) is not None else ["SYSIN"]
+    target = re.sub(r"\s+(?:OF|IN)\s+", " OF ", m.group(1))
+    return [((" ".join(words) or "SYSIN", "special", False), (target, "item", False), False)]
+
+
+def data_move_rows(path: Path, verbs: tuple = _MV_VERBS) -> list[dict[str, Any]]:
+    """Data-move rows of `verbs` (the #3452 set by default; `_IO_VERBS` for #3492)."""
     src = Source(path)
     start = 0
     if src.proc_start is not None and src.proc_start < len(src.lines):
@@ -3910,14 +3942,19 @@ def data_move_rows(path: Path) -> list[dict[str, Any]]:
     for m in re.finditer(r"(?<![A-Z0-9-])EXEC\s.*?(?<![A-Z0-9-])END-EXEC(?![A-Z0-9-])", src.text, re.S):
         blank = blank[: m.start()] + " " * (m.end() - m.start()) + blank[m.end() :]
     enders = re.compile(r"(?<![A-Z0-9-])(?:" + "|".join(_MV_ENDERS) + r"|END-[A-Z-]+)(?![A-Z0-9-])|\.(?=\s|$)")
+    # READ's own NEXT (READ f NEXT RECORD INTO t) is not NEXT SENTENCE.
+    read_enders = re.compile(
+        r"(?<![A-Z0-9-])(?:" + "|".join(e for e in _MV_ENDERS if e != "NEXT") + r"|END-[A-Z-]+)(?![A-Z0-9-])|\.(?=\s|$)"
+    )
     rows = []
-    for m in re.finditer(r"(?<![A-Z0-9-])(" + "|".join(_MV_VERBS) + r")(?![A-Z0-9-])", blank):
+    for m in re.finditer(r"(?<![A-Z0-9-])(" + "|".join(verbs) + r")(?![A-Z0-9-])", blank):
         if m.start() < start:
             continue
-        end = enders.search(src.text, m.end())
+        end = (read_enders if m.group(1) in ("READ", "RETURN") else enders).search(src.text, m.end())
         stop = end.start() if end else len(src.text)
         body = src.raw_text[m.end() : stop].replace("\n", " ")
-        for a, t, corr in _mv_statement_pairs(m.group(1), " " + body):
+        pairs = _io_statement_pairs if m.group(1) in _IO_VERBS else _mv_statement_pairs
+        for a, t, corr in pairs(m.group(1), " " + body):
             rows.append({
                 "verb": m.group(1), "source": a[0] if a else None, "kind": a[1] if a else None, "target": t[0],
                 "corr": corr, "srm": bool(a and a[2]), "trm": t[2], "line": src.line_of(m.start()),
@@ -4047,6 +4084,21 @@ def data_move_truncations(path: Path, repo: Path, rows: list[dict[str, Any]]) ->
     return sorted(set(out))
 
 
+def draft_io_moves(repo: Path) -> dict[str, dict[str, Any]]:
+    """Drafted file-I/O data moves (#3492) per COBOL source; `io_moves_validated` signs it off."""
+    out: dict[str, dict[str, Any]] = {}
+    for p in sorted(repo.rglob("*")):
+        if p.is_file() and ".git" not in p.parts and p.suffix.lower() in CICS_EXTS:
+            rows = data_move_rows(p, _IO_VERBS)
+            if rows:
+                out[p.relative_to(repo).as_posix()] = {
+                    "moves": sorted(data_move_keys(rows)),
+                    "io_moves_validated": False,
+                    "verification": {"status": "draft", "notes": []},
+                }
+    return out
+
+
 def draft_data_moves(repo: Path) -> dict[str, dict[str, Any]]:
     """Drafted data moves (and the MOVE truncations) per COBOL program (#3452);
     `data_moves_validated` signs it off. Moves of a procedure copybook are the
@@ -4066,6 +4118,104 @@ def draft_data_moves(repo: Path) -> dict[str, dict[str, Any]]:
             "data_moves_validated": False,
             "verification": {"status": "draft", "notes": []},
         }
+    return out
+
+
+# ==============================================================================
+# Symbolic maps generated from BMS source (#3490)
+# ==============================================================================
+# This tool's own computation, by arithmetic, not by writing and parsing COBOL:
+# each named DFHMDF field is one block of 3 + k + LENGTH bytes (L 2, F/A 1, k
+# extended-attribute bytes, then the I / O data), after a 12-byte TIOA prefix
+# when TIOAPFX=YES; the O record overlays the I record from offset 0. k comes
+# from DSATTS= on the map else the mapset, or 4 under EXTATT=YES. An OCCURS=n
+# field is n blocks under `<name>D` (input) and `DFHMS<j>` (output).
+_SYM_LETTERS = (("COLOR", "C"), ("PS", "P"), ("HILIGHT", "H"), ("VALIDN", "V"), ("OUTLINE", "U"), ("SOSI", "M"),
+                ("TRANSP", "T"))  # fmt: skip
+
+
+def _sym_statements(text: str) -> dict[int, str]:
+    """Physical first line -> the whole assembled statement text (column-72 continuation)."""
+    lines = text.split("\n")
+    out, i = {}, 0
+    while i < len(lines):
+        if lines[i].startswith(("*", ".*")) or not lines[i].strip():
+            i += 1
+            continue
+        first, body = i, lines[i][:71].rstrip()
+        while len(lines[i]) > 71 and lines[i][71] != " " and i + 1 < len(lines):
+            i += 1
+            body += lines[i][15:71].rstrip()
+        out[first + 1] = body
+        i += 1
+    return out
+
+
+def _sym_attrs(stmt: str) -> Optional[list[str]]:
+    """The extended-attribute letters a DFHMSD / DFHMDI statement declares, or None."""
+    m = re.search(r"DSATTS=\(([^)]*)\)|DSATTS=([A-Z]+)", stmt.upper())
+    if m:
+        names = set((m.group(1) or m.group(2)).split(","))
+        return [c for n, c in _SYM_LETTERS if n in names]
+    if re.search(r"EXTATT=YES", stmt.upper()):
+        return ["C", "P", "H", "V"]
+    return None
+
+
+def symbolic_map_units(text: str) -> dict[str, list[str]]:
+    """Mapset -> sorted `NAME @offset+bytes` of its generated COBOL symbolic map."""
+    items = bms_screen_items(text)
+    stmts = _sym_statements(text)
+    by_ord = {it["ordinal"]: it for it in items}
+    out: dict[str, set[str]] = {}
+    for m in (it for it in items if it["kind"] == "map" and it["name"]):
+        ms = by_ord.get(m["parent_ordinal"])
+        ms_stmt = stmts.get(ms["line"], "") if ms else ""
+        m_stmt = stmts.get(m["line"], "")
+        prefix = 12 if "TIOAPFX=YES" in (m_stmt + " " + ms_stmt).upper() else 0
+        letters = _sym_attrs(m_stmt)
+        letters = letters if letters is not None else (_sym_attrs(ms_stmt) or [])
+        k = len(letters)
+        units, off, dfhms = set(), prefix, 0
+        name = m["name"].upper()
+        for f in (it for it in items if it["kind"] == "field" and it["parent_ordinal"] == m["ordinal"] and it["name"]):
+            fn, ln, n = f["name"].upper(), f["length"] or 1, f["occurs"] or 0
+            block = 3 + k + ln
+            if n:
+                dfhms += 1
+                units |= {f"{fn}D @{off}+{block * n}", f"DFHMS{dfhms} @{off}+{block * n}"}
+            units |= {f"{fn}L @{off}+2", f"{fn}F @{off + 2}+1", f"{fn}A @{off + 2}+1", f"{fn}I @{off + 3 + k}+{ln}",
+                      f"{fn}O @{off + 3 + k}+{ln}"}  # fmt: skip
+            units |= {f"{fn}{c} @{off + 3 + j}+1" for j, c in enumerate(letters)}
+            off += block * (n or 1)
+        units |= {f"{name}I @0+{off}", f"{name}O @0+{off}"}
+        mapset = ((ms or {}).get("name") or name).upper()
+        out.setdefault(mapset, set()).update(units)
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def draft_symbolic_maps(repo: Path) -> dict[str, dict[str, Any]]:
+    """Drafted symbolic-map layouts per BMS source (#3490); `symbolic_validated` signs it off.
+    A mapset defined by several BMS sources is the one in the file named after it
+    (a COPY of it can only mean one); its other definitions are not keyed."""
+    per_file = {
+        p: symbolic_map_units(p.read_text(encoding="utf-8", errors="ignore"))
+        for p in sorted(repo.rglob("*"))
+        if p.is_file() and p.suffix.lower() in BMS_EXTS and ".git" not in p.parts
+    }
+    owners: dict[str, list[Path]] = {}
+    for p, maps in per_file.items():
+        for mapset in maps:
+            owners.setdefault(mapset, []).append(p)
+    out: dict[str, dict[str, Any]] = {}
+    for p, maps in per_file.items():
+        maps = {ms: u for ms, u in maps.items() if len(owners[ms]) == 1 or p.stem.upper() == ms}
+        if maps:
+            out[p.relative_to(repo).as_posix()] = {
+                "layouts": maps,
+                "symbolic_validated": False,
+                "verification": {"status": "draft", "notes": []},
+            }
     return out
 
 
@@ -4494,6 +4644,13 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
         # own reader and widths; engine is data_move_data + GalaxyIR.data_flows.
         "data moves",
         "MOVE truncation",
+        # #3490: the COBOL symbolic map each BMS mapset generates, as named items
+        # at byte offsets. Truth is this tool's own arithmetic; engine is
+        # GalaxyIR.symbolic_map_layouts (generated copybook text, record parser).
+        "symbolic maps",
+        # #3492: READ / RETURN INTO, WRITE / REWRITE / RELEASE FROM, ACCEPT, as
+        # written. Truth is this tool's own reader; engine is data_move_data.
+        "file I/O moves",
     ]
     agg: dict[str, dict[str, list[set]]] = {f: {"truth": [], "forge": [], "engine": []} for f in fields}
 
@@ -4846,6 +5003,26 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
             engine_ims.get(rel, set()) if ir is not None and rel in ir.files else None,
         )
 
+    engine_maps = ir.symbolic_map_layouts() if ir is not None else {}
+    for rel, k in key.get("symbolic_maps", {}).items():
+        for mapset, units in k.get("layouts", {}).items():
+            eng = engine_maps.get(mapset)
+            add(
+                "symbolic maps",
+                f"{rel}#{mapset}",
+                set(units),
+                None,
+                set(eng["items"]) if eng and eng["file"] == rel else (set() if ir is not None else None),
+            )
+    for rel, k in key.get("io_moves", {}).items():
+        ef = ir.files.get(rel) if ir else None
+        add(
+            "file I/O moves",
+            rel,
+            set(k.get("moves", [])),
+            None,
+            data_move_keys([engine_data_move_row(m) for m in ef.data_moves if m.verb in _IO_VERBS]) if ef else None,
+        )
     engine_trunc: dict[str, set[str]] = {}
     if ir is not None:
         for fl in ir.data_flows():
@@ -4860,7 +5037,7 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
             rel,
             set(k.get("moves", [])),
             None,
-            data_move_keys([engine_data_move_row(m) for m in ef.data_moves]) if ef else None,
+            data_move_keys([engine_data_move_row(m) for m in ef.data_moves if m.verb not in _IO_VERBS]) if ef else None,
         )
         if rel.lower().endswith(PROGRAM_EXTS):
             add(
@@ -5006,6 +5183,12 @@ def main() -> int:
     dlp = sub.add_parser("add-dli")
     dlp.add_argument("repo", type=Path)
     dlp.add_argument("--key", type=Path, required=True)
+    smp = sub.add_parser("add-symbolic-maps")
+    smp.add_argument("repo", type=Path)
+    smp.add_argument("--key", type=Path, required=True)
+    iop = sub.add_parser("add-io-moves")
+    iop.add_argument("repo", type=Path)
+    iop.add_argument("--key", type=Path, required=True)
     dmp = sub.add_parser("add-data-moves")
     dmp.add_argument("repo", type=Path)
     dmp.add_argument("--key", type=Path, required=True)
@@ -5164,6 +5347,25 @@ def main() -> int:
         key["dli_calls"] = dl
         args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
         print(f"drafted {len(dl)} DL/I files -> {args.key}")
+        return 0
+    if args.cmd == "add-symbolic-maps":
+        # #3490: the add-pli discipline -- refresh drafts, keep signed-off files.
+        sm = {rel: e for rel, e in key.get("symbolic_maps", {}).items() if e.get("symbolic_validated")}
+        for rel, entry in draft_symbolic_maps(repo).items():
+            if not sm.get(rel, {}).get("symbolic_validated"):
+                sm[rel] = entry
+        key["symbolic_maps"] = sm
+        args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+        print(f"drafted {len(sm)} BMS symbolic-map files -> {args.key}")
+    if args.cmd == "add-io-moves":
+        # #3492: the add-pli discipline; an unvalidated file no longer drafted is dropped.
+        io = {rel: e for rel, e in key.get("io_moves", {}).items() if e.get("io_moves_validated")}
+        for rel, entry in draft_io_moves(repo).items():
+            if not io.get(rel, {}).get("io_moves_validated"):
+                io[rel] = entry
+        key["io_moves"] = io
+        args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+        print(f"drafted {len(io)} file-I/O move files -> {args.key}")
         return 0
     if args.cmd == "add-data-moves":
         # #3452: the add-pli discipline -- refresh drafts, keep signed-off files.
