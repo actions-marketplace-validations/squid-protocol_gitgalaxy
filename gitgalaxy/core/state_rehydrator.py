@@ -882,6 +882,55 @@ class StateRehydrator:
                     },
                 )
 
+                # #3477: IMS PSB / DBD macros and region steps.
+                ims_gen_by_file = _restore_child_table(
+                    cursor,
+                    repo_name,
+                    baseline_hash,
+                    "ims_gen_data",
+                    'SELECT fd.file_path AS _fp, ig.kind, ig.name, ig.parent, ig.owner, ig.dbd_name, ig.procopt, ig.pcb_type, ig.access, ig.bytes, ig.start_pos AS "start", ig.psb_name, ig.program, ig.attributes, ig.line_number AS "line" '
+                    "FROM ims_gen_data ig JOIN file_data fd ON ig.file_id = fd.id "
+                    "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY ig.id",
+                    lambda r: {
+                        "kind": r["kind"],
+                        "name": r["name"],
+                        "parent": r["parent"],
+                        "owner": r["owner"],
+                        "dbd_name": r["dbd_name"],
+                        "procopt": r["procopt"],
+                        "pcb_type": r["pcb_type"],
+                        "access": r["access"],
+                        "bytes": int(r["bytes"]) if r["bytes"] is not None else None,
+                        "start": int(r["start"]) if r["start"] is not None else None,
+                        "psb_name": r["psb_name"],
+                        "program": r["program"],
+                        "attributes": r["attributes"],
+                        "line": int(r["line"] or 0),
+                    },
+                )
+
+                # #3452: field-level data movement.
+                moves_by_file = _restore_child_table(
+                    cursor,
+                    repo_name,
+                    baseline_hash,
+                    "data_move_data",
+                    "SELECT fd.file_path AS _fp, dm.verb, dm.source, dm.source_kind, dm.target, dm.corresponding, "
+                    'dm.source_refmod, dm.target_refmod, dm.line_number AS "line" '
+                    "FROM data_move_data dm JOIN file_data fd ON dm.file_id = fd.id "
+                    "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY dm.id",
+                    lambda r: {
+                        "verb": r["verb"],
+                        "source": r["source"],
+                        "source_kind": r["source_kind"],
+                        "target": r["target"],
+                        "corresponding": bool(r["corresponding"]),
+                        "source_refmod": bool(r["source_refmod"]),
+                        "target_refmod": bool(r["target_refmod"]),
+                        "line": int(r["line"] or 0),
+                    },
+                )
+
                 for rel_path, node in ram_state.items():
                     node["functions"] = funcs_by_file.get(rel_path, [])
                     node["classes"] = classes_by_file.get(rel_path, [])
@@ -903,6 +952,8 @@ class StateRehydrator:
                     node["job_flow"] = job_flow_by_file.get(rel_path, [])
                     node["entry_points"] = entry_points_by_file.get(rel_path, [])
                     node["dli_calls"] = dli_by_file.get(rel_path, [])
+                    node["ims_gen"] = ims_gen_by_file.get(rel_path, [])
+                    node["data_moves"] = moves_by_file.get(rel_path, [])
             except sqlite3.Error as fc_err:
                 print(f"⚠️ Could not rehydrate functions/classes (structure counts may drift): {fc_err}")
 

@@ -500,7 +500,9 @@ class RecordKeeper:
         `vsam_defines` (JCL IDCAMS -> vsam_define_data). JCL job flow (#3451)
         rides on `job_flow` and becomes job_flow_data. Program entry points
         (#3454) ride on `entry_points` and become entry_point_data. IMS DL/I
-        calls (#3450) ride on `dli_calls` and become dli_call_data.
+        calls (#3450) ride on `dli_calls` and become dli_call_data. IMS PSB / DBD
+        macros and IMS region steps (#3477) ride on `ims_gen` -> ims_gen_data.
+        Field-level data movement (#3452) rides on `data_moves` -> data_move_data.
 
         `transactions` (#3211-followup) is the CICS transaction map:
         `invocation_resolver.resolve_transactions()`'s resolved records, persisted
@@ -1396,6 +1398,65 @@ class RecordKeeper:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_dli_call_file_id ON dli_call_data(file_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_dli_call_snapshot ON dli_call_data(repo_name, commit_hash);")
+
+        # #3477: IMS PSB / DBD generation macros and JCL IMS region steps (core/ims_gen.py).
+        #   kind      -- PSBGEN | PCB | SENSEG | DBD | DATASET | SEGM | FIELD | LCHILD | REGION
+        #   name / parent / owner -- the statement's object, its parent segment, and the
+        #                PCB (SENSEG) or DBD (SEGM / FIELD / LCHILD) it belongs to
+        #   dbd_name / procopt / pcb_type -- a PCB's DBDNAME / PROCOPT / TYPE
+        #   access    -- a DBD's ACCESS, a FIELD's SEQ, a REGION's type (DLI / BMP ...)
+        #   psb_name / program -- a REGION's PSB and program (DFSRRC00 PARM)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ims_gen_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT,
+                commit_hash TEXT,
+                file_id INTEGER,
+                kind TEXT,
+                name TEXT,
+                parent TEXT,
+                owner TEXT,
+                dbd_name TEXT,
+                procopt TEXT,
+                pcb_type TEXT,
+                access TEXT,
+                bytes INTEGER,
+                start_pos INTEGER,
+                psb_name TEXT,
+                program TEXT,
+                attributes TEXT,
+                line_number INTEGER,
+                FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ims_gen_file_id ON ims_gen_data(file_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ims_gen_snapshot ON ims_gen_data(repo_name, commit_hash);")
+
+        # #3452: field-level data movement (core/data_moves.py), one row per source ->
+        # target pair of a MOVE / COMPUTE / ADD / SUBTRACT / MULTIPLY / DIVIDE /
+        # STRING / UNSTRING / INITIALIZE. Operands as written (qualifiers kept,
+        # subscripts dropped); source_kind item | literal | figurative | function |
+        # length | address, source NULL for INITIALIZE; *_refmod flag a reference
+        # modification; corresponding flags MOVE CORRESPONDING.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS data_move_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT,
+                commit_hash TEXT,
+                file_id INTEGER,
+                verb TEXT,
+                source TEXT,
+                source_kind TEXT,
+                target TEXT,
+                corresponding INTEGER,
+                source_refmod INTEGER,
+                target_refmod INTEGER,
+                line_number INTEGER,
+                FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_data_move_file_id ON data_move_data(file_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_data_move_snapshot ON data_move_data(repo_name, commit_hash);")
 
         # #3211-followup: the CICS transaction map -- which 4-char transaction id a
         # user submits and which program CICS routes it to. Extracted from the CSD
@@ -3135,6 +3196,80 @@ class RecordKeeper:
                 d.get("where"),
                 d.get("psb"),
                 int(d.get("line", 0) or 0),
+            ),
+        )
+
+        # #3477: IMS PSB / DBD macros and region steps -- per-file.
+        _insert_per_file_child(
+            cursor,
+            parsed_files,
+            path_to_file_id,
+            repo_name,
+            commit_hash,
+            "ims_gen_data",
+            (
+                "kind",
+                "name",
+                "parent",
+                "owner",
+                "dbd_name",
+                "procopt",
+                "pcb_type",
+                "access",
+                "bytes",
+                "start_pos",
+                "psb_name",
+                "program",
+                "attributes",
+                "line_number",
+            ),
+            "ims_gen",
+            lambda g: (
+                g.get("kind"),
+                g.get("name"),
+                g.get("parent"),
+                g.get("owner"),
+                g.get("dbd_name"),
+                g.get("procopt"),
+                g.get("pcb_type"),
+                g.get("access"),
+                int(g["bytes"]) if g.get("bytes") is not None else None,
+                int(g["start"]) if g.get("start") is not None else None,
+                g.get("psb_name"),
+                g.get("program"),
+                g.get("attributes"),
+                int(g.get("line", 0) or 0),
+            ),
+        )
+
+        # #3452: field-level data movement -- per-file.
+        _insert_per_file_child(
+            cursor,
+            parsed_files,
+            path_to_file_id,
+            repo_name,
+            commit_hash,
+            "data_move_data",
+            (
+                "verb",
+                "source",
+                "source_kind",
+                "target",
+                "corresponding",
+                "source_refmod",
+                "target_refmod",
+                "line_number",
+            ),
+            "data_moves",
+            lambda m: (
+                m.get("verb"),
+                m.get("source"),
+                m.get("source_kind"),
+                m.get("target"),
+                int(bool(m.get("corresponding"))),
+                int(bool(m.get("source_refmod"))),
+                int(bool(m.get("target_refmod"))),
+                int(m.get("line", 0) or 0),
             ),
         )
 

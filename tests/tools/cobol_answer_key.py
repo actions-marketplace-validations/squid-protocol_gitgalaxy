@@ -22,6 +22,8 @@ tools and the engine's master DB against it.
     python tests/tools/cobol_answer_key.py add-job-flow <repo> --key key.json
     python tests/tools/cobol_answer_key.py add-call-using <repo> --key key.json
     python tests/tools/cobol_answer_key.py add-dli <repo> --key key.json
+    python tests/tools/cobol_answer_key.py add-ims-gen <repo> --key key.json
+    python tests/tools/cobol_answer_key.py add-data-moves <repo> --key key.json
     python tests/tools/cobol_answer_key.py sample --key key.json [--n 25] [--seed S] [--out checklist.md]
 
 `add-pli` (#3250) drafts the PL/I DECLARE record layouts of every PL/I source in
@@ -3527,6 +3529,547 @@ def draft_dli(repo: Path) -> dict[str, dict[str, Any]]:
 
 
 # ==============================================================================
+# IMS PSB / DBD definitions and the access check (#3477)
+# ==============================================================================
+# This tool's own reading of the generation macros: a statement is the columns
+# 1-71 of its first line plus columns 16-71 of each line after a non-blank column
+# 72; operands are walked with a paren-depth regex scan. A SENSEG / SEGM belongs
+# to the PCB / DBD above it, an unlabeled PCB is `PCB@<line>`. JCL regions come
+# from the job-flow statement reader. The access check joins, on its own, the
+# program's PSB (DFSRRC00 PARM by PROGRAM-ID, or SCHD PSB through its VALUE) to
+# the PCBs whose SENSEGs name the segment, and each access to the PROCOPT letters.
+IMS_GEN_EXTS = (".psb", ".dbd")
+_IMS_MACROS = ("PSBGEN", "PCB", "SENSEG", "DBD", "SEGM", "FIELD", "LCHILD", "DATASET")
+_IMS_OPERAND = re.compile(r"([A-Z0-9]+)=((?:\([^()]*(?:\([^()]*\)[^()]*)*\)|[^,()\s])*)|([^,=\s]+)")
+
+
+def _ims_ops(text: str) -> dict[str, str]:
+    field = text.split()[0] if text.split() else ""
+    return {m.group(1): m.group(2) for m in _IMS_OPERAND.finditer(field) if m.group(1)}
+
+
+def _ims_name(v: Optional[str]) -> Optional[str]:
+    names = re.findall(r"[A-Z0-9@#$]+", v or "")
+    return names[0] if names else None
+
+
+def ims_gen_rows(text: str) -> list[dict[str, Any]]:
+    lines = text.upper().split("\n")
+    stmts: list[tuple[int, str]] = []
+    no = 0
+    while no < len(lines):
+        if lines[no].startswith("*") or not lines[no].strip():
+            no += 1
+            continue
+        first, body = no, lines[no][:71].rstrip()
+        while len(lines[no]) >= 72 and lines[no][71].strip() and no + 1 < len(lines):
+            no += 1
+            body += lines[no][15:71].rstrip()
+        stmts.append((first + 1, body.rstrip()))
+        no += 1
+    rows: list[dict[str, Any]] = []
+    pcb = dbd = seg = None
+    for line, body in stmts:
+        m = re.match(r"(\S*)\s+(\S+)\s*(.*)", body)
+        if not m or m.group(2) not in _IMS_MACROS:
+            continue
+        label, op, o = m.group(1), m.group(2), _ims_ops(m.group(3))
+        r: dict[str, Any] = {"kind": op, "line": line}
+        if op == "PCB":
+            pcb = label or o.get("PCBNAME") or f"PCB@{line}"
+            r.update(name=pcb, type=o.get("TYPE"), dbd=o.get("DBDNAME") or o.get("NAME"), procopt=o.get("PROCOPT"))
+        elif op == "SENSEG":
+            r.update(
+                name=_ims_name(o.get("NAME")), parent=_ims_name(o.get("PARENT")), owner=pcb, procopt=o.get("PROCOPT")
+            )
+        elif op == "PSBGEN":
+            r.update(name=o.get("PSBNAME"))
+        elif op == "DBD":
+            dbd = o.get("NAME")
+            r.update(name=dbd, access=_ims_name(o.get("ACCESS")))
+        elif op == "SEGM":
+            seg = _ims_name(o.get("NAME"))
+            b = re.match(r"\(?(\d+)", o.get("BYTES", ""))
+            r.update(name=seg, parent=_ims_name(o.get("PARENT")), owner=dbd, bytes=int(b.group(1)) if b else None)
+        elif op == "FIELD":
+            parts = re.findall(r"[A-Z0-9@#$]+", o.get("NAME", ""))
+            r.update(
+                name=parts[0] if parts else None, parent=seg, owner=dbd, access="SEQ" if "SEQ" in parts[1:] else None,
+                start=int(o["START"]) if o.get("START", "").isdigit() else None,
+                bytes=int(o["BYTES"]) if o.get("BYTES", "").isdigit() else None,
+            )  # fmt: skip
+        elif op == "LCHILD":
+            parts = re.findall(r"[A-Z0-9@#$]+", o.get("NAME", ""))
+            r.update(name=parts[0] if parts else None, parent=seg, owner=dbd, dbd=parts[1] if len(parts) > 1 else None)
+        elif op == "DATASET":
+            r.update(name=o.get("DD1"), owner=dbd)
+        rows.append(r)
+    return rows
+
+
+def ims_region_rows(text: str) -> list[dict[str, Any]]:
+    rows = []
+    for line, _name, op, field in _jcl_key_statements(text.upper()):
+        if op != "EXEC" or not re.search(r"\bPGM=DFSRRC00\b", field):
+            continue
+        parm = re.search(r"PARM=\(?'?([^')]*)", field)
+        if parm:
+            p = [x.strip() for x in parm.group(1).split(",")] + ["", "", ""]
+            rows.append({"kind": "REGION", "access": p[0] or None, "name": p[1] or None, "program": p[1] or None,
+                         "psb": p[2] or None, "line": line})  # fmt: skip
+    return rows
+
+
+_IMS_KEY_FIELDS = ("name", "parent", "owner", "dbd", "procopt", "type", "access", "bytes", "start", "psb", "program")
+
+
+def ims_gen_keys(rows: list[dict[str, Any]]) -> set[str]:
+    """`L<line> KIND name=.. parent=.. ...` per statement, set fields only."""
+    return {
+        f"L{r['line']} {r['kind']} " + " ".join(f"{k}={r[k]}" for k in _IMS_KEY_FIELDS if r.get(k) not in (None, ""))
+        for r in rows
+    }
+
+
+def engine_ims_gen_row(g: Any) -> dict[str, Any]:
+    return {
+        "kind": g.kind, "line": g.line, "name": g.name, "parent": g.parent, "owner": g.owner, "dbd": g.dbd_name,
+        "procopt": g.procopt, "type": g.pcb_type, "access": g.access, "bytes": g.bytes, "start": g.start,
+        "psb": g.psb_name, "program": g.program,
+    }  # fmt: skip
+
+
+_IMS_PROCOPT = {"read": "G", "insert": "I", "update": "R", "delete": "D"}
+
+
+def ims_access_check(
+    repo: Path, gen: dict[str, dict[str, Any]], dli: dict[str, dict[str, Any]]
+) -> dict[str, list[str]]:
+    """Program -> `SEGMENT status PSB/PCB[:denied]...` per segment it accesses, from
+    this tool's own IMS definition rows and DL/I segment access."""
+    psbs: dict[str, list[dict[str, Any]]] = {}
+    regions: dict[str, set[str]] = {}
+    for entry in gen.values():
+        rows = entry["rows"]
+        name = next((r["name"] for r in rows if r["kind"] == "PSBGEN" and r.get("name")), None)
+        if name:
+            psbs[name] = [
+                dict(r, sensegs={x["name"] for x in rows if x["kind"] == "SENSEG" and x.get("owner") == r["name"]})
+                for r in rows if r["kind"] == "PCB"
+            ]  # fmt: skip
+        for r in rows:
+            if r["kind"] == "REGION" and r.get("program") and r.get("psb"):
+                regions.setdefault(r["program"], set()).add(r["psb"])
+    out: dict[str, list[str]] = {}
+    for rel, k in dli.items():
+        path = repo / rel
+        pid = re.search(r"PROGRAM-ID\.?\s+['\"]?([A-Z0-9@#$-]+)", Source(path).text)
+        names = set(regions.get(pid.group(1), set())) if pid else set()
+        for c in k.get("calls", []):
+            if c.get("function") == "SCHD" and c.get("psb"):
+                v = c["psb"] if c["psb"][0] in "'\"" else _dli_value(path, repo, c["psb"])
+                if v and "?" not in v and v.strip(" '\""):
+                    names.add(v.strip(" '\"").upper())
+        by_seg: dict[str, set[str]] = {}
+        for a in k.get("segment_access", []):
+            acc, seg = a.split(" ", 1)
+            by_seg.setdefault(seg, set()).add(acc)
+        lines = []
+        for seg, accs in sorted(by_seg.items()):
+            hits = []
+            for psb in sorted(names):
+                for pcb in psbs.get(psb, []):
+                    if seg in pcb["sensegs"]:
+                        opt = pcb.get("procopt") or ""
+                        bad = sorted(
+                            a
+                            for a in accs
+                            if not ("A" in opt or _IMS_PROCOPT[a] in opt or (a == "insert" and "L" in opt))
+                        )
+                        hits.append((psb, pcb["name"], bad))
+            if not any(n in psbs for n in names):
+                status = "no_psb"
+            elif not hits:
+                status = "not_sensitive"
+            elif all(b for _, _, b in hits):
+                status = "denied"
+            else:
+                status = "ok"
+            lines.append(
+                f"{seg} {status} "
+                + (",".join(f"{p}/{c}" + (":" + "+".join(b) if b else "") for p, c, b in hits) or "-")
+            )
+        out[rel] = lines
+    return out
+
+
+def engine_ims_check_lines(checks: list[dict[str, Any]]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for c in checks:
+        hits = ",".join(
+            f"{p['psb']}/{p['pcb']}" + (":" + "+".join(p["denied"]) if p["denied"] else "") for p in c["pcbs"]
+        )
+        out.setdefault(c["file"], []).append(f"{c['segment']} {c['status']} {hits or '-'}")
+    return out
+
+
+def draft_ims_gen(repo: Path, dli: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Drafted IMS definitions per PSB / DBD / region JCL member, and the access
+    check per DL/I program (#3477); `ims_gen_validated` signs it off."""
+    out: dict[str, dict[str, Any]] = {}
+    for p in sorted(repo.rglob("*")):
+        if not p.is_file() or ".git" in p.parts:
+            continue
+        ext = p.suffix.lower()
+        if ext in IMS_GEN_EXTS:
+            rows = ims_gen_rows(p.read_text(encoding="utf-8", errors="ignore"))
+        elif ext in JCL_EXTS:
+            rows = ims_region_rows(p.read_text(encoding="utf-8", errors="ignore"))
+        else:
+            continue
+        if rows:
+            out[p.relative_to(repo).as_posix()] = {
+                "rows": rows,
+                "ims_gen_validated": False,
+                "verification": {"status": "draft", "notes": []},
+            }
+    for rel, lines in ims_access_check(repo, out, dli).items():
+        out[rel] = {"access_check": lines, "ims_gen_validated": False, "verification": {"status": "draft", "notes": []}}
+    return out
+
+
+# ==============================================================================
+# Field-level data movement (#3452)
+# ==============================================================================
+# This tool's own reading: statements are cut out of the literal-blanked
+# procedure text between a data-moving verb and the next verb / END- word /
+# period, then each verb's phrases are split by its keywords with regexes (the
+# engine walks a token stream). Operands keep qualifiers, drop subscripts, and
+# mark a reference modification `(:)`. Truncation uses this tool's own widths:
+# PIC positions per usage, a group the sum of its children with COPY members
+# spliced in, one occurrence of an OCCURS item.
+_MV_VERBS = ("MOVE", "COMPUTE", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "STRING", "UNSTRING", "INITIALIZE")
+_MV_ENDERS = (
+    "ACCEPT ADD ALTER CALL CANCEL CLOSE COMPUTE CONTINUE DELETE DISPLAY DIVIDE ELSE EVALUATE EXEC EXIT GO "
+    "GOBACK IF INITIALIZE INSPECT MERGE MOVE MULTIPLY OPEN PERFORM READ RELEASE RETURN REWRITE SEARCH SET "
+    "SORT START STOP STRING SUBTRACT UNSTRING WHEN WRITE COPY OTHERWISE THEN NEXT NOT INVALID AT"
+).split()
+_MV_NAME = r"[A-Z0-9][A-Z0-9-]*"
+_MV_PARENS = r"\((?:[^()]|\([^()]*\))*\)"
+_MV_OPERAND = re.compile(
+    r"(?P<lit>[XNGZ]?'[^']*'?|[XNGZ]?\"[^\"]*\"?)"
+    rf"|(?P<fn>FUNCTION\s+{_MV_NAME}(?:\s*{_MV_PARENS})?)"
+    rf"|(?P<lenof>(?:LENGTH|ADDRESS)\s+OF\s+{_MV_NAME}(?:\s+(?:OF|IN)\s+{_MV_NAME})*)"
+    rf"|(?P<all>ALL\s+(?:'[^']*'|\"[^\"]*\"|{_MV_NAME}))"
+    r"|(?P<num>[+-]?(?:\d*\.\d+|\d+)(?![A-Z0-9-]))"
+    rf"|(?P<id>{_MV_NAME}(?:\s+(?:OF|IN)\s+{_MV_NAME})*)(?P<paren>(?:\s*{_MV_PARENS})*)"
+)
+_MV_FIGURATIVE = {"SPACE", "SPACES", "ZERO", "ZEROS", "ZEROES", "HIGH-VALUE", "HIGH-VALUES", "LOW-VALUE",
+                  "LOW-VALUES", "QUOTE", "QUOTES", "NULL", "NULLS"}  # fmt: skip
+_MV_SKIP = {"ROUNDED", "MODE", "IS", "NEAREST-AWAY-FROM-ZERO", "TRUNCATION"}
+
+
+_MV_LITERAL = re.compile(r"[XNGZ]?'[^'\n]*'?|[XNGZ]?\"[^\"\n]*\"?")
+
+
+def _mv_matches(text: str) -> list[re.Match]:
+    """The operands of a list, in a row: separators are blanks and commas, and the
+    first thing that is not an operand (`(SCRNVAR2)C`, pseudo-text awaiting COPY
+    REPLACING) ends the list."""
+    out, pos = [], 0
+    while True:
+        while pos < len(text) and text[pos] in " ,":
+            pos += 1
+        m = _MV_OPERAND.match(text, pos)
+        if pos >= len(text) or not m or m.end() == pos:
+            return out
+        out.append(m)
+        pos = m.end()
+
+
+def _mv_operands(
+    text: str, items_only: bool = False, lits: Optional[list] = None, scan: bool = False
+) -> list[tuple[str, str, bool]]:
+    """(text, kind, refmod) per operand of one phrase, qualifiers as `A OF B`.
+    `lits` restores the literals `_mv_statement_pairs` parked as `'<n>'`; `scan`
+    picks operands out of an arithmetic expression instead of reading a list."""
+    out = []
+    for m in _MV_OPERAND.finditer(text) if scan else _mv_matches(text):
+        if m.group("lit") and lits is not None:
+            out.append((lits[int(m.group("lit").strip("'"))], "literal", False))
+        elif m.group("lit") or m.group("num"):
+            out.append((m.group(0).strip(), "literal", False))
+        elif m.group("fn"):
+            out.append((" ".join(m.group("fn").split("(")[0].split()), "function", False))
+        elif m.group("lenof"):
+            words = m.group("lenof").split()
+            out.append((" ".join(words).replace(" IN ", " OF "), words[0].lower(), False))
+        elif m.group("all"):
+            what = m.group("all").split(None, 1)[1]
+            if lits is not None and what[:1] == "'":
+                what = lits[int(what.strip("'"))]
+            out.append((f"ALL {what}", "figurative", False))
+        else:
+            name = re.sub(r"\s+(?:OF|IN)\s+", " OF ", m.group("id"))
+            if name in _MV_SKIP or not re.search(r"[A-Z]", name):
+                continue
+            if name in _MV_FIGURATIVE:
+                out.append((name, "figurative", False))
+                continue
+            out.append((name, "item", ":" in (m.group("paren") or "")))
+    return [o for o in out if o[1] == "item"] if items_only else out
+
+
+def _mv_expression_items(text: str) -> list[tuple[str, str, bool]]:
+    """Data names of an arithmetic expression: FUNCTION names dropped, arguments kept."""
+    text = re.sub(rf"\bFUNCTION\s+{_MV_NAME}", " ", text)
+    return _mv_operands(text, items_only=True, scan=True)
+
+
+def _mv_statement_pairs(verb: str, body: str) -> list[tuple[Optional[tuple], tuple, bool]]:
+    # Literals are parked as '<n>' first, so a keyword inside one ('FAILED TO READ')
+    # never splits the statement.
+    lits: list[str] = []
+
+    def park(m: re.Match) -> str:
+        lits.append(m.group(0))
+        return f"'{len(lits) - 1}'"
+
+    body = _MV_LITERAL.sub(park, body)
+
+    def ops(text: str) -> list:
+        return _mv_operands(text, False, lits)
+
+    def cut(text: str, words: str) -> str:
+        m = re.search(rf"(?<![A-Z0-9-])(?:{words})(?![A-Z0-9-])", text)
+        return text[: m.start()] if m else text
+
+    pairs: list = []
+    if verb == "MOVE":
+        m = re.match(r"\s*(CORR(?:ESPONDING)?\s+)?(.*?)(?<![A-Z0-9-])TO(?![A-Z0-9-])(.*)$", body, re.S)
+        if not m:
+            return []
+        src = ops(m.group(2))
+        if len(src) != 1:
+            return []
+        pairs = [(src[0], t, bool(m.group(1))) for t in ops(m.group(3))]
+    elif verb == "COMPUTE":
+        m = re.match(r"(.*?)(?:=|(?<![A-Z0-9-])EQUAL(?![A-Z0-9-]))(.*)$", body, re.S)
+        if not m:
+            return []
+        rhs = cut(m.group(2), r"ON|NOT|SIZE|END-COMPUTE")
+        pairs = [(a, t, False) for t in ops(m.group(1)) for a in _mv_expression_items(rhs)]
+    elif verb in ("ADD", "SUBTRACT", "MULTIPLY", "DIVIDE"):
+        body = cut(body, r"ON|NOT|SIZE|END-ADD|END-SUBTRACT|END-MULTIPLY|END-DIVIDE")
+        if re.match(r"\s*CORR", body):
+            return []
+        rem = ""
+        if re.search(r"(?<![A-Z0-9-])REMAINDER(?![A-Z0-9-])", body):
+            body, rem = re.split(r"(?<![A-Z0-9-])REMAINDER(?![A-Z0-9-])", body, maxsplit=1)
+        giving = ""
+        if re.search(r"(?<![A-Z0-9-])GIVING(?![A-Z0-9-])", body):
+            body, giving = re.split(r"(?<![A-Z0-9-])GIVING(?![A-Z0-9-])", body, maxsplit=1)
+        halves = re.split(r"(?<![A-Z0-9-])(?:TO|FROM|BY|INTO)(?![A-Z0-9-])", body, maxsplit=1)
+        first = ops(halves[0])
+        second = ops(halves[1]) if len(halves) > 1 else []
+        if giving:
+            pairs = [(a, t, False) for t in ops(giving) + ops(rem) for a in first + second]
+        else:
+            pairs = [(a, t, False) for t in second for a in first]
+    elif verb == "STRING":
+        parts = re.split(r"(?<![A-Z0-9-])INTO(?![A-Z0-9-])", body, maxsplit=1)
+        if len(parts) != 2:
+            return []
+        head = re.sub(
+            rf"DELIMITED\s+(?:BY\s+)?(?:SIZE|'[^']*'|{_MV_NAME}(?:\s+(?:OF|IN)\s+{_MV_NAME})*)", " ", parts[0]
+        )
+        target = ops(cut(parts[1], r"WITH|POINTER|ON|NOT|END-STRING"))[:1]
+        pairs = [(a, target[0], False) for a in ops(head)] if target else []
+    elif verb == "UNSTRING":
+        parts = re.split(r"(?<![A-Z0-9-])INTO(?![A-Z0-9-])", body, maxsplit=1)
+        if len(parts) != 2:
+            return []
+        src = ops(cut(parts[0], "DELIMITED"))[:1]
+        tail = cut(parts[1], r"WITH|POINTER|TALLYING|ON|NOT|END-UNSTRING")
+        tail = re.sub(rf"(?:DELIMITER|COUNT)\s+(?:IN\s+)?{_MV_NAME}(?:\s*{_MV_PARENS})*", " ", tail)
+        pairs = [(src[0], t, False) for t in ops(tail)] if src else []
+    elif verb == "INITIALIZE":
+        head = cut(body, r"REPLACING|WITH|ALL|TO|DEFAULT|FILLER")
+        pairs = [(None, t, False) for t in ops(head)]
+    return [p for p in pairs if p[1][1] == "item"]
+
+
+def data_move_rows(path: Path) -> list[dict[str, Any]]:
+    src = Source(path)
+    start = 0
+    if src.proc_start is not None and src.proc_start < len(src.lines):
+        start = sum(len(a) + 1 for _, a in src.lines[: src.proc_start])
+    elif src.proc_start is not None:
+        return []
+    blank = src.text  # EXEC blocks blanked for the verb search; statements still end at EXEC
+    for m in re.finditer(r"(?<![A-Z0-9-])EXEC\s.*?(?<![A-Z0-9-])END-EXEC(?![A-Z0-9-])", src.text, re.S):
+        blank = blank[: m.start()] + " " * (m.end() - m.start()) + blank[m.end() :]
+    enders = re.compile(r"(?<![A-Z0-9-])(?:" + "|".join(_MV_ENDERS) + r"|END-[A-Z-]+)(?![A-Z0-9-])|\.(?=\s|$)")
+    rows = []
+    for m in re.finditer(r"(?<![A-Z0-9-])(" + "|".join(_MV_VERBS) + r")(?![A-Z0-9-])", blank):
+        if m.start() < start:
+            continue
+        end = enders.search(src.text, m.end())
+        stop = end.start() if end else len(src.text)
+        body = src.raw_text[m.end() : stop].replace("\n", " ")
+        for a, t, corr in _mv_statement_pairs(m.group(1), " " + body):
+            rows.append({
+                "verb": m.group(1), "source": a[0] if a else None, "kind": a[1] if a else None, "target": t[0],
+                "corr": corr, "srm": bool(a and a[2]), "trm": t[2], "line": src.line_of(m.start()),
+            })  # fmt: skip
+    return rows
+
+
+def data_move_keys(rows: list[dict[str, Any]]) -> set[str]:
+    """`L<line> VERB[ CORR] SOURCE[(:)] -> TARGET[(:)]`, upper-cased (literal case aside)."""
+    return {
+        f"L{r['line']} {r['verb']}{' CORR' if r['corr'] else ''} {(r['source'] or '-').upper()}"
+        f"{'(:)' if r['srm'] else ''} -> {r['target'].upper()}{'(:)' if r['trm'] else ''}"
+        for r in rows
+    }
+
+
+def engine_data_move_row(m: Any) -> dict[str, Any]:
+    return {"verb": m.verb, "source": m.source, "kind": m.source_kind, "target": m.target,
+            "corr": m.corresponding, "srm": m.source_refmod, "trm": m.target_refmod, "line": m.line}  # fmt: skip
+
+
+def _mv_pic_width(pic: str, usage: str) -> tuple[Optional[int], str]:
+    """(one occurrence's bytes, class X | 9 | other) of a PIC + USAGE."""
+    body = ""
+    for ch, rep in re.findall(r"([A-Z9$,.+*/-]|\()(?:\((\d+)\))?", pic.upper().rstrip(".")):
+        body += ch * int(rep or 1)
+    u = usage.upper()
+    digits = body.count("9")
+    if re.search(r"COMP(?:UTATIONAL)?-3|PACKED", u):
+        return digits // 2 + 1, "P"
+    if re.search(r"(?<![A-Z0-9-])(?:COMP(?:UTATIONAL)?(?:-[45])?|BINARY)(?![A-Z0-9-])", u):
+        return (2 if digits <= 4 else 4 if digits <= 9 else 8) if 0 < digits <= 18 else None, "B"
+    if "N" in body or "G" in body:
+        return sum(2 for c in body if c in "NG") or None, "N"
+    width = sum(1 for c in body if c not in "SVP")
+    return width or None, ("X" if set(body) & set("XA") else "9")
+
+
+def _mv_entries(lines: list[str], repo: Path, stems: dict, depth: int = 0) -> list[tuple[int, str, str]]:
+    """(level, name, description) per data entry, COPY members spliced in place."""
+    out: list[tuple[int, str, str]] = []
+    for line in lines:
+        cp = re.match(r"\s*COPY\s+([A-Z0-9@#$-]+)", line)
+        if cp and depth < 6:
+            for cb in stems.get(cp.group(1), [])[:1]:
+                out.extend(_mv_entries([a for _, a in Source(cb).lines], repo, stems, depth + 1))
+            continue
+        m = re.match(r"\s*(\d+)\s+([A-Z0-9-]+)(.*)", line)
+        if m:
+            out.append((int(m.group(1)), m.group(2), m.group(3)))
+        elif out:
+            out[-1] = (out[-1][0], out[-1][1], out[-1][2] + " " + line)
+    return out
+
+
+def _mv_width(entries: list[tuple[int, str, str]], i: int) -> tuple[Optional[int], str]:
+    """(one occurrence's bytes, class | 'group') of entry i."""
+    level, _name, desc = entries[i]
+    pic = re.search(r"\bPIC(?:TURE)?\s+(?:IS\s+)?(\S+)", desc)
+    if pic:
+        return _mv_pic_width(pic.group(1), desc)
+    total = 0
+    j = i + 1
+    while j < len(entries) and (entries[j][0] > level or entries[j][0] in (66, 88)) and entries[j][0] != 77:
+        lv, _, d = entries[j]
+        if lv in (66, 88):
+            j += 1
+            continue
+        k = j + 1
+        while k < len(entries) and (entries[k][0] > lv or entries[k][0] in (66, 88)):
+            k += 1
+        if not re.search(r"\bREDEFINES\b", d):
+            w, _ = _mv_width(entries, j)
+            if w is None:
+                return None, "group"
+            occ = re.search(r"\bOCCURS\s+(?:\d+\s+TO\s+)?(\d+)", d)
+            total += w * (int(occ.group(1)) if occ else 1)
+        j = k
+    return (total or None), "group"
+
+
+def data_move_truncations(path: Path, repo: Path, rows: list[dict[str, Any]]) -> list[str]:
+    """`L<line> SOURCE -> TARGET` per MOVE into an alphanumeric or group item
+    shorter than its item or quoted-literal source (no reference modification)."""
+    stems: dict = {}
+    for p in repo.rglob("*"):
+        if p.is_file() and p.suffix.lower() in COPYBOOK_EXTS and ".git" not in p.parts:
+            stems.setdefault(p.stem.upper(), []).append(p)
+    src = Source(path)
+    proc = src.proc_start if src.proc_start is not None else len(src.lines)
+    entries = _mv_entries([a for _, a in src.lines[:proc]], repo, stems)
+
+    def width(name: str) -> tuple[Optional[int], str]:
+        parts = name.split(" OF ")
+        hits = []
+        for i, (lv, nm, _) in enumerate(entries):
+            if nm != parts[0] or lv in (66, 88):
+                continue
+            want, j, cur = list(parts[1:]), i - 1, lv
+            while j >= 0 and want:
+                if entries[j][0] < cur and entries[j][0] not in (66, 88):
+                    cur = entries[j][0]
+                    if entries[j][1] == want[0]:
+                        want.pop(0)
+                    if cur == 1:
+                        break
+                j -= 1
+            if not want:
+                hits.append(_mv_width(entries, i))
+        return hits[0] if len(set(hits)) == 1 else (None, "?")
+
+    out = []
+    for r in rows:
+        if r["verb"] != "MOVE" or r["corr"] or r["srm"] or r["trm"]:
+            continue
+        tw, tc = width(r["target"])
+        if not tw or tc not in ("X", "group"):
+            continue
+        if r["kind"] == "item":
+            sw, _ = width(r["source"])
+        elif r["kind"] == "literal" and (r["source"] or "")[:1] in "'\"":
+            sw = len(r["source"]) - 2
+        else:
+            continue
+        if sw and sw > tw:
+            out.append(f"L{r['line']} {r['source'].upper()} -> {r['target'].upper()}")
+    return sorted(set(out))
+
+
+def draft_data_moves(repo: Path) -> dict[str, dict[str, Any]]:
+    """Drafted data moves (and the MOVE truncations) per COBOL program (#3452);
+    `data_moves_validated` signs it off. Moves of a procedure copybook are the
+    copybook's own rows; its truncations are judged in the includer's storage, so
+    only programs carry truncations."""
+    out: dict[str, dict[str, Any]] = {}
+    for p in sorted(repo.rglob("*")):
+        if not p.is_file() or ".git" in p.parts or p.suffix.lower() not in CICS_EXTS:
+            continue
+        rows = data_move_rows(p)
+        if not rows:
+            continue
+        program = p.suffix.lower() in PROGRAM_EXTS
+        out[p.relative_to(repo).as_posix()] = {
+            "moves": sorted(data_move_keys(rows)),
+            "truncations": data_move_truncations(p, repo, rows) if program else [],
+            "data_moves_validated": False,
+            "verification": {"status": "draft", "notes": []},
+        }
+    return out
+
+
+# ==============================================================================
 # Draft
 # ==============================================================================
 def _operand(src: Source, offset: int) -> tuple[str, str]:
@@ -3940,6 +4483,17 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
         # is this tool's own reader; engine is dli_call_data + GalaxyIR.ims_segment_access.
         "DL/I calls",
         "IMS segment access",
+        # #3477: IMS PSB / DBD macros and JCL IMS regions as rows, and each DL/I
+        # program's segment access checked against its PSB's SENSEGs and PROCOPT.
+        # Truth is this tool's own reader and join; engine is ims_gen_data +
+        # GalaxyIR.ims_access_check.
+        "IMS definitions",
+        "IMS access check",
+        # #3452: data moves (MOVE / COMPUTE / arithmetic / STRING / UNSTRING /
+        # INITIALIZE) as written, and the MOVEs that truncate. Truth is this tool's
+        # own reader and widths; engine is data_move_data + GalaxyIR.data_flows.
+        "data moves",
+        "MOVE truncation",
     ]
     agg: dict[str, dict[str, list[set]]] = {f: {"truth": [], "forge": [], "engine": []} for f in fields}
 
@@ -4292,6 +4846,50 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
             engine_ims.get(rel, set()) if ir is not None and rel in ir.files else None,
         )
 
+    engine_trunc: dict[str, set[str]] = {}
+    if ir is not None:
+        for fl in ir.data_flows():
+            if fl["truncates"] and not fl["copybook"]:
+                engine_trunc.setdefault(fl["file"], set()).add(
+                    f"L{fl['line']} {fl['source'].upper()} -> {fl['target']}"
+                )
+    for rel, k in key.get("data_moves", {}).items():
+        ef = ir.files.get(rel) if ir else None
+        add(
+            "data moves",
+            rel,
+            set(k.get("moves", [])),
+            None,
+            data_move_keys([engine_data_move_row(m) for m in ef.data_moves]) if ef else None,
+        )
+        if rel.lower().endswith(PROGRAM_EXTS):
+            add(
+                "MOVE truncation",
+                rel,
+                set(k.get("truncations", [])),
+                None,
+                engine_trunc.get(rel, set()) if ef else None,
+            )
+    engine_checks = engine_ims_check_lines(ir.ims_access_check()) if ir is not None else {}
+    for rel, k in key.get("ims_gen", {}).items():
+        ef = ir.files.get(rel) if ir else None
+        if "rows" in k:
+            add(
+                "IMS definitions",
+                rel,
+                ims_gen_keys(k["rows"]),
+                None,
+                ims_gen_keys([engine_ims_gen_row(g) for g in ef.ims_gen]) if ef else None,
+            )
+        else:
+            add(
+                "IMS access check",
+                rel,
+                set(k.get("access_check", [])),
+                None,
+                set(engine_checks.get(rel, [])) if ef else None,
+            )
+
     result: dict[str, Any] = {
         "corpus": key["corpus"],
         "ref": key["ref"],
@@ -4408,6 +5006,12 @@ def main() -> int:
     dlp = sub.add_parser("add-dli")
     dlp.add_argument("repo", type=Path)
     dlp.add_argument("--key", type=Path, required=True)
+    dmp = sub.add_parser("add-data-moves")
+    dmp.add_argument("repo", type=Path)
+    dmp.add_argument("--key", type=Path, required=True)
+    igp = sub.add_parser("add-ims-gen")
+    igp.add_argument("repo", type=Path)
+    igp.add_argument("--key", type=Path, required=True)
     cup = sub.add_parser("add-call-using")
     cup.add_argument("repo", type=Path)
     cup.add_argument("--key", type=Path, required=True)
@@ -4560,6 +5164,27 @@ def main() -> int:
         key["dli_calls"] = dl
         args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
         print(f"drafted {len(dl)} DL/I files -> {args.key}")
+        return 0
+    if args.cmd == "add-data-moves":
+        # #3452: the add-pli discipline -- refresh drafts, keep signed-off files.
+        # An unvalidated file the new draft no longer yields is dropped.
+        dm = {rel: e for rel, e in key.get("data_moves", {}).items() if e.get("data_moves_validated")}
+        for rel, entry in draft_data_moves(repo).items():
+            if not dm.get(rel, {}).get("data_moves_validated"):
+                dm[rel] = entry
+        key["data_moves"] = dm
+        args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+        print(f"drafted {len(dm)} data-move files -> {args.key}")
+        return 0
+    if args.cmd == "add-ims-gen":
+        # #3477: the add-pli discipline -- refresh drafts, keep signed-off files.
+        ig = key.get("ims_gen", {})
+        for rel, entry in draft_ims_gen(repo, key.get("dli_calls", {})).items():
+            if not ig.get(rel, {}).get("ims_gen_validated"):
+                ig[rel] = entry
+        key["ims_gen"] = ig
+        args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+        print(f"drafted {len(ig)} IMS definition / access-check files -> {args.key}")
         return 0
     if args.cmd == "add-call-using":
         # #3454: the add-pli discipline -- refresh drafts, keep signed-off files.

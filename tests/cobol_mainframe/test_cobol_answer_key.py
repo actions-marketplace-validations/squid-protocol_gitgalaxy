@@ -1088,3 +1088,93 @@ def test_dli_reader_resolves_on_its_own(tmp_path):
         "L11 EXEC FN=ISRT PCB=1 IO=IOB SEG=PAUTSUM0,PAUTDTL1 WHERE=- PSB=-",
     }
     assert entry["segment_access"] == ["insert PAUTDTL1", "read PAUTSUM0"]
+
+
+def test_ims_gen_reader_and_access_check_on_its_own(tmp_path):
+    """#3477: the key's own PSB / DBD / region reading and access check -- a
+    column-72 continuation, an unlabeled PCB, a region by PROGRAM-ID, a PROCOPT
+    that refuses an update."""
+    (tmp_path / "ims").mkdir()
+    (tmp_path / "ims" / "PSBX.psb").write_text(
+        "XPCB     PCB   TYPE=DB,DBDNAME=DBDX,PROCOPT=G\n"
+        "         SENSEG  NAME=SEGA,PARENT=0\n"
+        "         PCB   TYPE=GSAM,DBDNAME=GSX,PROCOPT=LS\n"
+        "         PSBGEN  LANG=COBOL,PSBNAME=PSBX\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "ims" / "DBDX.dbd").write_text(
+        "       DBD     NAME=DBDX,".ljust(71) + "C\n" + " " * 15 + "ACCESS=(HIDAM,VSAM)\n"
+        "       SEGM    NAME=SEGA,PARENT=0,BYTES=(50)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "RUN.jcl").write_text("//RUN JOB\n//S1 EXEC PGM=DFSRRC00,PARM='DLI,PGMX,PSBX'\n", encoding="utf-8")
+    (tmp_path / "PGMX.cbl").write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. PGMX.\n"
+        "       PROCEDURE DIVISION.\n"
+        "           EXEC DLI REPL USING PCB(1) SEGMENT(SEGA) FROM(IOA)\n"
+        "           END-EXEC.\n",
+        encoding="utf-8",
+    )
+    ig = ak.draft_ims_gen(tmp_path, ak.draft_dli(tmp_path))
+    assert ak.ims_gen_keys(ig["ims/PSBX.psb"]["rows"]) == {
+        "L1 PCB name=XPCB dbd=DBDX procopt=G type=DB",
+        "L2 SENSEG name=SEGA parent=0 owner=XPCB",
+        "L3 PCB name=PCB@3 dbd=GSX procopt=LS type=GSAM",
+        "L4 PSBGEN name=PSBX",
+    }
+    assert ak.ims_gen_keys(ig["ims/DBDX.dbd"]["rows"]) == {
+        "L1 DBD name=DBDX access=HIDAM",
+        "L3 SEGM name=SEGA parent=0 owner=DBDX bytes=50",
+    }
+    assert ak.ims_gen_keys(ig["RUN.jcl"]["rows"]) == {"L2 REGION name=PGMX access=DLI psb=PSBX program=PGMX"}
+    assert ig["PGMX.cbl"]["access_check"] == ["SEGA denied PSBX/XPCB:update"]
+
+
+def test_data_move_reader_and_truncation_on_its_own(tmp_path):
+    """#3452: the key's own data-move reading -- a keyword inside a literal, an
+    EXEC block, STRING delimiters, INVALID KEY -- and its own widths: a group with
+    a COPY spliced in, a REDEFINES skipped, a VALUES continuation line."""
+    (tmp_path / "DATES.cpy").write_text(
+        "           10 WS-DATE.\n"
+        "              20 WS-MM                 PIC X(2).\n"
+        "                 88 WS-VALID-MONTH     VALUES\n"
+        "                                       1 THROUGH 12.\n"
+        "              20 WS-MM-N REDEFINES WS-MM PIC 9(2).\n"
+        "              20 WS-DD                 PIC X(2).\n",
+        encoding="utf-8",
+    )
+    src = (
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. MV.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01 WS-AREA.\n"
+        "           COPY DATES.\n"
+        "       01 WS-LONG               PIC X(6).\n"
+        "       01 WS-SHORT              PIC X(3).\n"
+        "       PROCEDURE DIVISION.\n"
+        "           MOVE 'FAILED TO READ' TO WS-LONG.\n"
+        "           EXEC SQL SELECT A INTO :WS-LONG FROM T END-EXEC.\n"
+        "           MOVE WS-LONG TO WS-DATE.\n"
+        "           MOVE WS-LONG TO WS-SHORT.\n"
+        "           STRING WS-MM DELIMITED BY SIZE '/' INTO WS-LONG.\n"
+        "           READ F INVALID KEY MOVE 4 TO WS-SHORT END-READ.\n"
+    )
+    assert all(len(line) <= 72 for line in src.splitlines())
+    (tmp_path / "MV.cbl").write_text(src, encoding="utf-8")
+    entry = ak.draft_data_moves(tmp_path)["MV.cbl"]
+    assert entry["moves"] == [
+        "L10 MOVE 'FAILED TO READ' -> WS-LONG",
+        "L12 MOVE WS-LONG -> WS-DATE",
+        "L13 MOVE WS-LONG -> WS-SHORT",
+        "L14 STRING '/' -> WS-LONG",
+        "L14 STRING WS-MM -> WS-LONG",
+        "L15 MOVE 4 -> WS-SHORT",
+    ]
+    # WS-DATE is 4 bytes (MM + DD; the REDEFINES and the VALUES line add nothing).
+    assert entry["truncations"] == [
+        "L10 'FAILED TO READ' -> WS-LONG",
+        "L12 WS-LONG -> WS-DATE",
+        "L13 WS-LONG -> WS-SHORT",
+    ]
