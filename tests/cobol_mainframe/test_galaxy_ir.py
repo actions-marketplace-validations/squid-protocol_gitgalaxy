@@ -2153,3 +2153,73 @@ def test_genapp_tor_aor_dor_topology(tmp_path):
     systems = {k: {d["system"] for d in v} for k, v in ir.remote_programs().items()}
     assert len(systems) == 23 and systems["LGIPOL01"] == {"AOR1"} and systems["LGIPDB01"] == {"DOR1"}
     assert len(ir.remote_calls()) == 35
+
+
+# ---- #3496: the web / API surface ----------------------------------------------
+WS_JCL = """\
+//GENASOAP  JOB  ,S8SMITH,CLASS=A
+//LS2WS     EXEC DFHLS2WS
+//INPUT.SYSUT1 DD *
+ PGMNAME=APIPGM
+ REQMEM=APIREQ
+ RESPMEM=APIREQ
+ URI=SHOP/ORDER
+ PGMINT=COMMAREA
+/*
+"""
+WS_CSD = """\
+ DEFINE URIMAP(SHOPURI) GROUP(WEB) USAGE(SERVER) PATH(/shop/*) PIPELINE(SHOPPIPE)
+ DEFINE PIPELINE(SHOPPIPE) GROUP(WEB) CONFIGFILE(/u/basicsoap11provider.xml)
+"""
+WS_API = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. APIPGM.
+       DATA DIVISION.
+       LINKAGE SECTION.
+       01 DFHCOMMAREA.
+          COPY APIREQ.
+       PROCEDURE DIVISION.
+           EXEC CICS RETURN END-EXEC.
+"""
+
+
+def test_api_surface_joins_program_copybooks_and_csd(tmp_path):
+    repo = tmp_path / "shop"
+    for rel, text in {"cntl/WSORDER.jcl": WS_JCL, "csd/WEB.csd": WS_CSD, "cbl/APIPGM.cbl": WS_API,
+                      "cpy/APIREQ.cpy": "          05 ORDER-ID PIC X(10).\n"}.items():  # fmt: skip
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    ir = load_galaxy_ir(scan_to_db(repo, tmp_path / "scan"))
+    api = ir.api_surface()
+    (svc,) = api["services"]
+    assert (svc["uri"], svc["program_file"], svc["request_file"], svc["direction"]) == (
+        "SHOP/ORDER",
+        "cbl/APIPGM.cbl",
+        "cpy/APIREQ.cpy",
+        "provider",
+    )
+    assert {(c["type"], c["name"]) for c in api["csd"]} == {("URIMAP", "SHOPURI"), ("PIPELINE", "SHOPPIPE")}
+    # APIPGM is a CICS program only the web service reaches: completeness counts it reached.
+    tx = ir.completeness()["channels"]["transactions"]
+    assert tx["gaps"]["CICS program no transaction reaches"] == 0
+
+
+# ---- #3497: JCICS -- Java LINKs join the COBOL call graph ----------------------
+def test_a_java_jcics_link_resolves_to_the_cobol_program(tmp_path):
+    repo = tmp_path / "jc"
+    files = {
+        "java/Api.java": (
+            "import com.ibm.cics.server.Program;\n"
+            "class Api { void f(byte[] d) throws Exception {\n"
+            '  Program p = new Program(); p.setName("GETSCODE"); p.link(d); } }\n'
+        ),
+        "cbl/GETSCODE.cbl": STUB.format("GETSCODE").replace("GOBACK", "EXEC CICS RETURN END-EXEC"),
+    }
+    for rel, text in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    ir = load_galaxy_ir(scan_to_db(repo, tmp_path / "scan"))
+    (call,) = ir.files["java/Api.java"].calls
+    assert (call.verb, call.target, call.resolves_to) == ("LINK", "GETSCODE", "cbl/GETSCODE.cbl")

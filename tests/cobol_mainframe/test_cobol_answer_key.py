@@ -1268,3 +1268,35 @@ def test_exhaustive_evaluate_ending_every_branch_in_a_transfer_is_terminal():
     )
     assert not ak._sentence_is_terminal("EVALUATE A WHEN 70 GO TO E1 WHEN 80 GO TO E2 END-EVALUATE")
     assert not ak._sentence_is_terminal("EVALUATE A WHEN 70 GO TO E1 WHEN OTHER MOVE 1 TO B END-EVALUATE")
+
+
+def test_web_service_reader_on_its_own(tmp_path):
+    """#3496: the key's own reading of the web-services assistant JCL."""
+    (tmp_path / "WS.jcl").write_text(
+        "//J JOB\n//LS2WS EXEC DFHLS2WS\n//INPUT.SYSUT1 DD *\n PGMNAME=LGICUS01\n URI=GENAPP/LGICUS01\n"
+        " REQMEM=SOAIC01\n RESPMEM=SOAIC01\n PGMINT=COMMAREA\n/*\n",
+        encoding="utf-8",
+    )
+    assert ak.draft_web_services(tmp_path)["WS.jcl"]["services"] == [
+        "L2 DFHLS2WS provider program=LGICUS01 uri=GENAPP/LGICUS01 request=SOAIC01 response=SOAIC01 interface=COMMAREA"
+    ]
+
+
+def test_jcics_reader_on_its_own(tmp_path):
+    """#3497: the key's own line reading of JCICS -- constants, a wrapped chained
+    call's line, a commented-out call."""
+    src = (
+        "import com.ibm.cics.server.KSDS;\n"
+        'class A { static final String F = "CUST";\n'
+        "  void f(Channel ch) { KSDS k = new KSDS(); k.setName(F);\n"
+        "    k.read(key, h); // k.delete();\n"
+        '    Program p = new Program(); p.setName("GETSCODE"); p.link(d);\n'
+        "    Container c = ch\n"
+        '        .getContainer("CIPB"); } }\n'
+    )
+    (tmp_path / "A.java").write_text(src, encoding="utf-8")
+    assert ak.draft_jcics(tmp_path)["A.java"]["calls"] == [
+        "L4 FILE CUST read",
+        "L5 LINK GETSCODE",
+        "L7 CONTAINER CIPB read",
+    ]
