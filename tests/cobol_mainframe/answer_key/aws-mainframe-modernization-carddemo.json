@@ -93213,6 +93213,208 @@
         }
       },
       "rulings": {}
+    },
+    {
+      "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+      "at": "2026-09-24",
+      "batch": 1,
+      "files": [
+        "app/app-authorization-ims-db2-mq/cbl/COPAUA0C.cbl",
+        "app/app-authorization-ims-db2-mq/cbl/COPAUS2C.cbl",
+        "app/app-authorization-ims-db2-mq/cbl/DBUNLDGS.CBL",
+        "app/app-authorization-ims-db2-mq/cbl/PAUDBLOD.CBL",
+        "app/cbl/CBACT01C.cbl",
+        "app/cbl/CBSTM03A.CBL"
+      ],
+      "wide": false,
+      "suite": "calls",
+      "tasks": {
+        "using": {
+          "agree": 30,
+          "asked": 30
+        },
+        "dli": {
+          "agree": 15,
+          "asked": 15
+        },
+        "ims": {
+          "agree": 9,
+          "asked": 9
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+      "at": "2026-09-24",
+      "batch": 2,
+      "files": [
+        "app/app-authorization-ims-db2-mq/cbl/CBPAUP0C.cbl",
+        "app/app-authorization-ims-db2-mq/cbl/COPAUS0C.cbl",
+        "app/app-authorization-ims-db2-mq/cbl/COPAUS1C.cbl",
+        "app/app-authorization-ims-db2-mq/cbl/PAUDBUNL.CBL",
+        "app/app-vsam-mq/cbl/COACCT01.cbl",
+        "app/app-vsam-mq/cbl/CODATE01.cbl"
+      ],
+      "wide": false,
+      "suite": "calls",
+      "tasks": {
+        "using": {
+          "agree": 23,
+          "asked": 23
+        },
+        "dli": {
+          "agree": 20,
+          "asked": 20
+        },
+        "ims": {
+          "agree": 11,
+          "asked": 11
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+      "at": "2026-09-24",
+      "batch": 3,
+      "files": [
+        "app/app-authorization-ims-db2-mq/cpy-bms/COPAU00.cpy",
+        "app/app-authorization-ims-db2-mq/cpy-bms/COPAU01.cpy",
+        "app/app-authorization-ims-db2-mq/cpy/CCPAUERY.cpy",
+        "app/app-authorization-ims-db2-mq/cpy/CCPAURLY.cpy",
+        "app/app-authorization-ims-db2-mq/cpy/CCPAURQY.cpy",
+        "app/app-authorization-ims-db2-mq/cpy/CIPAUDTY.cpy",
+        "app/app-authorization-ims-db2-mq/cpy/CIPAUSMY.cpy",
+        "app/app-authorization-ims-db2-mq/cpy/IMSFUNCS.cpy",
+        "app/app-authorization-ims-db2-mq/cpy/PADFLPCB.CPY",
+        "app/app-authorization-ims-db2-mq/cpy/PASFLPCB.CPY",
+        "app/app-authorization-ims-db2-mq/cpy/PAUTBPCB.CPY",
+        "app/app-transaction-type-db2/cbl/COBTUPDT.cbl",
+        "app/app-transaction-type-db2/cbl/COTRTLIC.cbl",
+        "app/app-transaction-type-db2/cbl/COTRTUPC.cbl",
+        "app/app-transaction-type-db2/cpy-bms/COTRTLI.cpy",
+        "app/app-transaction-type-db2/cpy-bms/COTRTUP.cpy",
+        "app/app-transaction-type-db2/cpy/CSDB2RPY.cpy",
+        "app/app-transaction-type-db2/cpy/CSDB2RWY.cpy",
+        "app/cbl/CBACT02C.cbl",
+        "app/cbl/CBACT03C.cbl",
+        "app/cbl/CBACT04C.cbl",
+        "app/cbl/CBCUS01C.cbl",
+        "app/cbl/CBEXPORT.cbl",
+        "app/cbl/CBIMPORT.cbl",
+        "app/cbl/CBSTM03B.CBL",
+        "app/cbl/CBTRN01C.cbl",
+        "app/cbl/CBTRN02C.cbl",
+        "app/cbl/CBTRN03C.cbl",
+        "app/cbl/COACTUPC.cbl",
+        "app/cbl/COACTVWC.cbl",
+        "app/cbl/COADM01C.cbl",
+        "app/cbl/COBIL00C.cbl",
+        "app/cbl/COBSWAIT.cbl",
+        "app/cbl/COCRDLIC.cbl",
+        "app/cbl/COCRDSLC.cbl",
+        "app/cbl/COCRDUPC.cbl",
+        "app/cbl/COMEN01C.cbl",
+        "app/cbl/CORPT00C.cbl",
+        "app/cbl/COSGN00C.cbl",
+        "app/cbl/COTRN02C.cbl",
+        "app/cbl/CSUTLDTC.cbl",
+        "app/cpy/CSUTLDPY.cpy"
+      ],
+      "wide": false,
+      "suite": "calls",
+      "tasks": {
+        "using": {
+          "agree": 18,
+          "asked": 18
+        },
+        "dli": {
+          "agree": 0,
+          "asked": 0
+        },
+        "ims": {
+          "agree": 0,
+          "asked": 0
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+      "at": "2026-09-24",
+      "batch": 4,
+      "files": [
+        "app/cbl/COTRN00C.cbl",
+        "app/cbl/COTRN01C.cbl",
+        "app/cbl/COUSR00C.cbl",
+        "app/cbl/COUSR01C.cbl",
+        "app/cbl/COUSR02C.cbl",
+        "app/cbl/COUSR03C.cbl",
+        "app/cpy-bms/COACTUP.CPY",
+        "app/cpy-bms/COACTVW.CPY",
+        "app/cpy-bms/COADM01.CPY",
+        "app/cpy-bms/COBIL00.CPY",
+        "app/cpy-bms/COCRDLI.CPY",
+        "app/cpy-bms/COCRDSL.CPY",
+        "app/cpy-bms/COCRDUP.CPY",
+        "app/cpy-bms/COMEN01.CPY",
+        "app/cpy-bms/CORPT00.CPY",
+        "app/cpy-bms/COSGN00.CPY",
+        "app/cpy-bms/COTRN00.CPY",
+        "app/cpy-bms/COTRN01.CPY",
+        "app/cpy-bms/COTRN02.CPY",
+        "app/cpy-bms/COUSR00.CPY",
+        "app/cpy-bms/COUSR01.CPY",
+        "app/cpy-bms/COUSR02.CPY",
+        "app/cpy-bms/COUSR03.CPY",
+        "app/cpy/COADM02Y.cpy",
+        "app/cpy/COCOM01Y.cpy",
+        "app/cpy/CODATECN.cpy",
+        "app/cpy/COMEN02Y.cpy",
+        "app/cpy/COSTM01.CPY",
+        "app/cpy/COTTL01Y.cpy",
+        "app/cpy/CSDAT01Y.cpy",
+        "app/cpy/CSLKPCDY.cpy",
+        "app/cpy/CSMSG01Y.cpy",
+        "app/cpy/CSMSG02Y.cpy",
+        "app/cpy/CSSETATY.cpy",
+        "app/cpy/CSSTRPFY.cpy",
+        "app/cpy/CSUSR01Y.cpy",
+        "app/cpy/CSUTLDWY.cpy",
+        "app/cpy/CUSTREC.cpy",
+        "app/cpy/CVACT01Y.cpy",
+        "app/cpy/CVACT02Y.cpy",
+        "app/cpy/CVACT03Y.cpy",
+        "app/cpy/CVCRD01Y.cpy",
+        "app/cpy/CVCUS01Y.cpy",
+        "app/cpy/CVEXPORT.cpy",
+        "app/cpy/CVTRA01Y.cpy",
+        "app/cpy/CVTRA02Y.cpy",
+        "app/cpy/CVTRA03Y.cpy",
+        "app/cpy/CVTRA04Y.cpy",
+        "app/cpy/CVTRA05Y.cpy",
+        "app/cpy/CVTRA06Y.cpy",
+        "app/cpy/CVTRA07Y.cpy",
+        "app/cpy/UNUSED1Y.cpy"
+      ],
+      "wide": false,
+      "suite": "calls",
+      "tasks": {
+        "using": {
+          "agree": 0,
+          "asked": 0
+        },
+        "dli": {
+          "agree": 0,
+          "asked": 0
+        },
+        "ims": {
+          "agree": 0,
+          "asked": 0
+        }
+      },
+      "rulings": {}
     }
   ],
   "file_control": {
@@ -101180,6 +101382,1362 @@
         }
       ],
       "jobflow_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    }
+  },
+  "call_using": {
+    "app/app-authorization-ims-db2-mq/cbl/CBPAUP0C.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "IO-PCB-MASK,PGM-PCB-MASK",
+          "line": 132
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-authorization-ims-db2-mq/cbl/COPAUA0C.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "MQOPEN",
+          "args": "W01-HCONN-REQUEST,MQM-OD-REQUEST,WS-OPTIONS,W01-HOBJ-REQUEST,WS-COMPCODE,WS-REASON",
+          "line": 262
+        },
+        {
+          "kind": "CALL",
+          "name": "MQGET",
+          "args": "W01-HCONN-REQUEST,W01-HOBJ-REQUEST,MQM-MD-REQUEST,MQM-GET-MESSAGE-OPTIONS,W01-BUFFLEN,W01-GET-BUFFER,W01-DATALEN,WS-COMPCODE,WS-REASON",
+          "line": 400
+        },
+        {
+          "kind": "CALL",
+          "name": "MQPUT1",
+          "args": "W02-HCONN-REPLY,MQM-OD-REPLY,MQM-MD-REPLY,MQM-PUT-MESSAGE-OPTIONS,W02-BUFFLEN,W02-PUT-BUFFER,WS-COMPCODE,WS-REASON",
+          "line": 758
+        },
+        {
+          "kind": "CALL",
+          "name": "MQCLOSE",
+          "args": "W01-HCONN-REQUEST,W01-HOBJ-REQUEST,MQCO-NONE,WS-COMPCODE,WS-REASON",
+          "line": 956
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-authorization-ims-db2-mq/cbl/DBUNLDGS.CBL": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CBLTDLI",
+          "args": "FUNC-GN,PAUTBPCB,PENDING-AUTH-SUMMARY,ROOT-UNQUAL-SSA",
+          "line": 222
+        },
+        {
+          "kind": "CALL",
+          "name": "CBLTDLI",
+          "args": "FUNC-GNP,PAUTBPCB,PENDING-AUTH-DETAILS,CHILD-UNQUAL-SSA",
+          "line": 267
+        },
+        {
+          "kind": "CALL",
+          "name": "CBLTDLI",
+          "args": "FUNC-ISRT,PASFLPCB,PENDING-AUTH-SUMMARY",
+          "line": 302
+        },
+        {
+          "kind": "CALL",
+          "name": "CBLTDLI",
+          "args": "FUNC-ISRT,PADFLPCB,PENDING-AUTH-DETAILS",
+          "line": 321
+        },
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "PAUTBPCB,PASFLPCB,PADFLPCB",
+          "line": 159
+        },
+        {
+          "kind": "ENTRY",
+          "name": "DLITCBL",
+          "args": "PAUTBPCB,PASFLPCB,PADFLPCB",
+          "line": 165
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-authorization-ims-db2-mq/cbl/PAUDBLOD.CBL": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CBLTDLI",
+          "args": "FUNC-ISRT,PAUTBPCB,PENDING-AUTH-SUMMARY,ROOT-UNQUAL-SSA",
+          "line": 244
+        },
+        {
+          "kind": "CALL",
+          "name": "CBLTDLI",
+          "args": "FUNC-GU,PAUTBPCB,PENDING-AUTH-SUMMARY,ROOT-QUAL-SSA",
+          "line": 296
+        },
+        {
+          "kind": "CALL",
+          "name": "CBLTDLI",
+          "args": "FUNC-ISRT,PAUTBPCB,PENDING-AUTH-DETAILS,CHILD-UNQUAL-SSA",
+          "line": 321
+        },
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "IO-PCB-MASK,PAUTBPCB",
+          "line": 164
+        },
+        {
+          "kind": "ENTRY",
+          "name": "DLITCBL",
+          "args": "PAUTBPCB",
+          "line": 171
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-authorization-ims-db2-mq/cbl/PAUDBUNL.CBL": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CBLTDLI",
+          "args": "FUNC-GN,PAUTBPCB,PENDING-AUTH-SUMMARY,ROOT-UNQUAL-SSA",
+          "line": 213
+        },
+        {
+          "kind": "CALL",
+          "name": "CBLTDLI",
+          "args": "FUNC-GNP,PAUTBPCB,PENDING-AUTH-DETAILS,CHILD-UNQUAL-SSA",
+          "line": 257
+        },
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "PAUTBPCB",
+          "line": 153
+        },
+        {
+          "kind": "ENTRY",
+          "name": "DLITCBL",
+          "args": "PAUTBPCB",
+          "line": 158
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-transaction-type-db2/cpy/CSDB2RPY.cpy": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "LIT-DSNTIAC",
+          "args": "DFHEIBLK,DFHCOMMAREA,SQLCA,WS-DSNTIAC-FORMATTED,WS-DSNTIAC-LRECL",
+          "line": 57
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-vsam-mq/cbl/COACCT01.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "MQOPEN",
+          "args": "QMGR-HANDLE-CONN,MQ-OBJECT-DESCRIPTOR,MQ-OPTIONS,MQ-HOBJ,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 233
+        },
+        {
+          "kind": "CALL",
+          "name": "MQOPEN",
+          "args": "QMGR-HANDLE-CONN,MQ-OBJECT-DESCRIPTOR,MQ-OPTIONS,MQ-HOBJ,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 267
+        },
+        {
+          "kind": "CALL",
+          "name": "MQOPEN",
+          "args": "QMGR-HANDLE-CONN,MQ-OBJECT-DESCRIPTOR,MQ-OPTIONS,MQ-HOBJ,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 302
+        },
+        {
+          "kind": "CALL",
+          "name": "MQGET",
+          "args": "MQ-HCONN,MQ-HOBJ,MQ-MESSAGE-DESCRIPTOR,MQ-GET-MESSAGE-OPTIONS,MQ-BUFFER-LENGTH,MQ-BUFFER,MQ-DATA-LENGTH,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 352
+        },
+        {
+          "kind": "CALL",
+          "name": "MQPUT",
+          "args": "MQ-HCONN,OUTPUT-QUEUE-HANDLE,MQ-MESSAGE-DESCRIPTOR,MQ-PUT-MESSAGE-OPTIONS,MQ-BUFFER-LENGTH,MQ-BUFFER,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 479
+        },
+        {
+          "kind": "CALL",
+          "name": "MQPUT",
+          "args": "MQ-HCONN,ERROR-QUEUE-HANDLE,MQ-MESSAGE-DESCRIPTOR,MQ-PUT-MESSAGE-OPTIONS,MQ-BUFFER-LENGTH,MQ-BUFFER,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 516
+        },
+        {
+          "kind": "CALL",
+          "name": "MQCLOSE",
+          "args": "MQ-HCONN,MQ-HOBJ,MQ-OPTIONS,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 557
+        },
+        {
+          "kind": "CALL",
+          "name": "MQCLOSE",
+          "args": "MQ-HCONN,MQ-HOBJ,MQ-OPTIONS,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 579
+        },
+        {
+          "kind": "CALL",
+          "name": "MQCLOSE",
+          "args": "MQ-HCONN,MQ-HOBJ,MQ-OPTIONS,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 602
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-vsam-mq/cbl/CODATE01.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "MQOPEN",
+          "args": "QMGR-HANDLE-CONN,MQ-OBJECT-DESCRIPTOR,MQ-OPTIONS,MQ-HOBJ,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 182
+        },
+        {
+          "kind": "CALL",
+          "name": "MQOPEN",
+          "args": "QMGR-HANDLE-CONN,MQ-OBJECT-DESCRIPTOR,MQ-OPTIONS,MQ-HOBJ,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 216
+        },
+        {
+          "kind": "CALL",
+          "name": "MQOPEN",
+          "args": "QMGR-HANDLE-CONN,MQ-OBJECT-DESCRIPTOR,MQ-OPTIONS,MQ-HOBJ,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 251
+        },
+        {
+          "kind": "CALL",
+          "name": "MQGET",
+          "args": "MQ-HCONN,MQ-HOBJ,MQ-MESSAGE-DESCRIPTOR,MQ-GET-MESSAGE-OPTIONS,MQ-BUFFER-LENGTH,MQ-BUFFER,MQ-DATA-LENGTH,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 301
+        },
+        {
+          "kind": "CALL",
+          "name": "MQPUT",
+          "args": "MQ-HCONN,OUTPUT-QUEUE-HANDLE,MQ-MESSAGE-DESCRIPTOR,MQ-PUT-MESSAGE-OPTIONS,MQ-BUFFER-LENGTH,MQ-BUFFER,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 383
+        },
+        {
+          "kind": "CALL",
+          "name": "MQPUT",
+          "args": "MQ-HCONN,ERROR-QUEUE-HANDLE,MQ-MESSAGE-DESCRIPTOR,MQ-PUT-MESSAGE-OPTIONS,MQ-BUFFER-LENGTH,MQ-BUFFER,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 420
+        },
+        {
+          "kind": "CALL",
+          "name": "MQCLOSE",
+          "args": "MQ-HCONN,MQ-HOBJ,MQ-OPTIONS,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 461
+        },
+        {
+          "kind": "CALL",
+          "name": "MQCLOSE",
+          "args": "MQ-HCONN,MQ-HOBJ,MQ-OPTIONS,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 483
+        },
+        {
+          "kind": "CALL",
+          "name": "MQCLOSE",
+          "args": "MQ-HCONN,MQ-HOBJ,MQ-OPTIONS,MQ-CONDITION-CODE,MQ-REASON-CODE",
+          "line": 506
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CBACT01C.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "COBDATFT",
+          "args": "CODATECN-REC",
+          "line": 231
+        },
+        {
+          "kind": "CALL",
+          "name": "CEE3ABD",
+          "args": "ABCODE,TIMING",
+          "line": 410
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CBACT02C.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CEE3ABD",
+          "args": "ABCODE,TIMING",
+          "line": 158
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CBACT03C.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CEE3ABD",
+          "args": "ABCODE,TIMING",
+          "line": 158
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CBACT04C.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CEE3ABD",
+          "args": "ABCODE,TIMING",
+          "line": 632
+        },
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "EXTERNAL-PARMS",
+          "line": 180
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CBCUS01C.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CEE3ABD",
+          "args": "ABCODE,TIMING",
+          "line": 158
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CBSTM03A.CBL": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 351
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 377
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 401
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 734
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 746
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 769
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 787
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 805
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 835
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 860
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 877
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 893
+        },
+        {
+          "kind": "CALL",
+          "name": "CBSTM03B",
+          "args": "WS-M03B-AREA",
+          "line": 909
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CBSTM03B.CBL": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "LK-M03B-AREA",
+          "line": 114
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CBTRN01C.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CEE3ABD",
+          "args": "ABCODE,TIMING",
+          "line": 473
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CBTRN02C.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CEE3ABD",
+          "args": "ABCODE,TIMING",
+          "line": 711
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CBTRN03C.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CEE3ABD",
+          "args": "ABCODE,TIMING",
+          "line": 630
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/COBSWAIT.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "MVSWAIT",
+          "args": "MVSWAIT-TIME",
+          "line": 38
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CORPT00C.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CSUTLDTC",
+          "args": "CSUTLDTC-DATE,CSUTLDTC-DATE-FORMAT,CSUTLDTC-RESULT",
+          "line": 392
+        },
+        {
+          "kind": "CALL",
+          "name": "CSUTLDTC",
+          "args": "CSUTLDTC-DATE,CSUTLDTC-DATE-FORMAT,CSUTLDTC-RESULT",
+          "line": 412
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/COTRN02C.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CSUTLDTC",
+          "args": "CSUTLDTC-DATE,CSUTLDTC-DATE-FORMAT,CSUTLDTC-RESULT",
+          "line": 393
+        },
+        {
+          "kind": "CALL",
+          "name": "CSUTLDTC",
+          "args": "CSUTLDTC-DATE,CSUTLDTC-DATE-FORMAT,CSUTLDTC-RESULT",
+          "line": 413
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cbl/CSUTLDTC.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CEEDAYS",
+          "args": "WS-DATE-TO-TEST,WS-DATE-FORMAT,OUTPUT-LILLIAN,FEEDBACK-CODE",
+          "line": 116
+        },
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "LS-DATE,LS-DATE-FORMAT,LS-RESULT",
+          "line": 88
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/cpy/CSUTLDPY.cpy": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CSUTLDTC",
+          "args": "WS-EDIT-DATE-CCYYMMDD,WS-DATE-FORMAT,WS-DATE-VALIDATION-RESULT",
+          "line": 293
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    }
+  },
+  "dli_calls": {
+    "app/app-authorization-ims-db2-mq/cbl/CBPAUP0C.cbl": {
+      "calls": [
+        {
+          "interface": "EXEC",
+          "function": "GN",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [
+            "PAUTSUM0"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 223
+        },
+        {
+          "interface": "EXEC",
+          "function": "GNP",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [
+            "PAUTDTL1"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 255
+        },
+        {
+          "interface": "EXEC",
+          "function": "DLET",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [
+            "PAUTDTL1"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 310
+        },
+        {
+          "interface": "EXEC",
+          "function": "DLET",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [
+            "PAUTSUM0"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 335
+        },
+        {
+          "interface": "EXEC",
+          "function": "CHKP",
+          "operand": null,
+          "pcb": null,
+          "io": null,
+          "segs": [],
+          "where": [],
+          "psb": null,
+          "line": 355
+        }
+      ],
+      "segment_access": [
+        "delete PAUTDTL1",
+        "delete PAUTSUM0",
+        "read PAUTDTL1",
+        "read PAUTSUM0"
+      ],
+      "dli_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-authorization-ims-db2-mq/cbl/COPAUA0C.cbl": {
+      "calls": [
+        {
+          "interface": "EXEC",
+          "function": "SCHD",
+          "operand": null,
+          "pcb": null,
+          "io": null,
+          "segs": [],
+          "where": [],
+          "psb": "PSB-NAME",
+          "line": 293
+        },
+        {
+          "interface": "EXEC",
+          "function": "TERM",
+          "operand": null,
+          "pcb": null,
+          "io": null,
+          "segs": [],
+          "where": [],
+          "psb": null,
+          "line": 299
+        },
+        {
+          "interface": "EXEC",
+          "function": "SCHD",
+          "operand": null,
+          "pcb": null,
+          "io": null,
+          "segs": [],
+          "where": [],
+          "psb": "PSB-NAME",
+          "line": 302
+        },
+        {
+          "interface": "EXEC",
+          "function": "GU",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [
+            "PAUTSUM0"
+          ],
+          "where": [
+            "ACCNTID = PA-ACCT-ID"
+          ],
+          "psb": null,
+          "line": 620
+        },
+        {
+          "interface": "EXEC",
+          "function": "REPL",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [
+            "PAUTSUM0"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 825
+        },
+        {
+          "interface": "EXEC",
+          "function": "ISRT",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [
+            "PAUTSUM0"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 830
+        },
+        {
+          "interface": "EXEC",
+          "function": "ISRT",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [
+            "PAUTSUM0",
+            "PAUTDTL1"
+          ],
+          "where": [
+            "ACCNTID = PA-ACCT-ID"
+          ],
+          "psb": null,
+          "line": 913
+        },
+        {
+          "interface": "EXEC",
+          "function": "TERM",
+          "operand": null,
+          "pcb": null,
+          "io": null,
+          "segs": [],
+          "where": [],
+          "psb": null,
+          "line": 944
+        }
+      ],
+      "segment_access": [
+        "insert PAUTDTL1",
+        "insert PAUTSUM0",
+        "read PAUTSUM0",
+        "update PAUTSUM0"
+      ],
+      "dli_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-authorization-ims-db2-mq/cbl/COPAUS0C.cbl": {
+      "calls": [
+        {
+          "interface": "EXEC",
+          "function": "GNP",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [
+            "PAUTDTL1"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 461
+        },
+        {
+          "interface": "EXEC",
+          "function": "GNP",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [
+            "PAUTDTL1"
+          ],
+          "where": [
+            "PAUT9CTS = PA-AUTHORIZATION-KEY"
+          ],
+          "psb": null,
+          "line": 493
+        },
+        {
+          "interface": "EXEC",
+          "function": "GU",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [
+            "PAUTSUM0"
+          ],
+          "where": [
+            "ACCNTID = PA-ACCT-ID"
+          ],
+          "psb": null,
+          "line": 973
+        },
+        {
+          "interface": "EXEC",
+          "function": "SCHD",
+          "operand": null,
+          "pcb": null,
+          "io": null,
+          "segs": [],
+          "where": [],
+          "psb": "PSB-NAME",
+          "line": 1002
+        },
+        {
+          "interface": "EXEC",
+          "function": "TERM",
+          "operand": null,
+          "pcb": null,
+          "io": null,
+          "segs": [],
+          "where": [],
+          "psb": null,
+          "line": 1008
+        },
+        {
+          "interface": "EXEC",
+          "function": "SCHD",
+          "operand": null,
+          "pcb": null,
+          "io": null,
+          "segs": [],
+          "where": [],
+          "psb": "PSB-NAME",
+          "line": 1011
+        }
+      ],
+      "segment_access": [
+        "read PAUTDTL1",
+        "read PAUTSUM0"
+      ],
+      "dli_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-authorization-ims-db2-mq/cbl/COPAUS1C.cbl": {
+      "calls": [
+        {
+          "interface": "EXEC",
+          "function": "GU",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [
+            "PAUTSUM0"
+          ],
+          "where": [
+            "ACCNTID = PA-ACCT-ID"
+          ],
+          "psb": null,
+          "line": 439
+        },
+        {
+          "interface": "EXEC",
+          "function": "GNP",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [
+            "PAUTDTL1"
+          ],
+          "where": [
+            "PAUT9CTS = PA-AUTHORIZATION-KEY"
+          ],
+          "psb": null,
+          "line": 465
+        },
+        {
+          "interface": "EXEC",
+          "function": "GNP",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [
+            "PAUTDTL1"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 495
+        },
+        {
+          "interface": "EXEC",
+          "function": "REPL",
+          "operand": null,
+          "pcb": "PAUT-PCB-NUM",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [
+            "PAUTDTL1"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 525
+        },
+        {
+          "interface": "EXEC",
+          "function": "SCHD",
+          "operand": null,
+          "pcb": null,
+          "io": null,
+          "segs": [],
+          "where": [],
+          "psb": "PSB-NAME",
+          "line": 575
+        },
+        {
+          "interface": "EXEC",
+          "function": "TERM",
+          "operand": null,
+          "pcb": null,
+          "io": null,
+          "segs": [],
+          "where": [],
+          "psb": null,
+          "line": 581
+        },
+        {
+          "interface": "EXEC",
+          "function": "SCHD",
+          "operand": null,
+          "pcb": null,
+          "io": null,
+          "segs": [],
+          "where": [],
+          "psb": "PSB-NAME",
+          "line": 584
+        }
+      ],
+      "segment_access": [
+        "read PAUTDTL1",
+        "read PAUTSUM0",
+        "update PAUTDTL1"
+      ],
+      "dli_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-authorization-ims-db2-mq/cbl/DBUNLDGS.CBL": {
+      "calls": [
+        {
+          "interface": "CALL",
+          "function": null,
+          "operand": "FUNC-GN",
+          "pcb": "PAUTBPCB",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [
+            "ROOT-UNQUAL-SSA"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 222
+        },
+        {
+          "interface": "CALL",
+          "function": null,
+          "operand": "FUNC-GNP",
+          "pcb": "PAUTBPCB",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [
+            "CHILD-UNQUAL-SSA"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 267
+        },
+        {
+          "interface": "CALL",
+          "function": null,
+          "operand": "FUNC-ISRT",
+          "pcb": "PASFLPCB",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [],
+          "where": [],
+          "psb": null,
+          "line": 302
+        },
+        {
+          "interface": "CALL",
+          "function": null,
+          "operand": "FUNC-ISRT",
+          "pcb": "PADFLPCB",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [],
+          "where": [],
+          "psb": null,
+          "line": 321
+        }
+      ],
+      "segment_access": [
+        "read PAUTDTL1",
+        "read PAUTSUM0"
+      ],
+      "dli_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-authorization-ims-db2-mq/cbl/PAUDBLOD.CBL": {
+      "calls": [
+        {
+          "interface": "CALL",
+          "function": null,
+          "operand": "FUNC-ISRT",
+          "pcb": "PAUTBPCB",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [
+            "ROOT-UNQUAL-SSA"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 244
+        },
+        {
+          "interface": "CALL",
+          "function": null,
+          "operand": "FUNC-GU",
+          "pcb": "PAUTBPCB",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [
+            "ROOT-QUAL-SSA"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 296
+        },
+        {
+          "interface": "CALL",
+          "function": null,
+          "operand": "FUNC-ISRT",
+          "pcb": "PAUTBPCB",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [
+            "CHILD-UNQUAL-SSA"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 321
+        }
+      ],
+      "segment_access": [
+        "insert PAUTDTL1",
+        "insert PAUTSUM0",
+        "read PAUTSUM0"
+      ],
+      "dli_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "app/app-authorization-ims-db2-mq/cbl/PAUDBUNL.CBL": {
+      "calls": [
+        {
+          "interface": "CALL",
+          "function": null,
+          "operand": "FUNC-GN",
+          "pcb": "PAUTBPCB",
+          "io": "PENDING-AUTH-SUMMARY",
+          "segs": [
+            "ROOT-UNQUAL-SSA"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 213
+        },
+        {
+          "interface": "CALL",
+          "function": null,
+          "operand": "FUNC-GNP",
+          "pcb": "PAUTBPCB",
+          "io": "PENDING-AUTH-DETAILS",
+          "segs": [
+            "CHILD-UNQUAL-SSA"
+          ],
+          "where": [],
+          "psb": null,
+          "line": 257
+        }
+      ],
+      "segment_access": [
+        "read PAUTDTL1",
+        "read PAUTSUM0"
+      ],
+      "dli_validated": true,
       "verification": {
         "status": "validated",
         "notes": [],

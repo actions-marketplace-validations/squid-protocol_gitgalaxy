@@ -1036,3 +1036,55 @@ def test_job_flow_reader_is_independent():
         "L10 STEP 3 S3 PGM=X PROC=- COND=- IF=NOT (S1.RC = 0) IN=-",
         "L11 DD S3.OUT DSN=A.E DISP=NEW GEN=+1 IN=-",
     }
+
+
+def test_call_using_reader_is_independent(tmp_path):
+    """#3454: the key's own reading of CALL USING lists and entry parameters."""
+    src = (
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. CU.\n"
+        "       PROCEDURE DIVISION USING LS-A, LS-B.\n"
+        "           CALL 'X' USING BY CONTENT 'LIT' WS-A\n"
+        "                BY REFERENCE T OF G (I)\n"
+        "           END-CALL\n"
+        "           CALL 'Y'.\n"
+        "           ENTRY 'DLITCBL' USING PCB-1.\n"
+        "           DISPLAY 'CALL Z USING Q'.\n"
+    )
+    assert all(len(line) <= 72 for line in src.splitlines())
+    (tmp_path / "CU.cbl").write_text(src, encoding="utf-8")
+    assert ak.call_using_keys(ak.draft_call_using(tmp_path)["CU.cbl"]["rows"]) == {
+        "L3 PROCEDURE - USING LS-A,LS-B",
+        "L4 CALL X USING CONTENT:'LIT',CONTENT:WS-A,T OF G",
+        "L8 ENTRY DLITCBL USING PCB-1",
+    }
+
+
+def test_dli_reader_resolves_on_its_own(tmp_path):
+    """#3450: the key's own DL/I reading -- a function code through a copybook
+    VALUE, an SSA's segment from its group VALUEs, path calls read their parents."""
+    (tmp_path / "IMSF.cpy").write_text(
+        "       01 FUNCS.\n          05 FUNC-GN PIC X(4) VALUE 'GN  '.\n", encoding="utf-8"
+    )
+    src = (
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. IMSK.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       COPY IMSF.\n"
+        "       01 SSA1.\n"
+        "          05 FILLER PIC X(08) VALUE 'PAUTSUM0'.\n"
+        "          05 FILLER PIC X(01) VALUE ' '.\n"
+        "       PROCEDURE DIVISION.\n"
+        "           CALL 'CBLTDLI' USING FUNC-GN PCB1 IOA SSA1.\n"
+        "           EXEC DLI ISRT USING PCB(1) SEGMENT(PAUTSUM0)\n"
+        "                SEGMENT(PAUTDTL1) FROM(IOB) END-EXEC.\n"
+    )
+    assert all(len(line) <= 72 for line in src.splitlines())
+    (tmp_path / "IMSK.cbl").write_text(src, encoding="utf-8")
+    entry = ak.draft_dli(tmp_path)["IMSK.cbl"]
+    assert ak.dli_keys(entry["calls"]) == {
+        "L10 CALL FN=FUNC-GN PCB=PCB1 IO=IOA SEG=SSA1 WHERE=- PSB=-",
+        "L11 EXEC FN=ISRT PCB=1 IO=IOB SEG=PAUTSUM0,PAUTDTL1 WHERE=- PSB=-",
+    }
+    assert entry["segment_access"] == ["insert PAUTDTL1", "read PAUTSUM0"]

@@ -65212,6 +65212,122 @@
         }
       },
       "rulings": {}
+    },
+    {
+      "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+      "at": "2026-09-24",
+      "batch": 1,
+      "files": [
+        "src/base/cobol_copy/ABNDINFO.cpy",
+        "src/base/cobol_copy/ACCDB2.cpy",
+        "src/base/cobol_copy/ACCOUNT.cpy",
+        "src/base/cobol_copy/ACCTCTRL.cpy",
+        "src/base/cobol_copy/BANKMAP.cpy",
+        "src/base/cobol_copy/BNK1DDM.cpy",
+        "src/base/cobol_copy/CONTDB2.cpy",
+        "src/base/cobol_copy/CONTROLI.cpy",
+        "src/base/cobol_copy/CREACC.cpy",
+        "src/base/cobol_copy/CRECUST.cpy",
+        "src/base/cobol_copy/CUSTCTRL.cpy",
+        "src/base/cobol_copy/CUSTMAP.cpy",
+        "src/base/cobol_copy/CUSTOMER.cpy",
+        "src/base/cobol_copy/DELACC.cpy",
+        "src/base/cobol_copy/DELACCZ.cpy",
+        "src/base/cobol_copy/DELCUS.cpy",
+        "src/base/cobol_copy/GETCOMPY.cpy",
+        "src/base/cobol_copy/GETSCODE.cpy",
+        "src/base/cobol_copy/INQACC.cpy",
+        "src/base/cobol_copy/INQACCCU.cpy",
+        "src/base/cobol_src/ABNDPROC.cbl",
+        "src/base/cobol_src/ACCTCTRL.cbl",
+        "src/base/cobol_src/BANKDATA.cbl",
+        "src/base/cobol_src/BNK1CAC.cbl",
+        "src/base/cobol_src/BNK1CRA.cbl",
+        "src/base/cobol_src/BNK1DCS.cbl",
+        "src/base/cobol_src/CREACC.cbl",
+        "src/base/cobol_src/CRECUST.cbl",
+        "src/base/cobol_src/CUSTCTRL.cbl",
+        "src/base/cobol_src/DBCRFUN.cbl",
+        "src/base/cobol_src/DELACC.cbl",
+        "src/base/cobol_src/DELCUS.cbl",
+        "src/base/cobol_src/GETCOMPY.cbl",
+        "src/base/cobol_src/GETSCODE.cbl",
+        "src/base/cobol_src/INQACC.cbl",
+        "src/base/cobol_src/INQACCCU.cbl",
+        "src/base/cobol_src/INQCUST.cbl",
+        "src/base/cobol_src/XFRFUN.cbl"
+      ],
+      "wide": false,
+      "suite": "calls",
+      "tasks": {
+        "using": {
+          "agree": 22,
+          "asked": 22
+        },
+        "dli": {
+          "agree": 0,
+          "asked": 0
+        },
+        "ims": {
+          "agree": 0,
+          "asked": 0
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+      "at": "2026-09-24",
+      "batch": 2,
+      "files": [
+        "src/base/cobol_copy/INQACCCZ.cpy",
+        "src/base/cobol_copy/INQACCZ.cpy",
+        "src/base/cobol_copy/INQCUST.cpy",
+        "src/base/cobol_copy/INQCUSTZ.cpy",
+        "src/base/cobol_copy/NEWACCNO.cpy",
+        "src/base/cobol_copy/NEWCUSNO.cpy",
+        "src/base/cobol_copy/PAYDBCR.cpy",
+        "src/base/cobol_copy/PROCDB2.cpy",
+        "src/base/cobol_copy/PROCISRT.cpy",
+        "src/base/cobol_copy/PROCTRAN.cpy",
+        "src/base/cobol_copy/RESPSTR.cpy",
+        "src/base/cobol_copy/SORTCODE.cpy",
+        "src/base/cobol_copy/STCUSTNO.cpy",
+        "src/base/cobol_copy/UPDACC.cpy",
+        "src/base/cobol_copy/UPDCUST.cpy",
+        "src/base/cobol_copy/WAZI.cpy",
+        "src/base/cobol_copy/XFRFUN.cpy",
+        "src/base/cobol_src/BNK1CCA.cbl",
+        "src/base/cobol_src/BNK1CCS.cbl",
+        "src/base/cobol_src/BNK1DAC.cbl",
+        "src/base/cobol_src/BNK1TFN.cbl",
+        "src/base/cobol_src/BNK1UAC.cbl",
+        "src/base/cobol_src/BNKMENU.cbl",
+        "src/base/cobol_src/CRDTAGY1.cbl",
+        "src/base/cobol_src/CRDTAGY2.cbl",
+        "src/base/cobol_src/CRDTAGY3.cbl",
+        "src/base/cobol_src/CRDTAGY4.cbl",
+        "src/base/cobol_src/CRDTAGY5.cbl",
+        "src/base/cobol_src/UPDACC.cbl",
+        "src/base/cobol_src/UPDCUST.cbl"
+      ],
+      "wide": false,
+      "suite": "calls",
+      "tasks": {
+        "using": {
+          "agree": 0,
+          "asked": 0
+        },
+        "dli": {
+          "agree": 0,
+          "asked": 0
+        },
+        "ims": {
+          "agree": 0,
+          "asked": 0
+        }
+      },
+      "rulings": {}
     }
   ],
   "file_control": {
@@ -71051,5 +71167,410 @@
         }
       }
     }
-  }
+  },
+  "call_using": {
+    "src/base/cobol_src/ABNDPROC.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 130
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/ACCTCTRL.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 132
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/BANKDATA.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CEEGMT",
+          "args": "GMT-LILIAN,GMT-SECONDS,FC",
+          "line": 1442
+        },
+        {
+          "kind": "CALL",
+          "name": "CEEDATM",
+          "args": "PERIOD-NEXT,DATM-PICTURE,DATM-CONV,FC",
+          "line": 1458
+        },
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "PARM-BUFFER",
+          "line": 368
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/BNK1CAC.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 159
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/BNK1CRA.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 176
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/BNK1DCS.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 188
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/CREACC.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 286
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/CRECUST.cbl": {
+      "rows": [
+        {
+          "kind": "CALL",
+          "name": "CEEDAYS",
+          "args": "DATE-OF-BIRTH-FOR-CEEDAYS,DATE-OF-BIRTH-FORMAT,WS-DATE-OF-BIRTH-LILLIAN,FC",
+          "line": 1379
+        },
+        {
+          "kind": "CALL",
+          "name": "CEELOCT",
+          "args": "WS-TODAY-LILLIAN,WS-TODAY-SECONDS,WS-TODAY-GREGORIAN,FC",
+          "line": 1393
+        },
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 353
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/CUSTCTRL.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 131
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/DBCRFUN.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 198
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/DELACC.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 203
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/DELCUS.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 245
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/GETCOMPY.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 35
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/GETSCODE.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 36
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/INQACC.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 202
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/INQACCCU.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 193
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/INQCUST.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 165
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    },
+    "src/base/cobol_src/XFRFUN.cbl": {
+      "rows": [
+        {
+          "kind": "PROCEDURE",
+          "name": null,
+          "args": "DFHCOMMAREA",
+          "line": 268
+        }
+      ],
+      "call_using_validated": true,
+      "verification": {
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+        "census": {
+          "by": "claude-opus-5-5 (blind fresh-context census reviewer)",
+          "at": "2026-09-24"
+        }
+      }
+    }
+  },
+  "dli_calls": {}
 }
