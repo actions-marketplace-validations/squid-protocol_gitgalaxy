@@ -2,6 +2,8 @@ import sys
 import time
 from unittest.mock import patch
 
+import pytest
+
 # IMPORTANT: Adjust this path to match exactly where your file is located
 import gitgalaxy.tools.cobol_to_cobol.cobol_graveyard_finder as graveyard_module
 
@@ -416,3 +418,130 @@ def test_replacing_clause_still_substitutes_into_the_copybook(tmp_path):
     assert "01 WS-CUST" in resolved
     assert "01 TAG-BAL" not in resolved
     assert graveyard_module.x_ray_dead_code(pgm, copybook_root=repo)["orphaned_vars"] == set()
+
+
+# ==============================================================================
+# #3420: shapes the mainframe ground-truth census found (each from CardDemo/CBSA)
+# ==============================================================================
+def test_perform_after_end_perform_is_seen(tmp_path):
+    """CardDemo COTRTLIC: `END-PERFORM` then `PERFORM 9450-CLOSE ...` read as a
+    PERFORM of the word PERFORM, so the real target was reported dead."""
+    assert (
+        _dead(
+            tmp_path,
+            "       MAIN-PARA.",
+            "           PERFORM UNTIL WS-X = 1",
+            "              MOVE 1 TO WS-X",
+            "           END-PERFORM",
+            "           PERFORM CLOSE-PARA",
+            "           GOBACK.",
+            "       CLOSE-PARA.",
+            "           DISPLAY 'C'.",
+        )
+        == set()
+    )
+
+
+def test_closed_if_before_a_terminal_does_not_fall_through(tmp_path):
+    """`\\bIF\\b` counted inside `END-IF`: CBSA DELACC's A010 ends `... END-IF ...
+    PERFORM GET-ME-OUT-OF-HERE.` and read as falling through into A999."""
+    assert _dead(
+        tmp_path,
+        "       A010.",
+        "           IF WS-X = 1",
+        "              DISPLAY 'Y'",
+        "           END-IF",
+        "           GOBACK.",
+        "       A999.",
+        "           EXIT.",
+    ) == {"A999"}
+
+
+def test_a_terminal_sentence_before_the_last_ends_the_unit(tmp_path):
+    """CBSA BNK1*: `EXEC CICS RETURN TRANSID(...) END-EXEC.` then an IF recovery
+    sentence. Only the last sentence was tested, so A999 read as live."""
+    assert _dead(
+        tmp_path,
+        "       A010.",
+        "           EXEC CICS RETURN TRANSID('OCCS') RESP(WS-R) END-EXEC.",
+        "           IF WS-R NOT = 0",
+        "              DISPLAY 'FAIL'",
+        "           END-IF.",
+        "       A999.",
+        "           EXIT.",
+    ) == {"A999"}
+
+
+def test_alter_target_is_reached(tmp_path):
+    """CardDemo CBSTM03A reaches its 8200/8300/8400 paragraphs only through
+    `ALTER 8100-FILE-OPEN TO PROCEED TO ...`."""
+    assert (
+        _dead(
+            tmp_path,
+            "       0000-START.",
+            "           ALTER 8100-FILE-OPEN TO PROCEED TO 8200-OPEN",
+            "           GO TO 8100-FILE-OPEN.",
+            "       8100-FILE-OPEN.",
+            "           GO TO 8100-FIRST.",
+            "       8100-FIRST.",
+            "           GOBACK.",
+            "       8200-OPEN.",
+            "           GOBACK.",
+        )
+        == set()
+    )
+
+
+def test_header_period_on_the_next_line(tmp_path):
+    """CardDemo COTRTLIC `2000-SEND-MAP` / `     .`: the header was not a unit, so
+    its THRU range's -EXIT read as dead."""
+    pgm = tmp_path / "PGM.cbl"
+    pgm.write_text(
+        _proc(
+            "       MAIN-PARA.",
+            "           PERFORM 2000-SEND-MAP THRU 2000-SEND-MAP-EXIT",
+            "           GOBACK.",
+            "       2000-SEND-MAP",
+            "            .",
+            "           DISPLAY 'S'.",
+            "       2000-SEND-MAP-EXIT.",
+            "           EXIT.",
+        ),
+        encoding="utf-8",
+    )
+    assert graveyard_module.x_ray_dead_code(pgm)["dead_paras"] == set()
+    names = graveyard_module.unit_headers(pgm.read_text().upper().split("PROCEDURE DIVISION", 1)[1])
+    assert names == ["MAIN-PARA", "2000-SEND-MAP", "2000-SEND-MAP-EXIT"]
+
+
+# ==============================================================================
+# #3414: copy statements the fallback resolver missed
+# ==============================================================================
+@pytest.mark.parametrize(
+    ("source", "member"),
+    [
+        ("       COPY 'CSSTRPFY'\n           .\n", "CSSTRPFY"),  # quoted, period on the next line
+        ("       COPY CSUTLDPY\n           .\n", "CSUTLDPY"),
+        ("206400 COPY 'CSSTRPFY'\n206500     .\n", "CSSTRPFY"),  # period after a sequence field
+        ("       COPY DATETIME IN MYFILE.\n", "DATETIME"),  # IN library
+        (
+            "           COPY CSSETATY REPLACING\n"
+            "             ==(TESTVAR1)== BY ==ACCT-STATUS==\n"
+            "             ==(MAPNAME3)== BY ==CACTUPA== .\n",
+            "CSSETATY",
+        ),
+        ("030400     EXEC SQL INCLUDE CSDB2RWY END-EXEC\n", "CSDB2RWY"),  # one-line SQL INCLUDE
+        ("           EXEC SQL\n                INCLUDE AUTHFRDS\n           END-EXEC.\n", "AUTHFRDS"),
+    ],
+)
+def test_copy_pattern_reads_every_copy_shape(source, member):
+    matches = list(graveyard_module.COPY_PATTERN.finditer(source))
+    assert [graveyard_module.copy_member(m) for m in matches] == [member]
+
+
+def test_sql_include_resolves_to_a_dclgen_member(tmp_path):
+    (tmp_path / "dcl").mkdir()
+    (tmp_path / "dcl" / "AUTHFRDS.dcl").write_text("       01 DCL-AUTH.\n", encoding="utf-8")
+    prog = tmp_path / "PROG.cbl"
+    prog.write_text("       PROGRAM-ID. PROG.\n", encoding="utf-8")
+    assert graveyard_module.find_copybook("AUTHFRDS", tmp_path, prog) == tmp_path / "dcl" / "AUTHFRDS.dcl"
