@@ -560,9 +560,13 @@ class LLMRecorder:
                 + len(f.get("dataset_bindings") or [])
                 + len(f.get("record_layouts") or [])
                 + len(f.get("sql_tables") or [])  # #3344
+                + len(f.get("sql_statements") or [])  # #3446
                 + len(f.get("screen_fields") or [])  # #3347
                 + len(f.get("csd_resources") or [])  # #3356
                 + len(f.get("cics_resources") or [])  # #3351-#3354
+                + len(f.get("cics_tasks") or [])  # #3449
+                + len(f.get("job_submits") or [])  # #3448
+                + len(f.get("mq_calls") or [])  # #3447
             )
 
         carriers = sorted((f for f in parsed_files if _volume(f) > 0), key=_volume, reverse=True)
@@ -599,6 +603,17 @@ class LLMRecorder:
                 "(inline or DCLGEN members), full shape in `sql_table_data`.\n"
             )
 
+        # #3446: named only when present, so a scan without embedded SQL is unchanged.
+        sql_stmts = [s for f in carriers for s in (f.get("sql_statements") or [])]
+        if sql_stmts:
+            n_stmts = len({(id(f), s.get("ordinal")) for f in carriers for s in (f.get("sql_statements") or [])})
+            n_tables = len({s.get("table") for s in sql_stmts if s.get("table")})
+            lines.append(
+                f"- **DB2 table access:** `{n_stmts}` embedded SQL statements touching `{n_tables}` tables "
+                "(SELECT/INSERT/UPDATE/DELETE, cursors, host variables) in `sql_statement_data`; "
+                "the program x table read/write matrix is `GalaxyIR.sql_table_access()`.\n"
+            )
+
         # #3356: named only when present, so a scan without CSD decks is unchanged.
         total_csd = sum(len(f.get("csd_resources") or []) for f in carriers)
         if total_csd:
@@ -617,6 +632,18 @@ class LLMRecorder:
             lines.append(
                 f"- **CICS operations:** `{len(cics_ops)}` EXEC CICS operations naming a resource ({kinds}); "
                 "verb, direction, VALUE-resolved name and INTO/FROM record in `cics_resource_data`.\n"
+            )
+
+        # #3449: named only when present, so a scan without task control is unchanged.
+        task_ops = [t for f in carriers for t in (f.get("cics_tasks") or [])]
+        if task_ops:
+            by_verb: dict[str, int] = {}
+            for t in task_ops:
+                by_verb[t.get("verb") or "?"] = by_verb.get(t.get("verb") or "?", 0) + 1
+            verbs = ", ".join(f"`{n}` {v}" for v, n in sorted(by_verb.items()))
+            lines.append(
+                f"- **CICS task control:** `{len(task_ops)}` commands ({verbs}); child transid (or its "
+                "STRING-built pattern), channel, CHILD/REQID token and timing in `cics_task_data`.\n"
             )
 
         for f in carriers[:20]:
@@ -707,6 +734,18 @@ class LLMRecorder:
                     per_table[c.get("table") or "?"] = per_table.get(c.get("table") or "?", 0) + 1
                 sql_labels = [f"`{t} ({n} cols)`" for t, n in per_table.items()]
                 lines.append(f"- **DB2 tables declared:** {', '.join(sql_labels[:12])}")
+            # #3446: table access -- per table, the distinct accesses (read/insert/...).
+            stmts = f.get("sql_statements") or []
+            if stmts:
+                access: dict[str, list[str]] = {}
+                for st in stmts:
+                    if st.get("table"):
+                        seen_access = access.setdefault(st["table"], [])
+                        if st.get("access") and st["access"] not in seen_access:
+                            seen_access.append(st["access"])
+                if access:
+                    labels = [f"`{t} ({'/'.join(a)})`" for t, a in access.items()]
+                    lines.append(f"- **DB2 table access:** {', '.join(labels[:12])}")
             # #3347: BMS screen layouts -- per map, its named (symbolic-map) fields
             # out of all its fields; the geometry is in screen_field_data.
             screen = f.get("screen_fields") or []
@@ -750,6 +789,41 @@ class LLMRecorder:
                 labels = [f"{k} ({'/'.join(sorted(v))})" for k, v in touched.items()]
                 more = f" … (+{len(labels) - 12} more)" if len(labels) > 12 else ""
                 lines.append(f"- **CICS operations:** {', '.join(f'`{lbl}`' for lbl in labels[:12])}{more}")
+            # #3449: CICS task control -- each distinct verb and target.
+            tasks = f.get("cics_tasks") or []
+            if tasks:
+                task_labels: list[str] = []
+                for t in tasks:
+                    target = t.get("name") or t.get("candidates") or t.get("operand")
+                    label = f"{t.get('verb')} {target}" if target else str(t.get("verb"))
+                    if label not in task_labels:
+                        task_labels.append(label)
+                more = f" … (+{len(task_labels) - 12} more)" if len(task_labels) > 12 else ""
+                lines.append(f"- **CICS task control:** {', '.join(f'`{x}`' for x in task_labels[:12])}{more}")
+            # #3448: what this file submits to the internal reader.
+            submits = f.get("job_submits") or []
+            if submits:
+                parts = []
+                for j in submits:
+                    if j.get("kind") == "JOB":
+                        parts.append(f"JOB {j.get('name') or '?'}")
+                    elif j.get("kind") == "EXEC":
+                        parts.append(f"EXEC {j.get('target_kind')}={j.get('target')}")
+                    else:
+                        parts.append(f"INTRDR {j.get('name')}<-{j.get('target') or '?'}")
+                lines.append(f"- **Job submission:** {', '.join(f'`{x}`' for x in parts[:12])}")
+            # #3447: each queue this file puts to / gets from.
+            mq = f.get("mq_calls") or []
+            if mq:
+                queues: dict[str, set] = {}
+                for q in mq:
+                    if q.get("direction") not in ("get", "put", "browse"):
+                        continue
+                    name = q.get("queue") or f"<{q.get('resolution') or '?'}>"
+                    queues.setdefault(name, set()).add(q["direction"])
+                if queues:
+                    labels = [f"{k} ({'/'.join(sorted(v))})" for k, v in queues.items()]
+                    lines.append(f"- **MQ queues:** {', '.join(f'`{x}`' for x in labels[:12])}")
             lines.append("")
 
         if len(carriers) > 20:

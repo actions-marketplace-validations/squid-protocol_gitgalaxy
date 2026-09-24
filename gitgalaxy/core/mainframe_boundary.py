@@ -83,7 +83,11 @@ from gitgalaxy.core.bms_screen_fields import bms_screen_fields
 # #3351-#3354: CICS resource operations (FILE/MAP/QUEUE/CONTAINER/CHANNEL) live in
 # their own module and ride out of extract_boundary as `cics_resources`.
 from gitgalaxy.core.cics_resources import cobol_move_literals, extract_cics_resources
+from gitgalaxy.core.cics_tasks import extract_cics_tasks
 from gitgalaxy.core.db2_declare_table import extract_sql_tables
+from gitgalaxy.core.db2_sql_statements import extract_sql_statements
+from gitgalaxy.core.job_submits import cobol_job_cards, jcl_intrdr_dds
+from gitgalaxy.core.mq_calls import extract_mq_calls
 
 # The dialects that carry a top-level `boundary_extraction` declaration. It is
 # top level rather than inside `rules` because language_lens.py re.compile()s
@@ -1771,6 +1775,62 @@ def _cics_resources(code_stream: str, values: dict[str, str], dialect: str) -> l
     return extract_cics_resources(code_stream, values, moves, dialect, _shielded)
 
 
+def _cics_tasks(
+    code_stream: str, values: dict[str, str], records: list[dict[str, Any]], dialect: str
+) -> list[dict[str, Any]]:
+    """The CICS task-control commands of one file (#3449): RUN/START children,
+    FETCH/FREE joins, RETRIEVE, CANCEL, DELAY, POST, WAIT and ENQ/DEQ.
+
+    Operands resolve as in `_cics_resources`; a COBOL transaction id built by
+    STRING becomes a pattern sized by each source's PIC (`records`).
+    """
+    if "CICS" not in code_stream.upper():
+        return []
+    newlines = [i for i, ch in enumerate(code_stream) if ch == "\n"]
+
+    def _shielded(offset: int) -> bool:
+        index = bisect.bisect_left(newlines, offset)
+        line_start = newlines[index - 1] + 1 if index else 0
+        return _opens_inside_literal(code_stream, line_start, offset)
+
+    moves = cobol_move_literals(code_stream) if dialect == "cobol" else {}
+    pics: dict[str, str] = {}
+    for r in records:
+        if r.get("name") and r.get("pic"):
+            pics.setdefault(str(r["name"]).upper(), str(r["pic"]))
+    return extract_cics_tasks(code_stream, values, moves, pics, dialect, _shielded)
+
+
+def _mq_calls(code_stream: str, values: dict[str, str]) -> list[dict[str, Any]]:
+    """Every IBM MQ call of one COBOL file (#3447), with the queue each reaches
+    (via its object descriptor, or the MQOPEN its handle came from)."""
+    if "MQ" not in code_stream.upper():
+        return []
+    newlines = [i for i, ch in enumerate(code_stream) if ch == "\n"]
+
+    def _shielded(offset: int) -> bool:
+        index = bisect.bisect_left(newlines, offset)
+        line_start = newlines[index - 1] + 1 if index else 0
+        return _opens_inside_literal(code_stream, line_start, offset)
+
+    return extract_mq_calls(code_stream, values, _shielded)
+
+
+def _cobol_job_cards(code_stream: str) -> list[dict[str, Any]]:
+    """The JCL JOB / EXEC cards a COBOL file holds as literals (#3448), kept only
+    when a JOB card is among them; a quote inside another literal is skipped."""
+    if "//" not in code_stream:
+        return []
+    newlines = [i for i, ch in enumerate(code_stream) if ch == "\n"]
+
+    def _shielded(offset: int) -> bool:
+        index = bisect.bisect_left(newlines, offset)
+        line_start = newlines[index - 1] + 1 if index else 0
+        return _opens_inside_literal(code_stream, line_start, offset)
+
+    return cobol_job_cards(code_stream, _shielded)
+
+
 def extract_boundary(dialect: str, code_stream: str) -> dict[str, list[dict[str, Any]]]:
     """The named invocation, dataset, record-layout and transaction facts for one mainframe file.
 
@@ -1788,27 +1848,43 @@ def extract_boundary(dialect: str, code_stream: str) -> dict[str, list[dict[str,
     #3344: cobol and pli additionally carry `sql_tables` -- the DB2 `EXEC SQL
     DECLARE <table> TABLE (...)` columns (db2_declare_table). Callers read it
     with a default, so the dialects that cannot embed SQL simply omit it.
+    #3446: cobol and pli also carry `sql_statements` -- every embedded SQL
+    statement with the tables it reads / inserts / updates / deletes, its
+    cursor and host variables (db2_sql_statements), read with a default.
     #3351-#3354: cobol and pli also carry `cics_resources` -- every EXEC CICS
     command naming a FILE, MAP, QUEUE, CONTAINER or passed CHANNEL
     (cics_resources), read with a default the same way.
+    #3449: cobol and pli also carry `cics_tasks` -- every CICS task-control
+    command (RUN/START/FETCH/FREE/RETRIEVE/CANCEL/DELAY/POST/WAIT/ENQ/DEQ,
+    cics_tasks), read with a default.
+    #3448: cobol (JCL JOB/EXEC card literals) and jcl (DDs routed to the
+    internal reader, SYSOUT=(x,INTRDR)) carry `job_submits` (job_submits).
+    #3447: cobol also carries `mq_calls` -- every IBM MQ call with its queue,
+    direction, handle and options (mq_calls), read with a default.
     """
     if not code_stream:
         return {"calls": [], "datasets": [], "records": [], "transactions": []}
     if dialect == "cobol":
         values = _cobol_value_map(code_stream)
+        records = _cobol_records(code_stream)
         return {
             "calls": _cobol_calls(code_stream, values),
             "datasets": _cobol_datasets(code_stream),
-            "records": _cobol_records(code_stream),
+            "records": records,
             "transactions": [],
             "sql_tables": extract_sql_tables(code_stream, "cobol"),  # #3344
+            "sql_statements": extract_sql_statements(code_stream, "cobol"),  # #3446
             "cics_resources": _cics_resources(code_stream, values, "cobol"),  # #3351-#3354
+            "cics_tasks": _cics_tasks(code_stream, values, records, "cobol"),  # #3449
+            "job_submits": _cobol_job_cards(code_stream),  # #3448
+            "mq_calls": _mq_calls(code_stream, values),  # #3447
         }
     if dialect == "jcl":
         boundary = _jcl_boundary(code_stream)
         boundary["records"] = []
         boundary["transactions"] = _jcl_csd_transactions(code_stream)
         boundary["csd_resources"] = _jcl_csd_resources(code_stream)  # #3356
+        boundary["job_submits"] = jcl_intrdr_dds(_jcl_statements(code_stream))  # #3448
         return boundary
     if dialect == "csd":
         return {
@@ -1827,7 +1903,9 @@ def extract_boundary(dialect: str, code_stream: str) -> dict[str, list[dict[str,
             "records": pli_records,
             "transactions": [],
             "sql_tables": extract_sql_tables(code_stream, "pli"),  # #3344
+            "sql_statements": extract_sql_statements(code_stream, "pli"),  # #3446
             "cics_resources": _cics_resources(code_stream, _pli_value_map(pli_records), "pli"),  # #3351-#3354
+            "cics_tasks": _cics_tasks(code_stream, _pli_value_map(pli_records), [], "pli"),  # #3449
         }
     if dialect == "bms":
         # #3347: BMS map field layouts ride their own key (`screen_fields`), read

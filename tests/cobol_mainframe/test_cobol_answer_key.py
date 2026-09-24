@@ -786,3 +786,142 @@ def test_small_corpus_keys_are_fully_censused(key_path):
 
     cov = cv.coverage(json.loads(key_path.read_text(encoding="utf-8")))
     assert not cov["missing"], f"not censused: {cov['missing'][:5]}"
+
+
+def test_sql_table_access_reader_is_independent_and_joins_cursors():
+    """#3446: the key's own token walk over EXEC SQL: tables per access, a cursor's
+    reads reached through OPEN / FETCH, literals and INCLUDE ignored. Lines stay
+    within column 72, as fixed-format source must."""
+    src = (
+        "       PROCEDURE DIVISION.\n"
+        "           EXEC SQL INCLUDE SQLCA END-EXEC.\n"
+        "           EXEC SQL DECLARE C1 CURSOR FOR\n"
+        "                SELECT A FROM ACCOUNT X, CUST Y END-EXEC.\n"
+        "           EXEC SQL OPEN C1 END-EXEC.\n"
+        "           EXEC SQL DELETE FROM CARDDEMO.TT\n"
+        "                WHERE K = 'FROM FAKE' END-EXEC.\n"
+        "           EXEC SQL INSERT INTO HIST\n"
+        "                SELECT * FROM LIVE END-EXEC.\n"
+    )
+    assert all(len(line) <= 72 for line in src.splitlines())
+    assert ak.sql_table_access(src) == [
+        "delete CARDDEMO.TT",
+        "insert HIST",
+        "read ACCOUNT",
+        "read CUST",
+        "read LIVE",
+    ]
+
+
+def test_cics_task_reader_is_independent_and_expands_string_ids(tmp_path):
+    """#3449: the key's own task-control reader -- a STRING-built transid is a
+    PIC-sized pattern expanded against the key's own CSD read (never OCRA), a
+    DISPLAY literal is not a command, and the unit keys match the engine's shape."""
+    (tmp_path / "BANK.csd").write_text(
+        " DEFINE TRANSACTION(OCR1) GROUP(B)\n        PROGRAM(C1)\n"
+        " DEFINE TRANSACTION(OCRA) GROUP(B)\n        PROGRAM(MENU)\n",
+        encoding="utf-8",
+    )
+    src = (
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. PARENT.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01 WS-N                 PIC 9.\n"
+        "       01 WS-T                 PIC X(4).\n"
+        "       PROCEDURE DIVISION.\n"
+        "           MOVE 'CHAN1' TO WS-CH.\n"
+        "           STRING 'OCR' DELIMITED BY SIZE, WS-N DELIMITED BY SIZE\n"
+        "              INTO WS-T END-STRING.\n"
+        "           EXEC CICS RUN TRANSID(WS-T) CHANNEL(WS-CH)\n"
+        "                CHILD(WS-TKN) END-EXEC.\n"
+        "           DISPLAY 'EXEC CICS FETCH ANY failed'.\n"
+        "           EXEC CICS DELAY FOR SECONDS(3) END-EXEC.\n"
+        "           EXEC CICS RETRIEVE INTO(MQTM) NOHANDLE END-EXEC.\n"
+    )
+    assert all(len(line) <= 72 for line in src.splitlines())
+    (tmp_path / "PARENT.cbl").write_text(src, encoding="utf-8")
+    entry = ak.draft_cics_tasks(tmp_path)["PARENT.cbl"]
+    assert sorted(ak.cics_task_keys(entry["operations"])) == [
+        "L11 RUN T=<pattern:OCR[0-9]> ch=CHAN1 tok=WS-TKN",
+        "L14 DELAY T=- ch=- tok=- @FOR SECONDS(3)",
+        "L15 RETRIEVE T=- ch=- tok=- INTO=MQTM",
+    ]
+    assert entry["children"] == ["RUN OCR1"]
+    assert entry["cics_tasks_validated"] is False
+
+
+def test_job_submission_reader_is_independent(tmp_path):
+    """#3448: the key's own join -- a WRITEQ TD to an extrapartition queue is a
+    submission only with a JOB card literal (or a region INTRDR DD for its DDNAME);
+    a batch SYSOUT=(x,INTRDR) step submits its SYSUT1 member."""
+    files = {
+        "csd/D.csd": " DEFINE TDQUEUE(JOBS) GROUP(D)\n        TYPE(EXTRA) DDNAME(INREADER)\n"
+        " DEFINE TDQUEUE(AUDT) GROUP(D)\n        TYPE(EXTRA) DDNAME(AUDITDD)\n",
+        "cbl/RPT.cbl": (
+            "       IDENTIFICATION DIVISION.\n"
+            "       PROGRAM-ID. RPT.\n"
+            "       DATA DIVISION.\n"
+            "       WORKING-STORAGE SECTION.\n"
+            "       01 F PIC X(80) VALUE \"//RPTJOB JOB 'R',CLASS=A\".\n"
+            '       01 G PIC X(80) VALUE "//S1 EXEC PROC=RPTPROC".\n'
+            "       PROCEDURE DIVISION.\n"
+            "           EXEC CICS WRITEQ TD QUEUE('JOBS') FROM(F) END-EXEC.\n"
+            "           EXEC CICS WRITEQ TD QUEUE('AUDT') FROM(F) END-EXEC.\n"
+        ),
+        "cbl/AUD.cbl": (
+            "       IDENTIFICATION DIVISION.\n"
+            "       PROGRAM-ID. AUD.\n"
+            "       PROCEDURE DIVISION.\n"
+            "           EXEC CICS WRITEQ TD QUEUE('AUDT') FROM(X) END-EXEC.\n"
+        ),
+        "proc/RPTPROC.prc": "//RPTPROC PROC\n",
+        "jcl/RPTPROC.jcl": "//RPTPROC JOB\n",
+        "jcl/SUB.jcl": "//SUB JOB\n//S1 EXEC PGM=IEBGENER\n//SYSUT1 DD DSN=L(RPTPROC),DISP=SHR\n//SYSUT2 DD SYSOUT=(A,INTRDR)\n",
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    got = {rel: v["submissions"] for rel, v in ak.draft_job_submissions(tmp_path).items()}
+    assert got == {
+        "cbl/RPT.cbl": [
+            "tdq AUDT -> JOB RPTJOB",
+            "tdq AUDT -> PROC RPTPROC = proc/RPTPROC.prc",
+            "tdq JOBS -> JOB RPTJOB",
+            "tdq JOBS -> PROC RPTPROC = proc/RPTPROC.prc",
+        ],
+        "jcl/SUB.jcl": ["intrdr SYSUT2 -> JOB RPTPROC = jcl/RPTPROC.jcl"],
+    }
+
+
+def test_mq_reader_is_independent_and_follows_handles(tmp_path):
+    """#3447: the key's own token walk over MQ calls -- queue through the
+    descriptor's OBJECTNAME, a trigger-named input queue, a handle copied off
+    the shared MQ-HOBJ, and a DISPLAY literal that is not a call."""
+    src = (
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. MQK.\n"
+        "       PROCEDURE DIVISION.\n"
+        "           MOVE MQTM-QNAME TO IN-Q\n"
+        "           MOVE IN-Q TO MQOD-OBJECTNAME\n"
+        "           COMPUTE OPTS = MQOO-INPUT-SHARED + MQOO-FAIL-IF-QUIESCING\n"
+        "           CALL 'MQOPEN' USING HC OD OPTS MQ-HOBJ CC RC\n"
+        "           MOVE MQ-HOBJ TO IN-HANDLE\n"
+        "           MOVE 'APP.OUT' TO MQOD-OBJECTNAME\n"
+        "           COMPUTE OPTS = MQOO-OUTPUT\n"
+        "           CALL 'MQOPEN' USING HC OD OPTS MQ-HOBJ CC RC\n"
+        "           MOVE MQ-HOBJ TO OUT-HANDLE\n"
+        "           DISPLAY 'CALL MQGET FAILED'\n"
+        "           MOVE IN-HANDLE TO MQ-HOBJ\n"
+        "           CALL 'MQGET' USING HC MQ-HOBJ MD GMO L B DL CC RC\n"
+        "           CALL 'MQPUT' USING HC OUT-HANDLE MD PMO L B CC RC.\n"
+    )
+    assert all(len(line) <= 72 for line in src.splitlines())
+    (tmp_path / "MQK.cbl").write_text(src, encoding="utf-8")
+    rows = ak.draft_mq(tmp_path)["MQK.cbl"]["calls"]
+    assert sorted(ak.mq_call_keys(rows)) == [
+        "L11 MQOPEN dir=put q=APP.OUT",
+        "L15 MQGET dir=get q=<trigger> open=L7",
+        "L16 MQPUT dir=put q=APP.OUT open=L11",
+        "L7 MQOPEN dir=get q=<trigger>",
+    ]

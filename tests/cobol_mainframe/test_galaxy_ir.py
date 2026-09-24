@@ -918,3 +918,332 @@ def test_cics_file_lineage_joins_program_file_ops_to_the_csd_dataset(tmp_path, m
     assert nodef["definitions"] == []
     # Only TD queues map to an extrapartition dataset; a TS queue is CICS storage.
     assert [(e["name"], e["definitions"][0]["dsname"]) for e in ir.tdqueue_lineage()] == [("LOGQ", "PROD.LOG")]
+
+
+# ==============================================================================
+# #3446: embedded SQL statements (sql_statement_data) and the table-access matrix
+# ==============================================================================
+SQLPGM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SQLPGM.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           EXEC SQL DECLARE ACC-CURSOR CURSOR FOR
+                SELECT A FROM ACCOUNT
+           END-EXEC.
+       PROCEDURE DIVISION.
+           EXEC SQL OPEN ACC-CURSOR END-EXEC.
+           EXEC SQL FETCH ACC-CURSOR INTO :WS-A END-EXEC.
+           EXEC SQL UPDATE ACCOUNT SET A = :WS-A END-EXEC.
+           EXEC SQL INSERT INTO PROCTRAN (A) VALUES (:WS-A) END-EXEC.
+           GOBACK.
+"""
+
+
+@pytest.fixture(scope="module")
+def scanned_sql(tmp_path_factory):
+    base = tmp_path_factory.mktemp("galaxy_ir_sql")
+    repo = base / "sqlrepo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "SQLPGM.cbl").write_text(SQLPGM, encoding="utf-8")
+    return scan_to_db(repo, base / "scan")
+
+
+def test_sql_statements_load_and_the_access_matrix_joins_cursors(scanned_sql):
+    ir = load_galaxy_ir(scanned_sql)
+    verbs = [(s.verb, s.table, s.access, s.cursor) for s in ir.files["src/SQLPGM.cbl"].sql_statements]
+    assert verbs == [
+        ("DECLARE CURSOR", "ACCOUNT", "read", "ACC-CURSOR"),
+        ("OPEN", None, None, "ACC-CURSOR"),
+        ("FETCH", None, None, "ACC-CURSOR"),
+        ("UPDATE", "ACCOUNT", "update", None),
+        ("INSERT", "PROCTRAN", "insert", None),
+    ]
+    matrix = {r["table"]: (r["accesses"], r["via_cursor"]) for r in ir.sql_table_access()}
+    assert matrix == {"ACCOUNT": (["read", "update"], ["ACC-CURSOR"]), "PROCTRAN": (["insert"], [])}
+
+
+def test_a_pre_3446_db_loads_with_no_sql_statements(scanned_sql, tmp_path):
+    old = tmp_path / "old.db"
+    shutil.copy(scanned_sql, old)
+    with sqlite3.connect(old) as conn:
+        conn.execute("DROP TABLE sql_statement_data")
+    ir = load_galaxy_ir(old)
+    assert all(ef.sql_statements == [] for ef in ir.files.values())
+    assert ir.sql_table_access() == []
+
+
+# ---- #3449: CICS task control and the async task graph ------------------------
+ASYNC_CSD = """\
+ DEFINE TRANSACTION(OCR1) GROUP(BANK)
+        PROGRAM(CRDTAGY1)
+ DEFINE TRANSACTION(OCR2) GROUP(BANK)
+        PROGRAM(CRDTAGY2)
+ DEFINE TRANSACTION(OCRA) GROUP(BANK)
+        PROGRAM(BNKMENU)
+ DEFINE TRANSACTION(OCUP) GROUP(BANK)
+        PROGRAM(UPDWORK)
+"""
+
+PARENT = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PARENT.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-CC-CNT              PIC 9      VALUE 0.
+       01 WS-CHANNEL-NAME        PIC X(16)  VALUE SPACES.
+       01 WS-RUN-TRANSID         PIC X(4)   VALUE SPACES.
+       01 WS-CONT                PIC X(16)  VALUE SPACES.
+       01 WS-TKN                 PIC X(16).
+       01 WS-FETCH-TKN           PIC X(16).
+       PROCEDURE DIVISION.
+       000-MAIN.
+           MOVE 'CREDCHAN' TO WS-CHANNEL-NAME.
+           MOVE 'CIPA' TO WS-CONT.
+           PERFORM VARYING WS-CC-CNT FROM 1 BY 1 UNTIL WS-CC-CNT > 2
+              STRING 'OCR' DELIMITED BY SIZE,
+                      WS-CC-CNT DELIMITED BY SIZE
+                 INTO WS-RUN-TRANSID
+              END-STRING
+              EXEC CICS PUT CONTAINER(WS-CONT)
+                   FROM(WS-CC-CNT) CHANNEL(WS-CHANNEL-NAME)
+              END-EXEC
+              EXEC CICS RUN TRANSID(WS-RUN-TRANSID)
+                   CHANNEL(WS-CHANNEL-NAME) CHILD(WS-TKN)
+              END-EXEC
+           END-PERFORM.
+           EXEC CICS FETCH ANY(WS-FETCH-TKN) CHANNEL(WS-CHANNEL-NAME)
+           END-EXEC.
+           EXEC CICS START TRANSID('OCUP') FROM(WS-CONT)
+           END-EXEC.
+           EXEC CICS RETURN END-EXEC.
+"""
+
+
+def _child(pid: str, body: str = "           EXEC CICS RETURN END-EXEC.\n") -> str:
+    return (
+        "       IDENTIFICATION DIVISION.\n"
+        f"       PROGRAM-ID. {pid}.\n"
+        "       PROCEDURE DIVISION.\n"
+        "       000-MAIN.\n" + body
+    )
+
+
+@pytest.fixture(scope="module")
+def async_scanned(tmp_path_factory):
+    base = tmp_path_factory.mktemp("galaxy_ir_async")
+    repo = base / "bank"
+    files = {
+        "csd/BANK.csd": ASYNC_CSD,
+        "src/PARENT.cbl": PARENT,
+        "src/CRDTAGY1.cbl": _child("CRDTAGY1", "           EXEC CICS DELAY FOR SECONDS(1) END-EXEC.\n"),
+        "src/CRDTAGY2.cbl": _child("CRDTAGY2"),
+        "src/BNKMENU.cbl": _child("BNKMENU"),
+        "src/UPDWORK.cbl": _child("UPDWORK", "           EXEC CICS RETRIEVE INTO(WS-REQ) END-EXEC.\n"),
+    }
+    for rel, text in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return scan_to_db(repo, base / "scan")
+
+
+def test_task_rows_load_in_source_order(async_scanned):
+    ir = load_galaxy_ir(async_scanned)
+    rows = [(t.verb, t.name, t.resolution, t.candidates, t.token) for t in ir.files["src/PARENT.cbl"].cics_tasks]
+    assert rows == [
+        ("RUN", None, "pattern", "OCR[0-9]", "WS-TKN"),
+        ("FETCH ANY", None, None, None, "WS-FETCH-TKN"),
+        ("START", "OCUP", "literal", None, None),
+    ]
+    assert [(t.verb, t.timing) for t in ir.files["src/CRDTAGY1.cbl"].cics_tasks] == [("DELAY", "FOR SECONDS(1)")]
+
+
+def test_async_tasks_joins_children_containers_fetches_and_retrieves(async_scanned):
+    run, start = load_galaxy_ir(async_scanned).async_tasks()
+    assert (run["parent"], run["verb"]) == ("src/PARENT.cbl", "RUN")
+    # OCR[0-9] reaches OCR1 and OCR2 through the deck, never OCRA.
+    assert [(c["transid"], c["program"], c["resolves_to"]) for c in run["children"]] == [
+        ("OCR1", "CRDTAGY1", "src/CRDTAGY1.cbl"),
+        ("OCR2", "CRDTAGY2", "src/CRDTAGY2.cbl"),
+    ]
+    assert (run["channel"], run["containers"]) == ("CREDCHAN", ["CIPA"])
+    assert [(j["verb"], j["match"]) for j in run["joins"]] == [("FETCH ANY", "any")]
+    assert run["retrieves"] == []
+    assert [c["transid"] for c in start["children"]] == ["OCUP"]
+    assert [(r["file"], r["record"]) for r in start["retrieves"]] == [("src/UPDWORK.cbl", "WS-REQ")]
+    assert start["joins"] == []
+
+
+def test_a_pre_3449_db_loads_with_no_tasks(async_scanned, tmp_path):
+    old = tmp_path / "old.db"
+    shutil.copy(async_scanned, old)
+    with sqlite3.connect(old) as conn:
+        conn.execute("DROP TABLE cics_task_data")
+    ir = load_galaxy_ir(old)
+    assert all(ef.cics_tasks == [] for ef in ir.files.values())
+    assert ir.async_tasks() == []
+
+
+# ---- #3448: job submission through the internal reader ------------------------
+SUBMIT_CSD = """\
+ DEFINE TDQUEUE(JOBS) GROUP(DEMO)
+        TYPE(EXTRA) DDNAME(INREADER) RECORDSIZE(80)
+ DEFINE TDQUEUE(AUDT) GROUP(DEMO)
+        TYPE(EXTRA) DDNAME(AUDITLOG)
+ DEFINE TDQUEUE(SUBQ) GROUP(DEMO)
+        TYPE(EXTRA) DDNAME(SUBQDD)
+ DEFINE TRANSACTION(CR00) GROUP(DEMO)
+        PROGRAM(RPTPGM)
+"""
+
+
+def _writer(pid: str, queue: str, cards: str = "") -> str:
+    return (
+        "       IDENTIFICATION DIVISION.\n"
+        f"       PROGRAM-ID. {pid}.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01 JCL-RECORD PIC X(80).\n" + cards + "       PROCEDURE DIVISION.\n"
+        "       000-MAIN.\n"
+        f"           EXEC CICS WRITEQ TD QUEUE('{queue}') FROM(JCL-RECORD)\n"
+        "           END-EXEC.\n"
+        "           EXEC CICS RETURN END-EXEC.\n"
+    )
+
+
+RPT_CARDS = (
+    "       01 JOB-DATA.\n"
+    "          05 FILLER PIC X(80) VALUE \"//RPTJOB01 JOB 'RPT',CLASS=A\".\n"
+    '          05 FILLER PIC X(80) VALUE "//STEP10 EXEC PROC=RPTPROC".\n'
+)
+
+
+@pytest.fixture(scope="module")
+def submit_scanned(tmp_path_factory):
+    base = tmp_path_factory.mktemp("galaxy_ir_submit")
+    repo = base / "demo"
+    files = {
+        "csd/DEMO.csd": SUBMIT_CSD,
+        "cbl/RPTPGM.cbl": _writer("RPTPGM", "JOBS", RPT_CARDS),
+        "cbl/AUDPGM.cbl": _writer("AUDPGM", "AUDT"),
+        "cbl/SUBPGM.cbl": _writer("SUBPGM", "SUBQ"),
+        "proc/RPTPROC.prc": "//RPTPROC PROC\n//S1 EXEC PGM=IEFBR14\n",
+        "jcl/RPTPROC.jcl": "//RPTPROC JOB CLASS=A\n//S1 EXEC RPTPROC\n",
+        "jcl/REGION.jcl": "//REGION JOB CLASS=A\n//CICS EXEC PGM=DFHSIP\n//SUBQDD DD SYSOUT=(A,INTRDR)\n",
+        "jcl/SUBMIT1.jcl": (
+            "//SUBMIT1 JOB CLASS=A\n//STEP01 EXEC PGM=IEBGENER\n"
+            "//SYSUT1 DD DSN=MY.JCL(RPTPROC),DISP=SHR\n//SYSUT2 DD SYSOUT=(A,INTRDR)\n"
+        ),
+    }
+    for rel, text in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return scan_to_db(repo, base / "scan")
+
+
+def test_job_submissions_join_online_and_batch(submit_scanned):
+    subs = {(s["submitter"], s["via"]): s for s in load_galaxy_ir(submit_scanned).job_submissions()}
+    # AUDT is extrapartition too, but nothing says it reaches the internal reader.
+    assert sorted(subs) == [
+        ("cbl/RPTPGM.cbl", "tdq"),
+        ("cbl/SUBPGM.cbl", "tdq"),
+        ("jcl/REGION.jcl", "intrdr_dd"),
+        ("jcl/SUBMIT1.jcl", "intrdr_dd"),
+    ]
+    rpt = subs[("cbl/RPTPGM.cbl", "tdq")]
+    assert (rpt["queue"], rpt["ddname"], rpt["transactions"], rpt["jobs"]) == (
+        "JOBS",
+        "INREADER",
+        ["CR00"],
+        ["RPTJOB01"],
+    )
+    assert rpt["evidence"] == ["job_card"]
+    # PROC=RPTPROC prefers the procedure member over the same-named job.
+    (run,) = rpt["runs"]
+    assert (run["kind"], run["name"], run["resolves_to"]) == ("PROC", "RPTPROC", "proc/RPTPROC.prc")
+    sub = subs[("cbl/SUBPGM.cbl", "tdq")]
+    assert (sub["evidence"], sub["jobs"]) == (["region_jcl"], [])
+    batch = subs[("jcl/SUBMIT1.jcl", "intrdr_dd")]
+    assert (batch["step"], batch["dd"], batch["jobs"]) == ("STEP01", "SYSUT2", ["RPTPROC"])
+    assert batch["runs"][0]["resolves_to"] == "jcl/RPTPROC.jcl"
+    assert subs[("jcl/REGION.jcl", "intrdr_dd")]["jobs"] == []
+
+
+def test_a_pre_3448_db_loads_with_no_submissions(submit_scanned, tmp_path):
+    old = tmp_path / "old.db"
+    shutil.copy(submit_scanned, old)
+    with sqlite3.connect(old) as conn:
+        conn.execute("DROP TABLE job_submit_data")
+    ir = load_galaxy_ir(old)
+    assert all(ef.job_submits == [] for ef in ir.files.values())
+    assert ir.job_submissions() == []
+
+
+# ---- #3447: IBM MQ calls, endpoints and flows ---------------------------------
+def _mq_program(pid: str, body: str) -> str:
+    return (
+        "       IDENTIFICATION DIVISION.\n"
+        f"       PROGRAM-ID. {pid}.\n"
+        "       PROCEDURE DIVISION.\n"
+        "       000-MAIN.\n" + body + "           GOBACK.\n"
+    )
+
+
+MQ_PRODUCER = _mq_program(
+    "MQPROD",
+    "           MOVE 'APP.ORDERS' TO MQOD-OBJECTNAME\n"
+    "           COMPUTE MQ-OPTIONS = MQOO-OUTPUT\n"
+    "           CALL 'MQOPEN' USING HCONN MQ-OD MQ-OPTIONS HOBJ CC RC\n"
+    "           CALL 'MQPUT' USING HCONN HOBJ MD PMO LEN BUF CC RC\n",
+)
+MQ_CONSUMER = _mq_program(
+    "MQCONS",
+    "           MOVE 'APP.ORDERS' TO MQOD-OBJECTNAME\n"
+    "           COMPUTE MQ-OPTIONS = MQOO-INPUT-SHARED\n"
+    "           CALL 'MQOPEN' USING HCONN MQ-OD MQ-OPTIONS HOBJ CC RC\n"
+    "           CALL 'MQGET' USING HCONN HOBJ MD GMO LEN BUF DLEN CC RC\n"
+    "           MOVE MQMD-REPLYTOQ TO WS-REPLY\n"
+    "           MOVE WS-REPLY TO MQOD-OBJECTNAME\n"
+    "           CALL 'MQPUT1' USING HCONN MQ-OD MD PMO LEN BUF CC RC\n",
+)
+
+
+@pytest.fixture(scope="module")
+def mq_scanned(tmp_path_factory):
+    base = tmp_path_factory.mktemp("galaxy_ir_mq")
+    repo = base / "mq"
+    (repo / "cbl").mkdir(parents=True)
+    (repo / "cbl" / "MQPROD.cbl").write_text(MQ_PRODUCER, encoding="utf-8")
+    (repo / "cbl" / "MQCONS.cbl").write_text(MQ_CONSUMER, encoding="utf-8")
+    return scan_to_db(repo, base / "scan")
+
+
+def test_mq_calls_load_and_queues_pair_producers_with_consumers(mq_scanned):
+    ir = load_galaxy_ir(mq_scanned)
+    cons = [(q.verb, q.queue, q.resolution, q.open_line) for q in ir.files["cbl/MQCONS.cbl"].mq_calls]
+    assert cons == [
+        ("MQOPEN", "APP.ORDERS", "literal", None),
+        ("MQGET", "APP.ORDERS", "literal", 7),
+        ("MQPUT1", None, "reply_to", None),
+    ]
+    ends = {(e["file"], e["queue"], e["direction"]) for e in ir.mq_queues()}
+    assert ends == {
+        ("cbl/MQPROD.cbl", "APP.ORDERS", "put"),
+        ("cbl/MQCONS.cbl", "APP.ORDERS", "get"),
+        ("cbl/MQCONS.cbl", "<reply_to>", "put"),
+    }
+    assert ir.mq_flows() == [
+        {"queue": "APP.ORDERS", "producer": "cbl/MQPROD.cbl", "consumer": "cbl/MQCONS.cbl", "mode": "get"}
+    ]
+
+
+def test_a_pre_3447_db_loads_with_no_mq_calls(mq_scanned, tmp_path):
+    old = tmp_path / "old.db"
+    shutil.copy(mq_scanned, old)
+    with sqlite3.connect(old) as conn:
+        conn.execute("DROP TABLE mq_call_data")
+    ir = load_galaxy_ir(old)
+    assert all(ef.mq_calls == [] for ef in ir.files.values())
+    assert ir.mq_queues() == [] and ir.mq_flows() == []

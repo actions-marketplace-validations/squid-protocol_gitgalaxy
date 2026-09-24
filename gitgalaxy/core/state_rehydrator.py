@@ -545,6 +545,28 @@ class StateRehydrator:
                     },
                 )
 
+                # #3446: embedded SQL statements, aliased back to the payload keys.
+                # A pre-#3446 baseline has no table and restores nothing.
+                sql_statements_by_file = _restore_child_table(
+                    cursor,
+                    repo_name,
+                    baseline_hash,
+                    "sql_statement_data",
+                    'SELECT fd.file_path AS _fp, ss.stmt_ordinal AS ordinal, ss.verb, ss.table_name AS "table", '
+                    'ss.access, ss.cursor_name AS "cursor", ss.host_variables, ss.line_number AS line '
+                    "FROM sql_statement_data ss JOIN file_data fd ON ss.file_id = fd.id "
+                    "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY ss.id",
+                    lambda r: {
+                        "ordinal": int(r["ordinal"] or 0),
+                        "verb": r["verb"],
+                        "table": r["table"],
+                        "access": r["access"],
+                        "cursor": r["cursor"],
+                        "host_variables": r["host_variables"],
+                        "line": int(r["line"] or 0),
+                    },
+                )
+
                 # #3347: BMS screen-field layouts, aliased to the extractor's payload
                 # keys (field_name -> name, initial_value -> initial).
                 screen_fields_by_file = _restore_child_table(
@@ -638,6 +660,82 @@ class StateRehydrator:
                     },
                 )
 
+                # #3449: CICS task control, aliased back to the extractor's payload
+                # keys. A pre-#3449 baseline has no table and restores nothing.
+                cics_tasks_by_file = _restore_child_table(
+                    cursor,
+                    repo_name,
+                    baseline_hash,
+                    "cics_task_data",
+                    "SELECT fd.file_path AS _fp, ct.verb, ct.target_kind, ct.target_operand AS operand, "
+                    "ct.target_name AS name, ct.target_resolution AS resolution, ct.target_candidates AS candidates, "
+                    "ct.channel_operand, ct.channel_name AS channel, ct.token, ct.record_clause, "
+                    "ct.record_name AS record, ct.timing, ct.attributes, ct.line_number AS line "
+                    "FROM cics_task_data ct JOIN file_data fd ON ct.file_id = fd.id "
+                    "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY ct.id",
+                    lambda r: {
+                        "verb": r["verb"],
+                        "target_kind": r["target_kind"],
+                        "operand": r["operand"],
+                        "name": r["name"],
+                        "resolution": r["resolution"],
+                        "candidates": r["candidates"],
+                        "channel_operand": r["channel_operand"],
+                        "channel": r["channel"],
+                        "token": r["token"],
+                        "record_clause": r["record_clause"],
+                        "record": r["record"],
+                        "timing": r["timing"],
+                        "attributes": r["attributes"],
+                        "line": int(r["line"] or 0),
+                    },
+                )
+
+                # #3448: job-submission evidence, aliased back to the payload keys.
+                job_submits_by_file = _restore_child_table(
+                    cursor,
+                    repo_name,
+                    baseline_hash,
+                    "job_submit_data",
+                    "SELECT fd.file_path AS _fp, js.kind, js.step_name AS step, js.submit_name AS name, "
+                    "js.target_kind, js.target, js.line_number AS line "
+                    "FROM job_submit_data js JOIN file_data fd ON js.file_id = fd.id "
+                    "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY js.id",
+                    lambda r: {
+                        "kind": r["kind"],
+                        "step": r["step"],
+                        "name": r["name"],
+                        "target_kind": r["target_kind"],
+                        "target": r["target"],
+                        "line": int(r["line"] or 0),
+                    },
+                )
+
+                # #3447: IBM MQ calls, aliased back to the payload keys.
+                mq_calls_by_file = _restore_child_table(
+                    cursor,
+                    repo_name,
+                    baseline_hash,
+                    "mq_call_data",
+                    "SELECT fd.file_path AS _fp, mq.verb, mq.direction, mq.queue_operand AS operand, "
+                    "mq.queue_name AS queue, mq.queue_resolution AS resolution, mq.queue_candidates AS candidates, "
+                    "mq.handle, mq.open_line, mq.options, mq.line_number AS line "
+                    "FROM mq_call_data mq JOIN file_data fd ON mq.file_id = fd.id "
+                    "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY mq.id",
+                    lambda r: {
+                        "verb": r["verb"],
+                        "direction": r["direction"],
+                        "operand": r["operand"],
+                        "queue": r["queue"],
+                        "resolution": r["resolution"],
+                        "candidates": r["candidates"],
+                        "handle": r["handle"],
+                        "open_line": int(r["open_line"]) if r["open_line"] is not None else None,
+                        "options": r["options"],
+                        "line": int(r["line"] or 0),
+                    },
+                )
+
                 for rel_path, node in ram_state.items():
                     node["functions"] = funcs_by_file.get(rel_path, [])
                     node["classes"] = classes_by_file.get(rel_path, [])
@@ -646,9 +744,13 @@ class StateRehydrator:
                     node["record_layouts"] = records_by_file.get(rel_path, [])
                     node["transaction_defs"] = transactions_by_file.get(rel_path, [])
                     node["sql_tables"] = sql_tables_by_file.get(rel_path, [])
+                    node["sql_statements"] = sql_statements_by_file.get(rel_path, [])
                     node["screen_fields"] = screen_fields_by_file.get(rel_path, [])
                     node["csd_resources"] = csd_resources_by_file.get(rel_path, [])
                     node["cics_resources"] = cics_by_file.get(rel_path, [])
+                    node["cics_tasks"] = cics_tasks_by_file.get(rel_path, [])
+                    node["job_submits"] = job_submits_by_file.get(rel_path, [])
+                    node["mq_calls"] = mq_calls_by_file.get(rel_path, [])
             except sqlite3.Error as fc_err:
                 print(f"⚠️ Could not rehydrate functions/classes (structure counts may drift): {fc_err}")
 

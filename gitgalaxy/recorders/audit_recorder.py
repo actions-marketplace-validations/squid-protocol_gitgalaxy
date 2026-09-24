@@ -194,6 +194,21 @@ class AuditRecorder:
                 }
                 for c in sql_tables
             ]
+        # #3446: embedded SQL statements, mirroring sql_statement_data.
+        sql_statements = file_data.get("sql_statements") or []
+        if sql_statements:
+            block["SQL Statements"] = [
+                {
+                    "Statement": s.get("ordinal"),
+                    "Verb": s.get("verb"),
+                    "Table": s.get("table"),
+                    "Access": s.get("access"),
+                    "Cursor": s.get("cursor"),
+                    "Host Variables": s.get("host_variables"),
+                    "Line": s.get("line", 0),
+                }
+                for s in sql_statements
+            ]
         screen = file_data.get("screen_fields") or []
         if screen:
             # #3347: BMS mapset/map/field rows, mirroring screen_field_data.
@@ -265,6 +280,61 @@ class AuditRecorder:
                     "Line": op.get("line", 0),
                 }
                 for op in cics
+            ]
+        tasks = file_data.get("cics_tasks") or []
+        if tasks:
+            # #3449: CICS task control (RUN/START/FETCH/RETRIEVE/DELAY/ENQ ...),
+            # mirroring cics_task_data.
+            block["CICS Tasks"] = [
+                {
+                    "Verb": t.get("verb"),
+                    "Target Kind": t.get("target_kind"),
+                    "Operand": t.get("operand"),
+                    "Name": t.get("name"),
+                    "Resolution": t.get("resolution"),
+                    "Candidates": t.get("candidates"),
+                    "Channel Operand": t.get("channel_operand"),
+                    "Channel": t.get("channel"),
+                    "Token": t.get("token"),
+                    "Record Clause": t.get("record_clause"),
+                    "Record": t.get("record"),
+                    "Timing": t.get("timing"),
+                    "Attributes": t.get("attributes"),
+                    "Line": t.get("line", 0),
+                }
+                for t in tasks
+            ]
+        submits = file_data.get("job_submits") or []
+        if submits:
+            # #3448: job-submission evidence, mirroring job_submit_data.
+            block["Job Submission"] = [
+                {
+                    "Kind": j.get("kind"),
+                    "Step": j.get("step"),
+                    "Name": j.get("name"),
+                    "Target Kind": j.get("target_kind"),
+                    "Target": j.get("target"),
+                    "Line": j.get("line", 0),
+                }
+                for j in submits
+            ]
+        mq = file_data.get("mq_calls") or []
+        if mq:
+            # #3447: IBM MQ calls, mirroring mq_call_data.
+            block["MQ Calls"] = [
+                {
+                    "Verb": q.get("verb"),
+                    "Direction": q.get("direction"),
+                    "Operand": q.get("operand"),
+                    "Queue": q.get("queue"),
+                    "Resolution": q.get("resolution"),
+                    "Candidates": q.get("candidates"),
+                    "Handle": q.get("handle"),
+                    "Open Line": q.get("open_line"),
+                    "Options": q.get("options"),
+                    "Line": q.get("line", 0),
+                }
+                for q in mq
             ]
         return block
 

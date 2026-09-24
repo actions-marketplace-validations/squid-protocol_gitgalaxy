@@ -489,6 +489,12 @@ class RecordKeeper:
         csd_resource_data.
         CICS FILE/MAP/QUEUE/CONTAINER/CHANNEL operations (#3351-#3354) ride on
         each file's own `cics_resources` and become cics_resource_data.
+        CICS task control (#3449: RUN/START/FETCH/RETRIEVE/DELAY/ENQ ...) rides
+        on each file's own `cics_tasks` and becomes cics_task_data.
+        Job-submission evidence (#3448: JCL card literals in COBOL, INTRDR DDs in
+        JCL) rides on each file's own `job_submits` and becomes job_submit_data.
+        IBM MQ calls (#3447) ride on each file's own `mq_calls` and become
+        mq_call_data.
 
         `transactions` (#3211-followup) is the CICS transaction map:
         `invocation_resolver.resolve_transactions()`'s resolved records, persisted
@@ -1086,6 +1092,116 @@ class RecordKeeper:
             "CREATE INDEX IF NOT EXISTS idx_cics_resource_snapshot ON cics_resource_data(repo_name, commit_hash);"
         )
 
+        # #3449: CICS task control (core/cics_tasks.py) -- how tasks relate: a
+        # parent RUNs / STARTs a child transaction, FETCHes or FREEs a child,
+        # RETRIEVEs the data a START passed, CANCELs, DELAYs, POSTs, WAITs, and
+        # ENQ/DEQ-serialises on a named resource. One row per command.
+        #   verb              -- RUN | START | START ATTACH | FETCH CHILD | FETCH ANY |
+        #                        FREE CHILD | RETRIEVE | CANCEL | DELAY | POST |
+        #                        WAIT EVENT | WAIT EXTERNAL | WAITCICS | ENQ | DEQ
+        #   target_kind       -- TRANSID (RUN/START/CANCEL) | RESOURCE (ENQ/DEQ)
+        #   target_operand    -- that operand as written
+        #   target_name       -- its literal / VALUE / single MOVEd literal / the
+        #                        one literal a STRING builds; NULL otherwise
+        #   target_resolution -- literal | value | move | string | pattern |
+        #                        ambiguous | unresolved | expression
+        #   target_candidates -- comma-joined MOVEd literals and STRING-built
+        #                        fnmatch patterns (`OCR[0-9]`) when not one name
+        #   channel_operand   -- CHANNEL as written (passed by RUN/START, returned
+        #                        by FETCH), channel_name resolved
+        #   token             -- the CHILD / ANY / REQID data-name joining a spawn to
+        #                        its FETCH / FREE / CANCEL
+        #   record_clause     -- FROM | INTO | SET, and record_name its operand
+        #   timing            -- INTERVAL / TIME / AFTER / FOR / UNTIL + units, as written
+        #   attributes        -- every other kept option (COMPSTATUS, ABCODE, LENGTH,
+        #                        NOSUSPEND, ...)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cics_task_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT,
+                commit_hash TEXT,
+                file_id INTEGER,
+                verb TEXT,
+                target_kind TEXT,
+                target_operand TEXT,
+                target_name TEXT,
+                target_resolution TEXT,
+                target_candidates TEXT,
+                channel_operand TEXT,
+                channel_name TEXT,
+                token TEXT,
+                record_clause TEXT,
+                record_name TEXT,
+                timing TEXT,
+                attributes TEXT,
+                line_number INTEGER,
+                FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_cics_task_file_id ON cics_task_data(file_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_cics_task_target ON cics_task_data(verb, target_name);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_cics_task_snapshot ON cics_task_data(repo_name, commit_hash);")
+
+        # #3448: job submission through the internal reader (core/job_submits.py).
+        #   kind         -- JOB (a COBOL literal `//NAME JOB` card) | EXEC (a COBOL
+        #                   literal `//STEP EXEC PROC=|PGM=` card) | INTRDR (a JCL
+        #                   DD routed to SYSOUT=(x,INTRDR))
+        #   step_name    -- the EXEC card's / INTRDR DD's step
+        #   submit_name  -- the JOB card's job name, or the INTRDR DD's ddname
+        #   target_kind  -- PROC | PGM (EXEC) | DSN (INTRDR: the step's SYSUT1)
+        #   target       -- that procedure / program / dataset
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS job_submit_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT,
+                commit_hash TEXT,
+                file_id INTEGER,
+                kind TEXT,
+                step_name TEXT,
+                submit_name TEXT,
+                target_kind TEXT,
+                target TEXT,
+                line_number INTEGER,
+                FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_job_submit_file_id ON job_submit_data(file_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_job_submit_snapshot ON job_submit_data(repo_name, commit_hash);")
+
+        # #3447: IBM MQ calls (core/mq_calls.py), one row per CALL 'MQxxx'.
+        #   verb              -- MQOPEN | MQPUT | MQPUT1 | MQGET | MQCLOSE | MQINQ | ...
+        #   direction         -- get | browse | put | inquire | set (open options; PUT/GET)
+        #   queue_operand     -- what was MOVEd to the descriptor's OBJECTNAME
+        #   queue_name        -- that operand resolved; NULL unless one literal
+        #   queue_resolution  -- literal | value | move | trigger (MQTM-QNAME) |
+        #                        reply_to (MQMD-REPLYTOQ) | ambiguous | unresolved
+        #   queue_candidates  -- comma-joined values when `ambiguous`
+        #   handle            -- the object handle (MQOPEN's returned, or the one
+        #                        a PUT/GET/CLOSE passes); open_line its MQOPEN
+        #   options           -- the MQOO-/MQPMO-/MQGMO- option words in effect
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mq_call_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT,
+                commit_hash TEXT,
+                file_id INTEGER,
+                verb TEXT,
+                direction TEXT,
+                queue_operand TEXT,
+                queue_name TEXT,
+                queue_resolution TEXT,
+                queue_candidates TEXT,
+                handle TEXT,
+                open_line INTEGER,
+                options TEXT,
+                line_number INTEGER,
+                FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_mq_call_file_id ON mq_call_data(file_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_mq_call_queue ON mq_call_data(queue_name);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_mq_call_snapshot ON mq_call_data(repo_name, commit_hash);")
+
         # #3211-followup: the CICS transaction map -- which 4-char transaction id a
         # user submits and which program CICS routes it to. Extracted from the CSD
         # `DEFINE TRANSACTION(TTTT) ... PROGRAM(PPPP)` records (and PROGRAM
@@ -1215,6 +1331,38 @@ class RecordKeeper:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sql_table_file_id ON sql_table_data(file_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sql_table_name ON sql_table_data(table_name);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sql_table_snapshot ON sql_table_data(repo_name, commit_hash);")
+
+        # #3446: embedded SQL statements -- which tables each program reads and
+        # writes (db2_sql_statements). One row per (statement, table); a
+        # statement naming no table (OPEN/FETCH/CLOSE a cursor, COMMIT, CALL)
+        # has one row with table_name NULL.
+        #   stmt_ordinal   -- the statement's 1-based position in its file
+        #   verb           -- SELECT / INSERT / UPDATE / DELETE / MERGE / LOCK /
+        #                     DECLARE CURSOR / OPEN / FETCH / CLOSE / COMMIT / ...
+        #   access         -- read / insert / update / delete / merge / lock
+        #   cursor_name    -- declared, used, or `WHERE CURRENT OF`
+        #   host_variables -- distinct `:NAME`s in order, comma-joined
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sql_statement_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT,
+                commit_hash TEXT,
+                file_id INTEGER,
+                stmt_ordinal INTEGER,
+                verb TEXT,
+                table_name TEXT,
+                access TEXT,
+                cursor_name TEXT,
+                host_variables TEXT,
+                line_number INTEGER,
+                FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sql_statement_file_id ON sql_statement_data(file_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sql_statement_table ON sql_statement_data(table_name);")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sql_statement_snapshot ON sql_statement_data(repo_name, commit_hash);"
+        )
 
         # #3313 step 3: project-local idiom wrappers -- a short function or a
         # function-like `#define` alias that hides a literal-vocabulary rule
@@ -2499,6 +2647,104 @@ class RecordKeeper:
             ),
         )
 
+        # #3449: CICS task control -- per-file, like cics_resource_data.
+        _insert_per_file_child(
+            cursor,
+            parsed_files,
+            path_to_file_id,
+            repo_name,
+            commit_hash,
+            "cics_task_data",
+            (
+                "verb",
+                "target_kind",
+                "target_operand",
+                "target_name",
+                "target_resolution",
+                "target_candidates",
+                "channel_operand",
+                "channel_name",
+                "token",
+                "record_clause",
+                "record_name",
+                "timing",
+                "attributes",
+                "line_number",
+            ),
+            "cics_tasks",
+            lambda t: (
+                t.get("verb"),
+                t.get("target_kind"),
+                t.get("operand"),
+                t.get("name"),
+                t.get("resolution"),
+                t.get("candidates"),
+                t.get("channel_operand"),
+                t.get("channel"),
+                t.get("token"),
+                t.get("record_clause"),
+                t.get("record"),
+                t.get("timing"),
+                t.get("attributes"),
+                int(t.get("line", 0) or 0),
+            ),
+        )
+
+        # #3448: job-submission evidence -- per-file, like cics_task_data.
+        _insert_per_file_child(
+            cursor,
+            parsed_files,
+            path_to_file_id,
+            repo_name,
+            commit_hash,
+            "job_submit_data",
+            ("kind", "step_name", "submit_name", "target_kind", "target", "line_number"),
+            "job_submits",
+            lambda j: (
+                j.get("kind"),
+                j.get("step"),
+                j.get("name"),
+                j.get("target_kind"),
+                j.get("target"),
+                int(j.get("line", 0) or 0),
+            ),
+        )
+
+        # #3447: IBM MQ calls -- per-file, like job_submit_data.
+        _insert_per_file_child(
+            cursor,
+            parsed_files,
+            path_to_file_id,
+            repo_name,
+            commit_hash,
+            "mq_call_data",
+            (
+                "verb",
+                "direction",
+                "queue_operand",
+                "queue_name",
+                "queue_resolution",
+                "queue_candidates",
+                "handle",
+                "open_line",
+                "options",
+                "line_number",
+            ),
+            "mq_calls",
+            lambda q: (
+                q.get("verb"),
+                q.get("direction"),
+                q.get("operand"),
+                q.get("queue"),
+                q.get("resolution"),
+                q.get("candidates"),
+                q.get("handle"),
+                int(q["open_line"]) if q.get("open_line") is not None else None,
+                q.get("options"),
+                int(q.get("line", 0) or 0),
+            ),
+        )
+
         # #3211-followup: the transaction map, resolved cross-file (transid ->
         # program -> the program's file) like call_sites, so it is passed in
         # rather than read per-file. A definition whose deck has no file_data row
@@ -2566,6 +2812,27 @@ class RecordKeeper:
                 1 if c.get("nullable", True) else 0,
                 c.get("attributes"),
                 int(c.get("line", 0) or 0),
+            ),
+        )
+
+        # #3446: embedded SQL statements -- per-file, like sql_table_data.
+        _insert_per_file_child(
+            cursor,
+            parsed_files,
+            path_to_file_id,
+            repo_name,
+            commit_hash,
+            "sql_statement_data",
+            ("stmt_ordinal", "verb", "table_name", "access", "cursor_name", "host_variables", "line_number"),
+            "sql_statements",
+            lambda s: (
+                int(s.get("ordinal", 0) or 0),
+                s.get("verb"),
+                s.get("table"),
+                s.get("access"),
+                s.get("cursor"),
+                s.get("host_variables"),
+                int(s.get("line", 0) or 0),
             ),
         )
 
