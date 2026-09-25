@@ -425,6 +425,14 @@ def main():
                 print(f"  [!] Failed to generate job from {slice_file.name}: {e}")
 
     # 5. Generate Master CI/CD Audit Report
+    # #3650: the traceability manifest, once every service and controller has been generated
+    if forges is not None:
+        version = next((sk.get("skeleton_version") for sk in forges.skeletons.values()), None)
+        manifest = forges.trace.as_dict({"clean_room": clean_room_path.name, "skeleton_version": version})
+        (java_out_dir / "traceability.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
     audit_report_path = java_out_dir / "java_migration_audit.txt"
     with open(audit_report_path, "w", encoding="utf-8") as f:
         f.write("==========================================================\n")
