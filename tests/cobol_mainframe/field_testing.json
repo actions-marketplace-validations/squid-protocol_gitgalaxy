@@ -611,6 +611,18 @@
     "PL/I data moves": {
       "introduced": "#3542",
       "development_rounds": 6
+    },
+    "copybook layouts": {
+      "introduced": "#3672",
+      "development_rounds": 6
+    },
+    "CICS RIDFLD": {
+      "introduced": "#3672",
+      "development_rounds": 6
+    },
+    "refmod spans": {
+      "introduced": "#3676",
+      "development_rounds": 6
     }
   }
 }

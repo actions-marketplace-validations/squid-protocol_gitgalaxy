@@ -148,6 +148,15 @@
           "forge": null,
           "truth": "cross_verified"
         },
+        "CICS RIDFLD": {
+          "engine": {
+            "got": 46,
+            "tp": 46,
+            "truth": 46
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "CICS resources": {
           "engine": {
             "got": 107,
@@ -339,6 +348,15 @@
           },
           "truth": "cross_verified"
         },
+        "copybook layouts": {
+          "engine": {
+            "got": 2131,
+            "tp": 2131,
+            "truth": 2131
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "copybook paths": {
           "engine": {
             "got": 253,
@@ -500,6 +518,15 @@
             "truth": 1839
           },
           "truth": "sample_verified"
+        },
+        "refmod spans": {
+          "engine": {
+            "got": 174,
+            "tp": 174,
+            "truth": 174
+          },
+          "forge": null,
+          "truth": "draft"
         },
         "symbolic maps": {
           "engine": {
@@ -1023,6 +1050,15 @@
           "forge": null,
           "truth": "cross_verified"
         },
+        "CICS RIDFLD": {
+          "engine": {
+            "got": 17,
+            "tp": 17,
+            "truth": 17
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "CICS resources": {
           "engine": {
             "got": 75,
@@ -1198,6 +1234,15 @@
           },
           "truth": "cross_verified"
         },
+        "copybook layouts": {
+          "engine": {
+            "got": 389,
+            "tp": 389,
+            "truth": 389
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "copybook paths": {
           "engine": {
             "got": 114,
@@ -1352,6 +1397,15 @@
           },
           "truth": "sample_verified"
         },
+        "refmod spans": {
+          "engine": {
+            "got": 95,
+            "tp": 95,
+            "truth": 95
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "symbolic maps": {
           "engine": {
             "got": 1320,
@@ -1481,6 +1535,15 @@
         },
         "CALL USING": {
           "engine": null,
+          "forge": null,
+          "truth": "draft"
+        },
+        "CICS RIDFLD": {
+          "engine": {
+            "got": 7,
+            "tp": 7,
+            "truth": 7
+          },
           "forge": null,
           "truth": "draft"
         },
@@ -1651,6 +1714,15 @@
           },
           "truth": "cross_verified"
         },
+        "copybook layouts": {
+          "engine": {
+            "got": 188,
+            "tp": 188,
+            "truth": 188
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "copybook paths": {
           "engine": {
             "got": 35,
@@ -1801,6 +1873,15 @@
           },
           "truth": "sample_verified"
         },
+        "refmod spans": {
+          "engine": {
+            "got": 61,
+            "tp": 61,
+            "truth": 61
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "symbolic maps": {
           "engine": {
             "got": 432,
@@ -1884,6 +1965,15 @@
           },
           "forge": null,
           "truth": "cross_verified"
+        },
+        "CICS RIDFLD": {
+          "engine": {
+            "got": 689,
+            "tp": 689,
+            "truth": 689
+          },
+          "forge": null,
+          "truth": "draft"
         },
         "CICS resources": {
           "engine": {
@@ -2052,6 +2142,11 @@
           },
           "truth": "cross_verified"
         },
+        "copybook layouts": {
+          "engine": null,
+          "forge": null,
+          "truth": "draft"
+        },
         "copybook paths": {
           "engine": {
             "got": 0,
@@ -2206,6 +2301,11 @@
           },
           "truth": "sample_verified"
         },
+        "refmod spans": {
+          "engine": null,
+          "forge": null,
+          "truth": "draft"
+        },
         "symbolic maps": {
           "engine": null,
           "forge": null,
@@ -2265,6 +2365,15 @@
           },
           "forge": null,
           "truth": "cross_verified"
+        },
+        "CICS RIDFLD": {
+          "engine": {
+            "got": 22,
+            "tp": 22,
+            "truth": 22
+          },
+          "forge": null,
+          "truth": "draft"
         },
         "CICS resources": {
           "engine": {
@@ -2425,6 +2534,15 @@
           },
           "truth": "cross_verified"
         },
+        "copybook layouts": {
+          "engine": {
+            "got": 17,
+            "tp": 17,
+            "truth": 17
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "copybook paths": {
           "engine": {
             "got": 6,
@@ -2575,6 +2693,15 @@
           },
           "truth": "sample_verified"
         },
+        "refmod spans": {
+          "engine": {
+            "got": 42,
+            "tp": 42,
+            "truth": 42
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "symbolic maps": {
           "engine": null,
           "forge": null,
@@ -2634,6 +2761,11 @@
           },
           "forge": null,
           "truth": "cross_verified"
+        },
+        "CICS RIDFLD": {
+          "engine": null,
+          "forge": null,
+          "truth": "draft"
         },
         "CICS resources": {
           "engine": null,
@@ -2789,6 +2921,15 @@
             "truth": 0
           },
           "truth": "cross_verified"
+        },
+        "copybook layouts": {
+          "engine": {
+            "got": 34,
+            "tp": 34,
+            "truth": 34
+          },
+          "forge": null,
+          "truth": "draft"
         },
         "copybook paths": {
           "engine": {
@@ -2947,6 +3088,15 @@
             "truth": 163
           },
           "truth": "sample_verified"
+        },
+        "refmod spans": {
+          "engine": {
+            "got": 1,
+            "tp": 1,
+            "truth": 1
+          },
+          "forge": null,
+          "truth": "draft"
         },
         "symbolic maps": {
           "engine": null,
