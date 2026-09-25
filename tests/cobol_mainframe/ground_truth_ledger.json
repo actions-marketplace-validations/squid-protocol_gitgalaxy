@@ -148,6 +148,15 @@
           "forge": null,
           "truth": "cross_verified"
         },
+        "CICS RIDFLD": {
+          "engine": {
+            "got": 46,
+            "tp": 46,
+            "truth": 46
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "CICS resources": {
           "engine": {
             "got": 107,
@@ -338,6 +347,15 @@
             "truth": 29
           },
           "truth": "cross_verified"
+        },
+        "copybook layouts": {
+          "engine": {
+            "got": 2131,
+            "tp": 2131,
+            "truth": 2131
+          },
+          "forge": null,
+          "truth": "draft"
         },
         "copybook paths": {
           "engine": {
@@ -1023,6 +1041,15 @@
           "forge": null,
           "truth": "cross_verified"
         },
+        "CICS RIDFLD": {
+          "engine": {
+            "got": 17,
+            "tp": 17,
+            "truth": 17
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "CICS resources": {
           "engine": {
             "got": 75,
@@ -1197,6 +1224,15 @@
             "truth": 42
           },
           "truth": "cross_verified"
+        },
+        "copybook layouts": {
+          "engine": {
+            "got": 389,
+            "tp": 389,
+            "truth": 389
+          },
+          "forge": null,
+          "truth": "draft"
         },
         "copybook paths": {
           "engine": {
@@ -1484,6 +1520,15 @@
           "forge": null,
           "truth": "draft"
         },
+        "CICS RIDFLD": {
+          "engine": {
+            "got": 7,
+            "tp": 7,
+            "truth": 7
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "CICS resources": {
           "engine": {
             "got": 94,
@@ -1650,6 +1695,15 @@
             "truth": 39
           },
           "truth": "cross_verified"
+        },
+        "copybook layouts": {
+          "engine": {
+            "got": 188,
+            "tp": 188,
+            "truth": 188
+          },
+          "forge": null,
+          "truth": "draft"
         },
         "copybook paths": {
           "engine": {
@@ -1885,6 +1939,15 @@
           "forge": null,
           "truth": "cross_verified"
         },
+        "CICS RIDFLD": {
+          "engine": {
+            "got": 689,
+            "tp": 689,
+            "truth": 689
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "CICS resources": {
           "engine": {
             "got": 3251,
@@ -2051,6 +2114,11 @@
             "truth": 0
           },
           "truth": "cross_verified"
+        },
+        "copybook layouts": {
+          "engine": null,
+          "forge": null,
+          "truth": "draft"
         },
         "copybook paths": {
           "engine": {
@@ -2266,6 +2334,15 @@
           "forge": null,
           "truth": "cross_verified"
         },
+        "CICS RIDFLD": {
+          "engine": {
+            "got": 22,
+            "tp": 22,
+            "truth": 22
+          },
+          "forge": null,
+          "truth": "draft"
+        },
         "CICS resources": {
           "engine": {
             "got": 61,
@@ -2424,6 +2501,15 @@
             "truth": 5
           },
           "truth": "cross_verified"
+        },
+        "copybook layouts": {
+          "engine": {
+            "got": 17,
+            "tp": 17,
+            "truth": 17
+          },
+          "forge": null,
+          "truth": "draft"
         },
         "copybook paths": {
           "engine": {
@@ -2635,6 +2721,11 @@
           "forge": null,
           "truth": "cross_verified"
         },
+        "CICS RIDFLD": {
+          "engine": null,
+          "forge": null,
+          "truth": "draft"
+        },
         "CICS resources": {
           "engine": null,
           "forge": null,
@@ -2789,6 +2880,15 @@
             "truth": 0
           },
           "truth": "cross_verified"
+        },
+        "copybook layouts": {
+          "engine": {
+            "got": 34,
+            "tp": 34,
+            "truth": 34
+          },
+          "forge": null,
+          "truth": "draft"
         },
         "copybook paths": {
           "engine": {
