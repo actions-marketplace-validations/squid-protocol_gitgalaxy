@@ -77,6 +77,7 @@ parser it grades.
 
 import argparse
 import json
+import random
 import re
 import sys
 from pathlib import Path
@@ -274,19 +275,62 @@ class HlasmSource(Source):
                 self.dc.setdefault(dc.group(1), dc.group(2).strip())
             lines.extend(group)
         super().__init__(path, lines)
-        self.proc_start = 0  # no divisions: every statement is procedure code
+
+    def _procedure_start(self) -> Optional[int]:
+        return 0  # no divisions: every statement is procedure code
+
+    def program_id(self) -> Optional[str]:
+        return None
+
+
+class PliSource(Source):
+    """#3491: a PL/I source as a `Source` for the CICS readers. This tool's own
+    reading: `/* */` comments blanked (newlines kept), columns 73-80 sequence fields
+    dropped (`_pli_source_lines`), and ` END-EXEC` written before the `;` that ends
+    each `EXEC CICS` (outside quotes), so no line moves. Operands name the
+    `INIT('...')` of their DCL (a qualified reference: of its last field)."""
+
+    def __init__(self, path: Path):
+        raw = path.read_text(encoding="utf-8", errors="ignore")
+        text = re.sub(r"/\*.*?(?:\*/|\Z)", lambda m: re.sub(r"[^\n]", " ", m.group(0)), raw, flags=re.S)
+        text = _pli_source_lines(text).upper()
+        out, pos = [], 0
+        for m in re.finditer(r"(?<![\w@#$])EXEC\s+CICS(?![\w@#$])", text):
+            if m.start() < pos:
+                continue
+            quoted, i = False, m.end()
+            while i < len(text) and (quoted or text[i] != ";"):
+                quoted ^= text[i] == "'"
+                i += 1
+            if i < len(text):
+                out.append(text[pos:i] + " END-EXEC")
+                pos = i
+        out.append(text[pos:])
+        self.inits = pli_char_inits(raw)
+        super().__init__(path, list(enumerate("".join(out).split("\n"), 1)))
+
+    def _procedure_start(self) -> Optional[int]:
+        return 0  # no divisions: every statement is procedure code
 
     def program_id(self) -> Optional[str]:
         return None
 
 
 def _key_source(path: Path) -> Source:
-    """The reading a CICS reader takes of `path`: HLASM or COBOL."""
-    return HlasmSource(path) if path.suffix.lower() in HLASM_EXTS else Source(path)
+    """The reading a CICS reader takes of `path`: HLASM, PL/I or COBOL."""
+    suffix = path.suffix.lower()
+    if suffix in HLASM_EXTS:
+        return HlasmSource(path)
+    return PliSource(path) if suffix in PLI_EXTS else Source(path)
+
+
+PLI_NAME = r"[\w@#$]+(?:\.[\w@#$]+)*"
 
 
 def _operand_name(src: Source) -> str:
     """The identifier syntax an operand may be written in for `src`'s language."""
+    if isinstance(src, PliSource):
+        return PLI_NAME
     return HLASM_NAME if isinstance(src, HlasmSource) else NAME
 
 
@@ -917,6 +961,18 @@ def _pli_unlabelled(stmt: list) -> tuple[list[str], list]:
     return labels, stmt[i:]
 
 
+def pli_char_inits(text: str) -> dict[str, str]:
+    """Name -> the character string a CHARACTER item's DCL INITs it to (first wins).
+    Only a plain character string: `'0'B` is a bit string, `(78)' '` a repetition."""
+    out: dict[str, str] = {}
+    for item in pli_data_items(text):
+        attrs = item.get("attributes") or ""
+        m = re.search(r"\bINIT(?:IAL)?\s*\(\s*'([^']*)'\s*\)", attrs, re.I)
+        if m and m.group(1).strip() and re.match(r"CHAR", attrs, re.I):
+            out.setdefault(item["name"].upper(), m.group(1).strip())
+    return out
+
+
 def pli_procedures(text: str) -> list[str]:
     """Every PROC / ENTRY label in source order (the first is the outermost)."""
     out = []
@@ -944,11 +1000,7 @@ def pli_call_rows(text: str) -> list[dict[str, Any]]:
     the repository-wide nested-procedure rule."""
     tokens = _pli_token_stream(_pli_source_lines(text))
     local = set(pli_procedures(text))
-    inits = {}
-    for item in pli_data_items(text):
-        m = re.search(r"\bINIT(?:IAL)?\s*\(\s*'([^']*)'", item.get("attributes") or "", re.I)
-        if m and m.group(1).strip():
-            inits.setdefault(item["name"].upper(), m.group(1).strip())
+    inits = pli_char_inits(text)
     rows = []
     for stmt in _pli_statements(tokens):
         words = [t[1] if t[0] != "string" else None for t in stmt]
@@ -1033,6 +1085,208 @@ def draft_pli_calls(repo: Path) -> dict[str, dict[str, Any]]:
         rows = [r for r in pli_call_rows(text) if not (r["verb"] == "CALL" and r["target"] in included)]
         out[rel] = {"calls": rows, "pli_calls_validated": False, "verification": {"status": "draft", "notes": []}}
     return out
+
+
+# ==============================================================================
+# PL/I data moves (#3491 part 3)
+# ==============================================================================
+# This tool's own reading of the PL/I assignment statement, over the PL/I token
+# stream above (comments dropped, sequence fields removed, single-character
+# punctuation; a word starting with a digit is a number). The contract is
+# core/pli_data_moves.py's, none of its code: `t1, t2 = expr;` gives one row per
+# data item of expr for each target (each item once, in order); an item-free
+# expr gives one `literal` row (a single, optionally signed literal) or one
+# `function` row (a lone built-in call), else none; `A = B, BY NAME;` is
+# corresponding; `X op= e` makes X a source. A data item is a qualified name
+# without subscripts (`A.B(I).C` -> A.B.C; `P->X` -> X); a built-in's arguments
+# are scanned, the built-in is no source; DFHRESP(x) / DFHVALUE(x) are
+# cics_constant. SUBSTR(A, ...) / UNSPEC(A) / ... as a target is A, target_refmod.
+# A statement starting with a keyword is an assignment only when `=` follows its
+# first word; the action is read after labels, IF ... THEN, ELSE, OTHERWISE,
+# WHEN(...) and an ON condition (`ON ENDFILE(F) EOF = '1'B;`). A call to a user
+# function reads as an array element (its name the source): only a built-in is
+# known to be a function. DSF is too large to key in full (~108k rows): `pli_moves` keys a
+# seeded sample of its PL/I files (every PL/I file of a smaller corpus).
+_PLI_MV_KEYWORDS = set(
+    "IF DO DCL DECLARE CALL RETURN GO GOTO END SELECT WHEN OTHERWISE ON REVERT SIGNAL OPEN CLOSE READ WRITE "
+    "REWRITE DELETE LOCATE GET PUT ALLOCATE ALLOC FREE LEAVE ITERATE STOP EXIT EXEC DISPLAY FETCH RELEASE WAIT "
+    "FORMAT PROC PROCEDURE BEGIN ENTRY DEFINE PACKAGE ELSE THEN".split()
+)
+_PLI_BUILTINS = set(
+    "ABS ACOS ADD ADDR ADDRDATA ALL ALLOCATION ALLOCN ANY ASIN ATAN ATAND ATANH BIN BINARY BIT BOOL CEIL CENTER "
+    "CENTRE CHAR CHARACTER COLLATE COMPLEX COPY COS COSD COSH COUNT CURRENTSTORAGE CSTG DATAFIELD DATE DATETIME "
+    "DAYS DAYSTODATE DEC DECIMAL DIM DIVIDE EMPTY ERF EXP FIXED FLOAT FLOOR HBOUND HEX HIGH IMAG INDEX LBOUND LEFT "
+    "LENGTH LINENO LOG LOG10 LOG2 LOW LOWERCASE LOWER2 MAX MIN MOD MULTIPLY NULL OFFSET ONCHAR ONCODE ONCOUNT ONFILE "
+    "ONKEY ONLOC ONSOURCE PLIRETV POINTER PTR POLY PRECISION PREC PROD REAL REM REPEAT REVERSE RIGHT ROUND SEARCH "
+    "SIGN SIN SIND SINH SIZE SQRT STATUS STORAGE STG STRING SUBSTR SUBTRACT SUM SYSNULL TALLY TAN TAND TANH TIME "
+    "TRANSLATE TRIM TRUNC UNSPEC UPPERCASE VALID VERIFY WHIGH WLOW".split()
+)
+_PLI_PSEUDO = {"SUBSTR", "UNSPEC", "STRING", "REAL", "IMAG", "ONCHAR", "ONSOURCE", "ENTRYADDR"}
+
+
+def _pli_is_number(tok: tuple) -> bool:
+    return tok[0] == "word" and tok[1][:1].isdigit()
+
+
+def _pli_ref(stmt: list, i: int) -> tuple[Optional[str], int]:
+    """A data reference at stmt[i] (a word not starting with a digit): the qualified
+    name without subscripts, and the index after it."""
+    if i >= len(stmt) or stmt[i][0] != "word" or _pli_is_number(stmt[i]):
+        return None, i
+    parts, j = [stmt[i][1]], i + 1
+    while j < len(stmt):
+        t = stmt[j][1]
+        if t == "(":
+            j = _pli_group(stmt, j)
+        elif t == "." and j + 1 < len(stmt) and stmt[j + 1][0] == "word" and not _pli_is_number(stmt[j + 1]):
+            parts.append(stmt[j + 1][1])
+            j += 2
+        elif t == "-" and j + 2 < len(stmt) and stmt[j + 1][1] == ">" and stmt[j + 2][0] == "word":
+            parts, j = [stmt[j + 2][1]], j + 3
+        else:
+            break
+    return ".".join(parts), j
+
+
+def _pli_mv_sources(expr: list) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    i = 0
+    while i < len(expr):
+        tok = expr[i]
+        if tok[0] != "word" or _pli_is_number(tok):
+            if tok[1] == "." and i + 1 < len(expr) and _pli_is_number(expr[i + 1]):
+                i += 2  # a decimal fraction
+            else:
+                i += 1
+            continue
+        nxt = expr[i + 1][1] if i + 1 < len(expr) else ""
+        if nxt == "(" and tok[1] in ("DFHRESP", "DFHVALUE"):
+            end = _pli_group(expr, i + 1)
+            item = (tok[1] + "(" + "".join(t[1] for t in expr[i + 2 : end - 1]) + ")", "cics_constant")
+            i = end
+        elif nxt == "(" and tok[1] in _PLI_BUILTINS:
+            i += 1
+            continue
+        else:
+            name, i = _pli_ref(expr, i)
+            item = (name or tok[1], "item")
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def _pli_mv_single(expr: list) -> Optional[tuple[str, str]]:
+    body = expr[1:] if expr and expr[0][1] in ("-", "+") else expr
+    # A literal: one string, or one number (`1`, `1.5` = word . word).
+    if len(body) == 1 and (body[0][0] == "string" or _pli_is_number(body[0])):
+        return "".join(t[1] for t in expr), "literal"
+    if len(body) == 3 and _pli_is_number(body[0]) and body[1][1] == "." and _pli_is_number(body[2]):
+        return "".join(t[1] for t in expr), "literal"
+    if body and body[0][0] == "word" and body[0][1] in _PLI_BUILTINS:
+        if len(body) == 1 or (body[1][1] == "(" and _pli_group(body, 1) == len(body)):
+            return body[0][1], "function"
+    return None
+
+
+def _pli_action_start(stmt: list) -> int:
+    i = 0
+    while True:
+        while i + 1 < len(stmt) and stmt[i][0] == "word" and stmt[i + 1][1] == ":":
+            i += 2
+        word = stmt[i][1] if i < len(stmt) else ""
+        after = stmt[i + 1][1] if i + 1 < len(stmt) else ""
+        if word == "IF" and after != "=":
+            depth, j = 0, i + 1
+            while j < len(stmt) and not (depth == 0 and stmt[j][1] == "THEN"):
+                depth += {"(": 1, ")": -1}.get(stmt[j][1], 0)
+                j += 1
+            i = j + 1
+        elif word in ("ELSE", "OTHERWISE") and after != "=":
+            i += 1
+        elif word == "WHEN" and after == "(":
+            i = _pli_group(stmt, i + 1)
+        elif word == "ON" and after != "=" and i + 1 < len(stmt) and stmt[i + 1][0] == "word":
+            i += 2  # `ON cond[(ref)] [SNAP] statement`: the on-unit's statement is the action
+            if i < len(stmt) and stmt[i][1] == "(":
+                i = _pli_group(stmt, i)
+            if i < len(stmt) and stmt[i][1] == "SNAP":
+                i += 1
+        else:
+            return i
+
+
+def pli_move_rows(text: str) -> list[dict[str, Any]]:
+    """Every PL/I assignment's data-move rows, this tool's own reading (see above)."""
+    rows: list[dict[str, Any]] = []
+    for whole in _pli_statements(_pli_token_stream(_pli_source_lines(text))):
+        stmt = whole[_pli_action_start(whole) :]
+        if not stmt or stmt[0][0] != "word" or _pli_is_number(stmt[0]):
+            continue
+        if stmt[0][1] in _PLI_MV_KEYWORDS and not (len(stmt) > 1 and stmt[1][1] == "="):
+            continue
+        targets, i, ok = [], 0, True
+        while True:
+            if i < len(stmt) and stmt[i][1] in _PLI_PSEUDO and i + 1 < len(stmt) and stmt[i + 1][1] == "(":
+                name, _ = _pli_ref(stmt, i + 2)
+                targets.append((name, True))
+                i = _pli_group(stmt, i + 1)
+            else:
+                name, i = _pli_ref(stmt, i)
+                targets.append((name, False))
+            if name is None:
+                ok = False
+                break
+            if i < len(stmt) and stmt[i][1] == ",":
+                i += 1
+                continue
+            break
+        if not ok:
+            continue
+        compound = False
+        if i + 1 < len(stmt) and stmt[i + 1][1] == "=" and stmt[i][1] in ("+", "-", "*", "/"):
+            compound, i = True, i + 1
+        elif i + 2 < len(stmt) and stmt[i][1] in ("|", "*") and stmt[i + 1][1] == stmt[i][1] and stmt[i + 2][1] == "=":
+            compound, i = True, i + 2  # `||=` / `**=`
+        if i >= len(stmt) or stmt[i][1] != "=":
+            continue
+        expr, corr = stmt[i + 1 :], False
+        for j in range(len(expr) - 2):
+            if expr[j][1] == "," and expr[j + 1][1] == "BY" and expr[j + 2][1] == "NAME":
+                expr, corr = expr[:j], True
+                break
+        sources = _pli_mv_sources(expr)
+        for target, partial in targets:
+            srcs = ([(target, "item")] if compound else []) + [x for x in sources if not (compound and x[0] == target)]
+            if not srcs:
+                single = _pli_mv_single(expr)
+                srcs = [single] if single else []
+            for src, kind in srcs:
+                rows.append({"verb": "ASSIGN", "source": src, "kind": kind, "target": target, "corr": corr,
+                             "srm": False, "trm": partial, "line": stmt[0][2]})  # fmt: skip
+    return rows
+
+
+PLI_MOVES_SAMPLE = 25  # DSF files keyed (seeded); every PL/I file of a corpus at most this large
+PLI_MOVES_SEED = 3491
+
+
+def draft_pli_moves(repo: Path) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Drafted PL/I data moves (#3491 part 3) and the key's scope: every PL/I file,
+    or a seeded sample of PLI_MOVES_SAMPLE when there are more (DSF)."""
+    files = sorted(_pli_files(repo))
+    scope = {"files": len(files), "keyed": len(files), "seed": None}
+    if len(files) > PLI_MOVES_SAMPLE:
+        files = sorted(random.Random(PLI_MOVES_SEED).sample(files, PLI_MOVES_SAMPLE))
+        scope = {"files": scope["files"], "keyed": len(files), "seed": PLI_MOVES_SEED}
+    out = {
+        rel: {
+            "moves": sorted(data_move_keys(pli_move_rows((repo / rel).read_text(encoding="utf-8", errors="ignore")))),
+            "pli_moves_validated": False,
+            "verification": {"status": "draft", "notes": []},
+        }
+        for rel in files
+    }
+    return out, scope
 
 
 # ==============================================================================
@@ -2081,6 +2335,8 @@ def _cics_value_of(src: Source, ident: str) -> Optional[str]:
     column 72 and writes VALUE on the next line."""
     if isinstance(src, HlasmSource):  # #3495: an assembler operand names a DC constant
         return src.dc.get(ident)
+    if isinstance(src, PliSource):  # #3491: a PL/I operand names its DCL's INIT
+        return src.inits.get(ident) or src.inits.get(ident.rsplit(".", 1)[-1])
     m = re.search(
         rf"(?m)^\s*\d{{1,2}}\s+{re.escape(ident)}(?![A-Z0-9-])[^.]{{0,400}}?\bVALUE\s+(?:IS\s+)?(?:'([^']*)'|\"([^\"]*)\")",
         src.raw_text,
@@ -2986,7 +3242,10 @@ def uow_handler_ops(path: Path) -> list[dict[str, Any]]:
             )
         )
     out.sort(key=lambda x: (x[0], x[1]))
-    return [r for _p, _k, r in out]
+    rows = [r for _p, _k, r in out]
+    if isinstance(src, PliSource):  # #3491: PL/I's own condition handling
+        rows += pli_on_rows(path.read_text(encoding="utf-8", errors="ignore"))
+    return rows
 
 
 def uow_keys(rows: list[dict[str, Any]]) -> set[str]:
@@ -3008,12 +3267,80 @@ def engine_uow_row(u: Any) -> dict[str, Any]:
     }
 
 
+# ---- #3491: PL/I condition handling ------------------------------------------
+# This tool's own reading of PL/I's ON / REVERT / SIGNAL statements, over the PL/I
+# token stream (comments dropped, sequence fields removed) split at `;`. An ON
+# counts where a statement can begin (`_pli_clause_starts`) and names a condition
+# from the Language Reference's list: a bare condition, or a file condition /
+# CONDITION(name) with its parenthesised reference. The on-unit that follows is
+# SYSTEM, NULL (the statement ends: the condition is swallowed), BLOCK (BEGIN),
+# PROCEDURE (CALL x), LABEL (GO TO x) or STATEMENT; SNAP is an attribute.
+_PLI_BARE_CONDITIONS = {
+    "ANYCONDITION", "ANYCOND", "AREA", "ATTENTION", "ATTN", "CONVERSION", "CONV", "ERROR", "FINISH",
+    "FIXEDOVERFLOW", "FOFL", "INVALIDOP", "OVERFLOW", "OFL", "SIZE", "STORAGE", "STRINGRANGE", "STRG",
+    "STRINGSIZE", "STRZ", "SUBSCRIPTRANGE", "SUBRG", "UNDERFLOW", "UFL", "ZERODIVIDE", "ZDIV",
+}  # fmt: skip
+_PLI_FILE_CONDITIONS = {"ENDFILE", "ENDPAGE", "KEY", "NAME", "RECORD", "TRANSMIT", "UNDEFINEDFILE", "UNDF",
+                        "CONDITION", "COND"}  # fmt: skip
+
+
+def _pli_condition_at(stmt: list, i: int) -> tuple[Optional[str], int]:
+    """(the condition written at stmt[i], the index after it) or (None, i)."""
+    if i >= len(stmt) or stmt[i][0] != "word":
+        return None, i
+    word = stmt[i][1]
+    if word in _PLI_FILE_CONDITIONS and i + 1 < len(stmt) and stmt[i + 1][1] == "(":
+        end = _pli_group(stmt, i + 1)
+        return word + "".join(t[1] for t in stmt[i + 1 : end]), end
+    if word in _PLI_BARE_CONDITIONS and not (i + 1 < len(stmt) and stmt[i + 1][1] == "("):
+        return word, i + 1
+    return None, i
+
+
+def pli_on_rows(text: str) -> list[dict[str, Any]]:
+    """Every ON / REVERT / SIGNAL statement of one PL/I source (see above)."""
+    rows = []
+    for stmt in _pli_statements(_pli_token_stream(_pli_source_lines(text))):
+        for i in _pli_clause_starts(stmt):
+            word = stmt[i][1] if stmt[i][0] == "word" else None
+            if word not in ("ON", "REVERT", "SIGNAL"):
+                continue
+            cond, j = _pli_condition_at(stmt, i + 1)
+            if cond is None:
+                continue
+            base = {"source": "PLI", "verb": word, "condition": cond, "target": None, "target_kind": None,
+                    "resp_var": None, "attributes": None, "line": stmt[i][2]}  # fmt: skip
+            if word != "ON":
+                rows.append(dict(base, kind=word))
+                continue
+            snap = j < len(stmt) and stmt[j][1] == "SNAP"
+            j += 1 if snap else 0
+            rest = [t[1] for t in stmt[j:]]
+            target, kind = None, "STATEMENT"
+            if not rest:
+                kind = "NULL"
+            elif rest == ["SYSTEM"]:
+                kind = "SYSTEM"
+            elif rest[0] == "BEGIN":
+                kind = "BLOCK"
+            elif rest[0] == "CALL" and len(rest) > 1:
+                target, kind = rest[1], "PROCEDURE"
+            elif rest[:2] == ["GO", "TO"] and len(rest) > 2:
+                target, kind = rest[2], "LABEL"
+            elif rest[0] == "GOTO" and len(rest) > 1:
+                target, kind = rest[1], "LABEL"
+            rows.append(
+                dict(base, kind="ON_UNIT", target=target, target_kind=kind, attributes="SNAP" if snap else None)
+            )
+    return rows
+
+
 def draft_uow(repo: Path) -> dict[str, dict[str, Any]]:
-    """Drafted units of work and handlers for every COBOL source (#3453).
-    Adjudicates nothing until signed off with `uow_validated`."""
+    """Drafted units of work and handlers for every COBOL, HLASM and PL/I source (#3453,
+    #3495, #3491). Adjudicates nothing until signed off with `uow_validated`."""
     out: dict[str, dict[str, Any]] = {}
     for p in sorted(repo.rglob("*")):
-        if p.is_file() and p.suffix.lower() in CICS_EXTS + HLASM_EXTS and ".git" not in p.parts:
+        if p.is_file() and p.suffix.lower() in CICS_EXTS + HLASM_EXTS + PLI_EXTS and ".git" not in p.parts:
             rows = uow_handler_ops(p)
             if rows:
                 out[p.relative_to(repo).as_posix()] = {
@@ -5064,12 +5391,15 @@ def old_paragraphs(path: Path, repo: Path) -> set[str]:
     copybooks inlined as the refractor does. Lives here, beside the other COBOL
     readers, so the harness and the scorer share one implementation without
     importing each other (#3211: refraction_differential is the harness on top)."""
-    from gitgalaxy.tools.cobol_to_cobol.cobol_graveyard_finder import resolve_copybooks, unit_headers
+    from gitgalaxy.tools.cobol_to_cobol.cobol_graveyard_finder import (
+        resolve_copybooks,
+        split_procedure_division,
+        unit_headers,
+    )
 
     content = resolve_copybooks(path.read_text(encoding="utf-8", errors="ignore").upper(), path, repo)
-    if "PROCEDURE DIVISION" not in content:
-        return set()
-    return set(unit_headers(content.split("PROCEDURE DIVISION", 1)[1]))
+    split = split_procedure_division(content)
+    return set(unit_headers(split[1])) if split else set()
 
 
 def old_copybooks(path: Path, repo: Path) -> tuple[set[str], dict[str, Path]]:
@@ -5316,6 +5646,9 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
         # TRANSID and CALLs leaving the program. Truth is this tool's own reader;
         # engine is the pli boundary dialect's call_site_data (after the resolver).
         "PL/I call sites",
+        # #3491 part 3: PL/I assignment data moves, on the keyed files (a seeded sample
+        # of DSF's). Truth is this tool's own reader; engine is the pli dialect's rows.
+        "PL/I data moves",
     ]
     agg: dict[str, dict[str, list[set]]] = {f: {"truth": [], "forge": [], "engine": []} for f in fields}
 
@@ -5671,6 +6004,15 @@ def score(repo: Path, key: dict[str, Any], db: Optional[Path]) -> tuple[dict[str
     for rel, k in key.get("jcics", {}).items():
         ef = ir.files.get(rel) if ir else None
         add("JCICS", rel, set(k.get("calls", [])), None, engine_jcics_units(ef) if ef else None)
+    for rel, k in key.get("pli_moves", {}).items():
+        ef = ir.files.get(rel) if ir else None
+        add(
+            "PL/I data moves",
+            rel,
+            set(k.get("moves", [])),
+            None,
+            data_move_keys([engine_data_move_row(m) for m in ef.data_moves]) if ef else None,
+        )
     for rel, k in key.get("pli_calls", {}).items():
         ef = ir.files.get(rel) if ir else None
         add(
@@ -5860,6 +6202,9 @@ def main() -> int:
     a = sub.add_parser("add-pli")
     a.add_argument("repo", type=Path)
     a.add_argument("--key", type=Path, required=True)
+    pm = sub.add_parser("add-pli-moves")
+    pm.add_argument("repo", type=Path)
+    pm.add_argument("--key", type=Path, required=True)
     pc = sub.add_parser("add-pli-calls")
     pc.add_argument("repo", type=Path)
     pc.add_argument("--key", type=Path, required=True)
@@ -5966,6 +6311,17 @@ def main() -> int:
         return 0
 
     key = json.loads(args.key.read_text(encoding="utf-8"))
+    if args.cmd == "add-pli-moves":
+        # #3491 part 3: refresh drafts, never clobber a file someone already signed off.
+        drafted, scope = draft_pli_moves(repo)
+        existing_pm = key.get("pli_moves", {})
+        for rel, entry in drafted.items():
+            if not existing_pm.get(rel, {}).get("pli_moves_validated"):
+                existing_pm[rel] = entry
+        key["pli_moves"], key["pli_moves_scope"] = existing_pm, scope
+        args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+        print(f"drafted {len(existing_pm)} PL/I data-move files ({scope['keyed']} of {scope['files']}) -> {args.key}")
+        return 0
     if args.cmd == "add-pli-calls":
         # #3491: refresh drafts, never clobber a file someone already signed off.
         existing_pc = key.get("pli_calls", {})
