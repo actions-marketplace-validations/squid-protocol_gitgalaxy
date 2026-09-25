@@ -86,7 +86,7 @@ ptyprocess==0.7.0
 pure_eval==0.2.4
 pyan3==2.8.1
 pycparser==3.0
-pydeps==3.0.7
+pydeps==3.0.8
 Pygments==2.20.0
 pymdown-extensions==12.0.1
 pynndescent==0.6.0
