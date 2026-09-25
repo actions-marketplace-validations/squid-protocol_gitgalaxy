@@ -24,7 +24,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from gitgalaxy.tools.cobol_to_java.cobol_to_java_common import ClassNames, java_identifier, status_text
+from gitgalaxy.tools.cobol_to_java.cobol_to_java_common import (
+    ClassNames,
+    TraceLog,
+    java_identifier,
+    java_path,
+    status_text,
+)
 from gitgalaxy.tools.cobol_to_java.cobol_to_java_names import java_class_base
 from gitgalaxy.tools.cobol_to_java.cobol_to_java_spring_forge import render_dto_class
 from gitgalaxy.tools.cobol_to_java.java_target import JavaTarget
@@ -102,8 +108,8 @@ class Db2Forge:
     """Plans each DB2 table used by a converted program: its row class, repository and service wiring."""
 
     def __init__(self, estate: dict, skeletons: dict[str, dict], package: str, target: JavaTarget,
-                 names: ClassNames) -> None:  # fmt: skip
-        self.package, self.target, self.names = package, target, names
+                 names: ClassNames, trace: TraceLog | None = None) -> None:  # fmt: skip
+        self.package, self.target, self.names, self.trace = package, target, names, trace
         section = (estate.get("sections") or {}).get("db2_tables") or {}
         self.status = status_text(section)
         self.key_of = {sk["program"]["file"]: key for key, sk in skeletons.items()}
@@ -129,6 +135,9 @@ class Db2Forge:
         self.counts["tables"] += 1
         self.counts["rows"] += bool(row)
         used: set[str] = set()
+        if self.trace and row:  # #3650
+            fact = {"source": f"{raw['declared_in']}:{raw['line']}", "section": "db2_tables", "table": raw["table"]}
+            self.trace.record(java_path(self.package, ROW_SUBPACKAGE, row), "Class", "db2-row", [fact])
         for st in raw["statements"]:
             key = self.key_of[st["file"]]
             self.uses.setdefault(key, set()).add(t.repository)
@@ -142,6 +151,18 @@ class Db2Forge:
             while name in used:
                 name += "X"
             used.add(name)
+            if self.trace:  # #3650
+                fact = {"source": f"{st['file']}:{st['line']}", "section": "db2_tables", "verb": verb}
+                todos = [n for n in notes if n.startswith("TODO")]
+                if self.target.database.engine != "db2":
+                    todos.append(f"TODO: DB2 SQL on {self.target.database.engine} -- review the statement")
+                self.trace.record(
+                    java_path(self.package, REPOSITORY_SUBPACKAGE, t.repository),
+                    f"{t.repository}#{name}",
+                    "db2-statement",
+                    [fact],
+                    todos,
+                )
             doc = [
                 f"    /** EXEC SQL {verb} at {st['file']}:{st['line']} ({key.upper()}, {st['access'] or 'no'} access)."
             ]

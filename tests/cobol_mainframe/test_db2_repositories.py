@@ -6,6 +6,7 @@ turns that into a row class per DECLAREd table and a repository per table whose 
 the program's own SQL. A real scan backs the end-to-end test.
 """
 
+import json
 import shutil
 import sqlite3
 from unittest.mock import patch
@@ -144,3 +145,11 @@ def test_the_repository_runs_the_programs_own_sql(scanned, tmp_path):
     assert "private final AccountRepository accountRepository;" in service
     audit = (java / "java_migration_audit.txt").read_text(encoding="utf-8")
     assert "DB2 tables (#3618)       : 1 repositories (1 with DECLAREd row classes), 3 statements as written" in audit
+    # #3650: the manifest traces each statement method and the row class to their COBOL
+    arts = {a["symbol"]: a for a in json.loads((java / "traceability.json").read_text(encoding="utf-8"))["artifacts"]}
+    select = arts["AccountRepository#selectL11Acctdb"]
+    assert select["file"] == "src/main/java/com/gitgalaxy/modernized/repository/db2/AccountRepository.java"
+    assert select["facts"][0]["source"] == "cbl/ACCTDB.cbl:11"
+    assert select["facts"][0]["ledger_field"] == "DB2 table access"
+    assert any("postgresql" in t for t in select["todos"])
+    assert arts["AccountRow"]["facts"][0]["source"] == "cpy/DCLACCT.cpy:1"
