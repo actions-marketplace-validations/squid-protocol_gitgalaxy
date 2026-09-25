@@ -2205,6 +2205,62 @@ def test_api_surface_joins_program_copybooks_and_csd(tmp_path):
     assert tx["gaps"]["CICS program no transaction reaches"] == 0
 
 
+# ---- #3512: the program side of the API surface ----------------------------------
+WS2LS_JCL = """\
+//GENAREQ   JOB  ,S8SMITH,CLASS=A
+//WS2LS     EXEC DFHWS2LS
+//INPUT.SYSUT1 DD *
+ REQMEM=QUOTEQ
+ RESPMEM=QUOTER
+ WSBIND=/u/wsbind/requester/GETQUOTE.wsbind
+ WSDL=/u/wsdl/getquote.wsdl
+/*
+"""
+INVOKER = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. QUOTER.
+       PROCEDURE DIVISION.
+           EXEC CICS INVOKE SERVICE('GETQUOTE') CHANNEL('QCHAN')
+                OPERATION('getQuote') END-EXEC.
+           EXEC CICS INVOKE SERVICE('NOWHERE') CHANNEL('QCHAN') END-EXEC.
+           EXEC CICS WEB OPEN URIMAP('RATES') SESSTOKEN(TOK) END-EXEC.
+           EXEC CICS WEB CONVERSE SESSTOKEN(TOK) PATH('/rates') INTO(R) END-EXEC.
+           EXEC CICS RETURN END-EXEC.
+"""
+HTTP_PROVIDER = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. KVSTORE.
+       PROCEDURE DIVISION.
+           EXEC CICS WEB RECEIVE INTO(BODY) LENGTH(L) END-EXEC.
+           EXEC CICS WEB SEND FROM(BODY) FROMLENGTH(L) END-EXEC.
+           EXEC CICS RETURN END-EXEC.
+"""
+
+
+def test_invoke_service_joins_its_requester_step_and_csd_webservice(tmp_path):
+    repo = tmp_path / "req"
+    for rel, text in {"cntl/WSREQ.jcl": WS2LS_JCL, "csd/WEB.csd": " DEFINE WEBSERVICE(GETQUOTE) GROUP(WEB)\n",
+                      "cbl/QUOTER.cbl": INVOKER, "cbl/KVSTORE.cbl": HTTP_PROVIDER}.items():  # fmt: skip
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    api = load_galaxy_ir(scan_to_db(repo, tmp_path / "scan")).api_surface()
+    (svc,) = api["services"]
+    assert (svc["direction"], svc["invoked_by"]) == ("requester", ["cbl/QUOTER.cbl"])
+    found, missing = api["invocations"]
+    assert (found["service"], found["channel"], found["requester"], found["csd"]) == (
+        "GETQUOTE",
+        "QCHAN",
+        ["cntl/WSREQ.jcl:2"],
+        "csd/WEB.csd",
+    )
+    assert (missing["service"], missing["requester"], missing["csd"]) == ("NOWHERE", [], None)
+    assert api["http"] == [
+        {"file": "cbl/KVSTORE.cbl", "side": "SERVER", "commands": 2, "endpoints": []},
+        {"file": "cbl/QUOTER.cbl", "side": "CLIENT", "commands": 2, "endpoints": ["/rates", "RATES"]},
+    ]
+
+
 # ---- #3497: JCICS -- Java LINKs join the COBOL call graph ----------------------
 def test_a_java_jcics_link_resolves_to_the_cobol_program(tmp_path):
     repo = tmp_path / "jc"
@@ -2223,3 +2279,36 @@ def test_a_java_jcics_link_resolves_to_the_cobol_program(tmp_path):
     ir = load_galaxy_ir(scan_to_db(repo, tmp_path / "scan"))
     (call,) = ir.files["java/Api.java"].calls
     assert (call.verb, call.target, call.resolves_to) == ("LINK", "GETSCODE", "cbl/GETSCODE.cbl")
+
+
+# ---- #3576: completeness scores PL/I and assembler programs ---------------------
+def test_completeness_scores_pli_and_hlasm_programs(tmp_path):
+    repo = tmp_path / "mixed"
+    files = {
+        # A CICS PL/I program whose CICS commands sit in the member it %INCLUDEs.
+        "pli/ONLINE1.pli": " ONLINE1: PROC(CA) OPTIONS(MAIN);\n %INCLUDE CICSIO;\n END ONLINE1;\n",
+        "pli/CICSIO.pli": " EXEC CICS READ FILE('CUST') INTO(REC);\n",
+        # A batch PL/I main run by JCL under its member name, and one no step runs.
+        "pli/BATCH1.pli": " BATCH1: PROC OPTIONS(MAIN);\n PUT SKIP LIST('HI');\n END BATCH1;\n",
+        "pli/BATCH2.pli": " BATCH2: PROC OPTIONS(MAIN);\n PUT SKIP LIST('HI');\n END BATCH2;\n",
+        # An include with no entry point: not a program.
+        "pli/HELPERS.pli": " HELP: PROC;\n END HELP;\n",
+        "jcl/RUN.jcl": "//RUNJOB   JOB  ,CLASS=A\n//STEP1    EXEC PGM=BATCH1\n",
+        # A command-level CICS assembler program.
+        "asm/ASMPGM.asm": (
+            "DFHEISTG DSECT\n"
+            "ASMPGM   DFHEIENT\n"
+            "         EXEC CICS WRITEQ TD QUEUE('CSSL') FROM(MSG) LENGTH(L)\n"
+            "         END   ASMPGM\n"
+        ),
+    }
+    for rel, text in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    report = load_galaxy_ir(scan_to_db(repo, tmp_path / "scan")).completeness()
+    tx, batch = report["channels"]["transactions"], report["channels"]["batch entry"]
+    assert (tx["total"], tx["resolved"]) == (2, 0)  # ONLINE1 (through CICSIO) and ASMPGM, unreached
+    assert (batch["total"], batch["resolved"]) == (2, 1)  # BATCH1 run by STEP1; BATCH2 by nothing
+    unreached = next(m for m in report["missing_inputs"] if m["input"].startswith("CSD extract"))
+    assert unreached["examples"] == ["asm/ASMPGM.asm", "pli/ONLINE1.pli"]

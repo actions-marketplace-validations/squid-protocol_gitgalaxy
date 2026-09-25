@@ -51,6 +51,15 @@ DEFINITION: dict[str, Any] = {
     # Rationale: Uses '//' for line-level literature; multi-line literature
     # (/* */) is handled by the Section 2.3.C.3 Heuristic Pass.
     "lexical_family": "standard_block",
+    # #3553: `#include "x.h"` is searched in the including file's own directory first, so
+    # the network resolver tries dirname(importer)/x.h before a name search (network_risk_sensor.py).
+    # The token does not keep the quote/angle distinction; an angle include only resolves this way
+    # when a same-named file sits beside the includer, which a compiler with -I. would also pick.
+    "imports_resolve_from_importer_dir": True,
+    # import-graph precision: an include names a file LITERALLY. An extensionless one
+    # (`<chrono>`, `<ostream>`, `<QString>`) is a file with no extension, never a
+    # same-stem `chrono.h` (fmt's own header), so the resolver matches it exactly.
+    "include_names_file_literally": True,
     "rules": {
         # Epic #3264: Explicitly declare the structural invocation paradigm
         "calls_out": CALLS_OUT_C_STYLE,

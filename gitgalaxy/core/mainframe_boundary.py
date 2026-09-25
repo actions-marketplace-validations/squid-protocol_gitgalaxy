@@ -96,7 +96,7 @@ from gitgalaxy.core.jcics import jcics
 from gitgalaxy.core.job_flow import jcl_job_flow
 from gitgalaxy.core.job_submits import cobol_job_cards, jcl_intrdr_dds
 from gitgalaxy.core.mq_calls import extract_mq_calls
-from gitgalaxy.core.pli_calls import pli_cics_stream, pli_external_calls
+from gitgalaxy.core.pli_calls import blank_sequence_fields, pli_cics_stream, pli_external_calls
 from gitgalaxy.core.pli_data_moves import pli_data_moves
 from gitgalaxy.core.pli_on_units import pli_on_units
 from gitgalaxy.core.uow_handlers import extract_uow_handlers
@@ -1874,7 +1874,7 @@ def _cics_resources(code_stream: str, values: dict[str, str], dialect: str) -> l
         line_start = newlines[index - 1] + 1 if index else 0
         return _opens_inside_literal(code_stream, line_start, offset)
 
-    moves = cobol_move_literals(code_stream) if dialect == "cobol" else {}
+    moves = cobol_move_literals(code_stream, values) if dialect == "cobol" else {}  # #3578: + MOVE chains
     return extract_cics_resources(code_stream, values, moves, dialect, _shielded)
 
 
@@ -1896,7 +1896,7 @@ def _cics_tasks(
         line_start = newlines[index - 1] + 1 if index else 0
         return _opens_inside_literal(code_stream, line_start, offset)
 
-    moves = cobol_move_literals(code_stream) if dialect == "cobol" else {}
+    moves = cobol_move_literals(code_stream, values) if dialect == "cobol" else {}  # #3578: + MOVE chains
     pics: dict[str, str] = {}
     for r in records:
         if r.get("name") and r.get("pic"):
@@ -2077,8 +2077,10 @@ def extract_boundary(dialect: str, code_stream: str) -> dict[str, list[dict[str,
             "transactions": [],
             "sql_tables": extract_sql_tables(code_stream, "pli"),  # #3344
             "sql_statements": extract_sql_statements(code_stream, "pli"),  # #3446
-            "cics_resources": _cics_resources(code_stream, _pli_value_map(pli_records), "pli"),  # #3351-#3354
-            "cics_tasks": _cics_tasks(code_stream, _pli_value_map(pli_records), [], "pli"),  # #3449
+            # #3577: sequence fields blanked (offsets kept) -- a DSF operand continued onto the
+            # next line, `MAPSET (  00001010` / `'S001013')`, read its sequence number as a value.
+            "cics_resources": _cics_resources(blank_sequence_fields(code_stream), _pli_value_map(pli_records), "pli"),
+            "cics_tasks": _cics_tasks(blank_sequence_fields(code_stream), _pli_value_map(pli_records), [], "pli"),
             "uow_handlers": _pli_uow_handlers(code_stream, _pli_value_map(pli_records)),  # #3491
             "data_moves": pli_data_moves(code_stream),  # #3491 part 3
         }

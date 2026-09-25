@@ -81,7 +81,7 @@ import random
 import re
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 SCHEMA_VERSION = 1
 
@@ -145,7 +145,7 @@ _DATA_DIVISION = re.compile(r"\bDATA\s+DIVISION\b")
 _PROC_DIVISION = re.compile(r"\bPROCEDURE\s+DIVISION\b")
 _DD_SECTION = re.compile(r"\b(FILE|WORKING-STORAGE|LOCAL-STORAGE|LINKAGE|COMMUNICATION|REPORT|SCREEN)\s+SECTION\b")
 _DD_FD = re.compile(rf"^\s*(?:FD|SD)\s+({NAME})", re.M)
-_DD_LEVEL = re.compile(rf"^\s*(\d{{1,2}})\s+({NAME})(?![A-Z0-9-])", re.M)
+_DD_LEVEL = re.compile(rf"^[ \t]*(\d{{1,2}})\s+({NAME})(?![A-Z0-9-])", re.M)  # #3575: a leading \s* ate blank lines
 _DD_PIC = re.compile(r"\bPIC(?:TURE)?\s+(?:IS\s+)?([-A-Z0-9(),.$/*+]+)")
 _DD_USAGE = re.compile(
     r"(?:\bUSAGE\s+(?:IS\s+)?)?(?<![A-Z0-9-])"
@@ -2305,12 +2305,18 @@ def commarea_values(rows: list[dict[str, Any]]) -> set[str]:
 # (the VALUE reader the call-site key already uses), then a sole `MOVE 'LIT' TO`
 # literal. It shares the engine's CONTRACT, not its code: one row per command
 # naming a FILE (FILE/DATASET), MAP, QUEUE (QUEUE/QNAME, TS unless TD), CONTAINER
-# or a CHANNEL passed by LINK/XCTL/START/RETURN/RUN.
+# or a CHANNEL passed by LINK/XCTL/START/RETURN/RUN -- and (#3512) the two-word
+# web commands in _CICS_TWO_WORD, whose verb is both words.
 CICS_EXTS = PROGRAM_EXTS + COPYBOOK_EXTS
 _CICS_EXEC = re.compile(r"\bEXEC\s+CICS\b")
 _CICS_END = re.compile(r"\bEND-EXEC\b")
 _CICS_OPTION = re.compile(r"([A-Z][A-Z0-9-]*)\s*(\((?:[^()']|'[^']*'|\([^()]*\))*\))?")
 _CICS_MOVE = re.compile(rf"\bMOVE\s+(?:'([^'\n]*)'|\"([^\"\n]*)\")\s+TO\s+({NAME})")
+# #3578: `MOVE a TO b` between two plain data-names -- b can hold what a holds (a's VALUE,
+# else a's own MOVEd values), followed at most three hops. Figurative constants are values.
+_CICS_MOVE_NAME = re.compile(rf"\bMOVE\s+({NAME})\s+TO\s+({NAME})(?![A-Z0-9-]|\s*\()")
+_CICS_FIGURATIVE = {"SPACE", "SPACES", "ZERO", "ZEROS", "ZEROES", "LOW-VALUE", "LOW-VALUES", "HIGH-VALUE",
+                    "HIGH-VALUES", "QUOTE", "QUOTES", "NULL", "NULLS", "ALL", "FUNCTION", "LENGTH", "ADDRESS"}  # fmt: skip
 _CICS_FILE = {
     "READ": "read",
     "READNEXT": "read",
@@ -2327,6 +2333,25 @@ _CICS_QUEUE = {"WRITEQ": "write", "READQ": "read", "DELETEQ": "delete"}
 _CICS_CONTAINER = {"PUT": "write", "GET": "read", "MOVE": "move", "DELETE": "delete"}
 _CICS_MAP = {"SEND": "write", "RECEIVE": "read"}
 _CICS_PASS = {"LINK": "PROGRAM", "XCTL": "PROGRAM", "START": "TRANSID", "RETURN": "TRANSID", "RUN": "TRANSID"}
+# #3512: (first word, second word) -> (kind, access, name options by precedence,
+# qualifier option). A WEB command's qualifier is its side: CLIENT when it opens,
+# converses on or closes an outbound session or codes SESSTOKEN, else SERVER. WEB
+# READ / WRITE count only for an HTTPHEADER (not FORMFIELD / QUERYPARM).
+_CICS_TWO_WORD = {
+    ("WEB", "OPEN"): ("WEB", "open", ("URIMAP", "HOST"), None),
+    ("WEB", "CONVERSE"): ("WEB", "converse", ("URIMAP", "PATH"), None),
+    ("WEB", "SEND"): ("WEB", "write", ("URIMAP", "PATH"), None),
+    ("WEB", "RECEIVE"): ("WEB", "read", (), None),
+    ("WEB", "CLOSE"): ("WEB", "close", (), None),
+    ("WEB", "READ"): ("WEB", "read", ("HTTPHEADER",), None),
+    ("WEB", "WRITE"): ("WEB", "write", ("HTTPHEADER",), None),
+    ("INVOKE", "SERVICE"): ("SERVICE", "invoke", ("SERVICE",), "CHANNEL"),
+    ("INVOKE", "WEBSERVICE"): ("SERVICE", "invoke", ("WEBSERVICE",), "CHANNEL"),
+    ("TRANSFORM", "DATATOXML"): ("TRANSFORM", "encode", ("XMLTRANSFORM",), "CHANNEL"),
+    ("TRANSFORM", "XMLTODATA"): ("TRANSFORM", "decode", ("XMLTRANSFORM",), "CHANNEL"),
+    ("TRANSFORM", "DATATOJSON"): ("TRANSFORM", "encode", ("JSONTRANSFRM",), "CHANNEL"),
+    ("TRANSFORM", "JSONTODATA"): ("TRANSFORM", "decode", ("JSONTRANSFRM",), "CHANNEL"),
+}
 
 
 def _cics_value_of(src: Source, ident: str) -> Optional[str]:
@@ -2346,15 +2371,37 @@ def _cics_value_of(src: Source, ident: str) -> Optional[str]:
     return ((m.group(1) if m.group(1) is not None else m.group(2)) or "").strip() or None
 
 
-def cics_resource_ops(path: Path) -> list[dict[str, Any]]:
-    """Every EXEC CICS command in one COBOL source that names a resource, this
-    tool's own reading (see the section header)."""
-    src = _key_source(path)  # #3495: or an assembler source
+def _cics_moved(src: Any) -> Callable[[str], set[str]]:
+    """ident -> every literal it can be MOVEd in `src`: `MOVE 'LIT' TO ident`, and (#3578)
+    `MOVE other TO ident`, which passes on other's VALUE, else other's own MOVEd values,
+    followed at most three hops."""
     moves: dict[str, set[str]] = {}
     for m in _CICS_MOVE.finditer(src.raw_text):
         lit = (m.group(1) if m.group(1) is not None else m.group(2) or "").strip()
         if lit:
             moves.setdefault(m.group(3), set()).add(lit)
+    moved_from: dict[str, set[str]] = {}
+    for m in _CICS_MOVE_NAME.finditer(src.raw_text):
+        if m.group(1) not in _CICS_FIGURATIVE and m.group(1) != m.group(2) and not m.group(1)[0].isdigit():
+            moved_from.setdefault(m.group(2), set()).add(m.group(1))
+
+    def held(ident: str, hops: int = 0, seen: Optional[set[str]] = None) -> set[str]:
+        seen = seen or {ident}
+        out = set(moves.get(ident, set()))
+        if hops < 3:
+            for other in moved_from.get(ident, set()) - seen:
+                value = _cics_value_of(src, other)
+                out |= {value} if value else held(other, hops + 1, seen | {other})
+        return out
+
+    return held
+
+
+def cics_resource_ops(path: Path) -> list[dict[str, Any]]:
+    """Every EXEC CICS command in one COBOL source that names a resource, this
+    tool's own reading (see the section header)."""
+    src = _key_source(path)  # #3495: or an assembler source
+    held = _cics_moved(src)
 
     def resolve(operand: Optional[str]) -> tuple[Optional[str], Optional[str], Optional[str]]:
         if operand is None:
@@ -2367,7 +2414,7 @@ def cics_resource_ops(path: Path) -> list[dict[str, Any]]:
         value = _cics_value_of(src, op)
         if value:
             return value, "value", None
-        found = moves.get(op, set())
+        found = held(op)
         if len(found) == 1:
             return next(iter(found)), "move", None
         if found:
@@ -2401,9 +2448,19 @@ def cics_resource_ops(path: Path) -> list[dict[str, Any]]:
             qtype = "TD" if "TD" in d else "TS"
         elif verb in _CICS_PASS and "CHANNEL" in d:
             kind, access, name_key, q_key, qtype = "CHANNEL", "pass", "CHANNEL", _CICS_PASS[verb], None
+        elif len(opts) > 1 and (verb, opts[1][0]) in _CICS_TWO_WORD:
+            second = opts[1][0]
+            kind, access, names, q_key = _CICS_TWO_WORD[(verb, second)]
+            if names == ("HTTPHEADER",) and "HTTPHEADER" not in d:
+                continue
+            name_key = next((k for k in names if k in d), None)
+            qtype = None
+            if kind == "WEB":
+                qtype = "CLIENT" if "SESSTOKEN" in d or second in ("OPEN", "CONVERSE", "CLOSE") else "SERVER"
+            verb = f"{verb} {second}"
         else:
             continue
-        name, resolution, candidates = resolve(d.get(name_key))
+        name, resolution, candidates = resolve(d.get(name_key) if name_key else None)
         qualifier = qtype if qtype else resolve(d.get(q_key) if q_key else None)[0]
         clause = next((c for c in ("INTO", "FROM", "SET") if d.get(c)), None)
         out.append(
@@ -2463,7 +2520,7 @@ def draft_cics(repo: Path) -> dict[str, dict[str, Any]]:
     off with `cics_validated` -- the records_validated precedent (#3246)."""
     out: dict[str, dict[str, Any]] = {}
     for p in sorted(repo.rglob("*")):
-        if p.is_file() and p.suffix.lower() in CICS_EXTS + HLASM_EXTS and ".git" not in p.parts:
+        if p.is_file() and p.suffix.lower() in CICS_EXTS + HLASM_EXTS + PLI_EXTS and ".git" not in p.parts:
             rows = cics_resource_ops(p)
             if rows:
                 out[p.relative_to(repo).as_posix()] = {
@@ -2553,11 +2610,7 @@ def _key_string_globs(src: Source) -> dict[str, set[str]]:
 def cics_task_ops(path: Path) -> list[dict[str, Any]]:
     """Every CICS task-control command in one COBOL source, this tool's own reading."""
     src = _key_source(path)  # #3495: or an assembler source
-    moves: dict[str, set[str]] = {}
-    for m in _CICS_MOVE.finditer(src.raw_text):
-        lit = (m.group(1) if m.group(1) is not None else m.group(2) or "").strip()
-        if lit:
-            moves.setdefault(m.group(3), set()).add(lit)
+    held = _cics_moved(src)  # #3578: + MOVE chains
     globs = _key_string_globs(src)
 
     def resolve(operand: Optional[str], built: bool) -> tuple[Optional[str], Optional[str], Optional[str]]:
@@ -2571,7 +2624,7 @@ def cics_task_ops(path: Path) -> list[dict[str, Any]]:
         value = _cics_value_of(src, op)
         if value:
             return value, "value", None
-        found = set(moves.get(op, set()))
+        found = held(op)
         if len(found) == 1 and not (built and globs.get(op)):
             return next(iter(found)), "move", None
         every = found | (globs.get(op, set()) if built else set())
@@ -2688,7 +2741,7 @@ def draft_cics_tasks(repo: Path) -> dict[str, dict[str, Any]]:
     transids = {t for tx in _key_transactions(repo).values() for t in tx}
     out: dict[str, dict[str, Any]] = {}
     for p in sorted(repo.rglob("*")):
-        if p.is_file() and p.suffix.lower() in CICS_EXTS + HLASM_EXTS and ".git" not in p.parts:
+        if p.is_file() and p.suffix.lower() in CICS_EXTS + HLASM_EXTS + PLI_EXTS and ".git" not in p.parts:
             rows = cics_task_ops(p)
             if rows:
                 out[p.relative_to(repo).as_posix()] = {
@@ -5196,6 +5249,79 @@ def draft_symbolic_maps(repo: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
+# #3575: an ORACLE for the layouts above -- IBM's own DFHMAPS output. Some estates
+# check in the generated symbolic-map copybooks (CardDemo's `cpy-bms`); read with
+# this tool's COBOL item reader and laid out by plain storage arithmetic (a PIC's
+# bytes, a group the sum of its non-REDEFINES children, OCCURS multiplies, a
+# REDEFINES starts where its target does, every 01 at 0), each named item is
+# `NAME @offset+bytes` -- the unit symbolic_map_units computes from the BMS source.
+def _pic_bytes(pic: str, usage: Optional[str]) -> int:
+    digits = sum(int(rep) if rep else 1 for ch, rep in re.findall(r"([XA9ZB0/,.+*$-])(?:\((\d+)\))?", pic.upper()))
+    u = (usage or "").upper()
+    if u in ("COMP", "COMP-4", "COMP-5", "BINARY", "COMPUTATIONAL"):
+        return 2 if digits <= 4 else 4 if digits <= 9 else 8
+    if u in ("COMP-3", "PACKED-DECIMAL"):
+        return digits // 2 + 1
+    return digits
+
+
+def copybook_layout_units(path: Path) -> set[str]:
+    """`NAME @offset+bytes` of every named item of a COBOL copybook (see above)."""
+    items = [it for it in _data_items(Source(path)) if it["level"] not in (66, 88)]
+    kids: dict[Optional[int], list[dict[str, Any]]] = {}
+    for it in items:
+        kids.setdefault(it["parent"], []).append(it)
+    sizes: dict[int, int] = {}
+
+    def size(it: dict[str, Any]) -> int:
+        if it["ordinal"] not in sizes:
+            own = _pic_bytes(it["pic"], it.get("usage")) if it.get("pic") else sum(
+                size(c) for c in kids.get(it["ordinal"], []) if not c.get("redefines"))  # fmt: skip
+            sizes[it["ordinal"]] = own * (it.get("occurs_max") or 1)
+        return sizes[it["ordinal"]]
+
+    out: set[str] = set()
+
+    def place(it: dict[str, Any], at: int) -> None:
+        if it["name"] != "FILLER":
+            out.add(f"{it['name']} @{at}+{size(it)}")
+        cur, where = at, {}
+        for c in kids.get(it["ordinal"], []):
+            if c.get("redefines"):
+                place(c, where.get(c["redefines"], cur))
+            else:
+                where[c["name"]] = cur
+                place(c, cur)
+                cur += size(c)
+
+    for root in kids.get(None, []):
+        place(root, 0)
+    return out
+
+
+def verify_symbolic_maps(key: dict[str, Any], repo: Path, at: str) -> tuple[int, list[str]]:
+    """Sign every keyed mapset whose IBM-generated copybook (`<MAPSET>.cpy` in a
+    `cpy-bms` directory) lays out exactly as the key computes; (signed, differences)."""
+    generated = {
+        p.stem.upper(): p for p in repo.rglob("*") if p.is_file() and "cpy-bms" in {x.lower() for x in p.parts}
+    }
+    signed, diffs = 0, []
+    for rel, entry in key.get("symbolic_maps", {}).items():
+        results = {ms: (generated.get(ms), set(units)) for ms, units in entry["layouts"].items()}
+        if not results or any(cpy is None for cpy, _ in results.values()):
+            continue
+        bad = [ms for ms, (cpy, units) in results.items() if copybook_layout_units(cpy) != units]
+        if bad:
+            diffs += [f"{rel}#{ms}" for ms in bad]
+            continue
+        entry["symbolic_validated"] = True
+        entry["verification"] = {"status": "validated", "tier": "cross_verified", "notes": [], "census": {
+            "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus", "at": at,
+            "copybooks": sorted(results[ms][0].relative_to(repo).as_posix() for ms in results)}}  # fmt: skip
+        signed += 1
+    return signed, diffs
+
+
 # ==============================================================================
 # Draft
 # ==============================================================================
@@ -6229,6 +6355,9 @@ def main() -> int:
     x = sub.add_parser("add-cics")
     x.add_argument("repo", type=Path)
     x.add_argument("--key", type=Path, required=True)
+    vs = sub.add_parser("verify-symbolic")  # #3575: sign symbolic maps against IBM's generated copybooks
+    vs.add_argument("repo", type=Path)
+    vs.add_argument("--key", type=Path, required=True)
     dlp = sub.add_parser("add-dli")
     dlp.add_argument("repo", type=Path)
     dlp.add_argument("--key", type=Path, required=True)
@@ -6409,6 +6538,14 @@ def main() -> int:
         args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
         print(f"drafted {drafted} COMMAREA operands over {len(programs)} programs -> {args.key}")
         return 0
+    if args.cmd == "verify-symbolic":
+        from datetime import datetime, timezone  # noqa: PLC0415
+
+        at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        signed, diffs = verify_symbolic_maps(key, repo, at)
+        args.key.write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+        print(f"signed {signed} BMS sources against IBM-generated copybooks; {len(diffs)} differ: {diffs[:5]}")
+        return 1 if diffs else 0
     if args.cmd == "add-cics":
         # #3351-#3354: the add-pli discipline -- refresh drafts, keep signed-off files.
         ops = key.get("cics_resources", {})

@@ -56,9 +56,27 @@ keyed rows, in full:
 
     jcics             jcics_validated          JCICS LINKs and file / queue / channel / container operations
 
+`csd` (#3575) is asked of every CSD deck (`.csd` / `.rdo`, or JCL running DFHCSDUP), in full:
+
+    csd_decks         resources_validated      each DEFINE with its key attributes; once every deck
+                                               is signed, programs' entry transactions (derived)
+
+`records` (#3575) is a SAMPLED census of each program's own DATA DIVISION elementary fields:
+
+    records           records_validated        line, level, name, PIC, USAGE, OCCURS, REDEFINES
+                                               (tier sample_verified via records_validated_tier)
+
+`bms` (#3575) is a SAMPLED census of BMS sources (a full one when the plan covers them all):
+
+    bms_maps          fields_validated         mapsets, maps, and fields with POS / LENGTH / ATTRB /
+                                               PICIN / PICOUT / OCCURS / INITIAL
+    (symbolic maps are checked against IBM-generated copybooks instead:
+     cobol_answer_key.py verify-symbolic)
+
 `resources` (#3351-#3354 / #3495) is asked of every COBOL and HLASM source issuing EXEC CICS:
 
-    cics_resources    cics_validated           FILE / QUEUE / MAP / CONTAINER / CHANNEL operations
+    cics_resources    cics_validated           FILE / QUEUE / MAP / CONTAINER / CHANNEL operations,
+                                               and WEB / SERVICE / TRANSFORM commands (#3512)
     (an HLASM source also answers cics_tasks and uow_handlers here -- COBOL answers them in `channels`)
 
 The data-move sample is fixed when the census is cut and stored in the key under
@@ -1403,6 +1421,7 @@ def batches_jcics(key: dict[str, Any], files: list[str], max_items: int) -> list
 # every COBOL and HLASM source that issues EXEC CICS; for an HLASM source also its
 # task control and units of work (a COBOL source answers those in `channels`).
 HLASM_EXTS = (".asm", ".hlasm", ".assemble")
+PLI_EXTS = (".pli", ".pl1", ".plinc")  # == cobol_answer_key.PLI_EXTS
 RESOURCE_SECTIONS = {("cics_resources", "cics_validated")}
 HLASM_SECTIONS = {("cics_tasks", "cics_tasks_validated"), ("uow_handlers", "uow_validated")}
 
@@ -1452,6 +1471,35 @@ def reviewer_facts_resources(answers: dict[str, Any], repo: Path) -> dict[str, d
             out["tasks"][r] = {canon_task(x) for x in v.get("tasks", []) if isinstance(x, dict)}
             out["uow"][r] = {canon_uow(x) for x in v.get("uow", []) if isinstance(x, dict)}
     return out
+
+
+RESOURCES_CONTRACT = """TASK RESOURCES -- every EXEC CICS command that names a CICS resource, one entry each: "line" (of `EXEC CICS`),
+"verb" (the command's first word -- for WEB / INVOKE / TRANSFORM its first two words, e.g. "WEB SEND"), "kind",
+"name", "qualifier", "record_clause", "record":
+  - kind CONTAINER: PUT / GET / MOVE / DELETE with a CONTAINER(...) option; name the container, qualifier the
+    CHANNEL(...) value.
+  - kind FILE: READ / READNEXT / READPREV / STARTBR / RESETBR / ENDBR / WRITE / REWRITE / DELETE / UNLOCK with a
+    FILE(...) or DATASET(...) option (not a DELETE CONTAINER); name that option's value, qualifier null.
+  - kind MAP: SEND / RECEIVE with a MAP(...) option; name the map, qualifier the MAPSET(...) value.
+  - kind QUEUE: WRITEQ / READQ / DELETEQ with QUEUE(...) or QNAME(...); name the queue, qualifier "TD" when the
+    command says TD, else "TS".
+  - kind CHANNEL: LINK / XCTL (qualifier the PROGRAM(...) value) or START / RETURN / RUN (qualifier the TRANSID(...)
+    value) with a CHANNEL(...) option; name the channel.
+  - kind WEB: WEB OPEN / CONVERSE / SEND / RECEIVE / CLOSE, and WEB READ / WRITE with an HTTPHEADER(...) option (not
+    WEB EXTRACT / PARSE / STARTBROWSE / READNEXT / ENDBROWSE, nor WEB READ FORMFIELD / QUERYPARM). name: for OPEN the
+    URIMAP(...) value, else HOST(...); for CONVERSE and SEND the URIMAP(...) value, else PATH(...); for READ / WRITE
+    the HTTPHEADER(...) value; for RECEIVE and CLOSE null. qualifier: "CLIENT" for OPEN, CONVERSE, CLOSE and any WEB
+    command coding SESSTOKEN(...), else "SERVER".
+  - kind SERVICE: INVOKE SERVICE(...) / INVOKE WEBSERVICE(...); name that value, qualifier the CHANNEL(...) value.
+  - kind TRANSFORM: TRANSFORM DATATOXML / XMLTODATA (name the XMLTRANSFORM(...) value) or DATATOJSON / JSONTODATA
+    (name the JSONTRANSFRM(...) value); qualifier the CHANNEL(...) value.
+  A command naming none of these (SEND TEXT, WRITE OPERATOR, ASKTIME, ...) is not listed. A name or qualifier is a
+  value only when the source fixes it: a literal (its text), or a data-name with a fixed value (COBOL: its VALUE
+  literal, else the one literal it can ever be MOVEd -- directly, or by a MOVE from another plain data-name, which
+  passes on that name's VALUE or its own MOVEd literals, followed at most three MOVEs deep; assembler: its DC
+  constant); otherwise null. "record_clause" is
+  INTO if the command codes it, else FROM, else SET -- that precedence, not source order (a WEB CONVERSE codes both
+  FROM and INTO: INTO) -- null if none; "record" that option's operand as written."""
 
 
 def render_resources(
@@ -1512,22 +1560,7 @@ physical line numbers of the file. Ignore commented-out lines and text inside qu
 {FIXED_FORMAT_RULES}
 {asm_rules}
 For EACH file below answer TASK RESOURCES (a file with none gets an empty list):
-TASK RESOURCES -- every EXEC CICS command that names a CICS resource, one entry each: "line" (of `EXEC CICS`),
-"verb" (the command's first word), "kind", "name", "qualifier", "record_clause", "record":
-  - kind CONTAINER: PUT / GET / MOVE / DELETE with a CONTAINER(...) option; name the container, qualifier the
-    CHANNEL(...) value.
-  - kind FILE: READ / READNEXT / READPREV / STARTBR / RESETBR / ENDBR / WRITE / REWRITE / DELETE / UNLOCK with a
-    FILE(...) or DATASET(...) option (not a DELETE CONTAINER); name that option's value, qualifier null.
-  - kind MAP: SEND / RECEIVE with a MAP(...) option; name the map, qualifier the MAPSET(...) value.
-  - kind QUEUE: WRITEQ / READQ / DELETEQ with QUEUE(...) or QNAME(...); name the queue, qualifier "TD" when the
-    command says TD, else "TS".
-  - kind CHANNEL: LINK / XCTL (qualifier the PROGRAM(...) value) or START / RETURN / RUN (qualifier the TRANSID(...)
-    value) with a CHANNEL(...) option; name the channel.
-  A command naming none of these (SEND TEXT, WRITE OPERATOR, ASKTIME, ...) is not listed. A name or qualifier is a
-  value only when the source fixes it: a literal (its text), or a data-name with a fixed value (COBOL: its VALUE
-  literal, else the one literal ever MOVEd into it; assembler: its DC constant); otherwise null. "record_clause" is
-  the first of INTO / FROM / SET the command codes (null if none), "record" that option's operand as written.
-
+{RESOURCES_CONTRACT}
 Files:
 {listing}
 
@@ -1643,6 +1676,506 @@ def _sign_pli_sample(key: dict[str, Any], truth: dict[str, Any], g: dict[str, An
         stamp = {"status": "validated", "tier": "sample_verified", "census": {"by": by, "at": at, "sampled": True}}
         for entry in key.get("pli_calls", {}).values():
             entry["pli_calls_validated"] = True
+            entry["verification"] = dict(entry.get("verification", {}), **stamp)
+
+
+# ---- the `pliresources` suite (#3577): a SAMPLED census of PL/I CICS operations ----
+# navikt/DSF's ~3,400 CICS resource and task-control facts over ~310 files: a seeded,
+# stratified sample of files (task control, file / queue / container / channel / web,
+# map-only, and files with none) is read in full against the `resources` contract,
+# as `plicalls` does for call sites. Signed all at once, `sample_verified`.
+PLI_RES_SAMPLE = {"task": 8, "data": 12, "map": 8, "none": 6}
+
+
+def pli_resources_plan(key: dict[str, Any], seed: int) -> list[str]:
+    buckets: dict[str, list[str]] = {"task": [], "data": [], "map": [], "none": []}
+    res, tasks = key.get("cics_resources", {}), key.get("cics_tasks", {})
+    for rel in _pli_files(key):
+        kinds = {r["kind"] for r in res.get(rel, {}).get("operations", [])}
+        bucket = (
+            "task"
+            if tasks.get(rel, {}).get("operations")
+            else "data"
+            if kinds - {"MAP"}
+            else "map"
+            if kinds
+            else "none"
+        )
+        buckets[bucket].append(rel)
+    rng = random.Random(seed)
+    return sorted(f for b, n in PLI_RES_SAMPLE.items() for f in rng.sample(buckets[b], min(n, len(buckets[b]))))
+
+
+def corpus_files_pliresources(key: dict[str, Any]) -> list[str]:
+    return list(key.get("sample_census", {}).get("pli_resources", {}).get("plan", {}).get("files", []))
+
+
+def key_facts_pliresources(key: dict[str, Any], files: list[str]) -> dict[str, dict[str, list[str]]]:
+    per_channel = key_facts(key, files, wide=False)
+    res = key.get("cics_resources", {})
+    return {
+        "resources": {
+            rel: sorted({canon_resource(r) for r in res.get(rel, {}).get("operations", [])}) for rel in files
+        },
+        "tasks": {rel: per_channel["tasks"][rel] for rel in files},
+    }
+
+
+def reviewer_facts_pliresources(answers: dict[str, Any], repo: Path) -> dict[str, dict[str, set[str]]]:
+    root = str(repo).rstrip("/") + "/"
+    out: dict[str, dict[str, set[str]]] = {"resources": {}, "tasks": {}}
+    for path, v in (answers.get("files") or {}).items():
+        r = path[len(root) :] if path.startswith(root) else path
+        v = v or {}
+        out["resources"][r] = {canon_resource(x) for x in v.get("resources", []) if isinstance(x, dict)}
+        out["tasks"][r] = {canon_task(x) for x in v.get("tasks", []) if isinstance(x, dict)}
+    return out
+
+
+def render_pliresources(
+    key: dict[str, Any], repo: Path, files: list[str], index: int, of: int
+) -> tuple[str, dict[str, Any]]:
+    truth = {"corpus": key["corpus"], "ref": key["ref"], "root": str(repo), "mode": "section_census",
+             "suite": "pliresources", "batch": index, "of": of, "files": files,
+             "facts": key_facts_pliresources(key, files)}  # fmt: skip
+    listing = "\n".join(str(repo / f) for f in files)
+    anchor = "a data-name with a fixed value (COBOL:"
+    assert anchor in RESOURCES_CONTRACT, "the resources contract's name rule moved: update this brief"
+    contract = RESOURCES_CONTRACT.replace(
+        anchor,
+        "a data-name with a fixed value (PL/I: the string in the\n  INIT('...') of its CHARACTER DCL in the same file -- "
+        "a qualified name: its last part; COBOL:",
+    )
+    brief = f"""You are independently verifying facts about real IBM mainframe PL/I source code that runs under CICS,
+as a second reviewer. Read the files yourself. They are all under the repository root {repo}; read only the files
+listed below. Do NOT edit or create any files except your answers file, and do not look for any existing answer
+key or analysis of this code: the point is an independent reading. Line numbers are 1-based physical line numbers.
+
+PL/I READING RULES. `/* ... */` is a comment (it may span lines). A statement ends at `;` (outside a quoted
+'literal'), so an EXEC CICS command runs to its `;` -- there is no END-EXEC. Columns 73-80 of a line may hold a
+sequence field (e.g. `00001740`): never code, even when it sits inside a command continued onto the next line.
+Names are case-insensitive (answer them upper-cased) and may contain national letters (Æ Ø Å), digits, `_ @ # $`.
+Trailing blanks inside a literal are padding: drop them.
+
+For EACH file below answer TASK RESOURCES and TASK TASKS (a file with none gets empty lists):
+{contract}
+TASK TASKS -- CICS task-control commands: RUN, START, START ATTACH, FETCH CHILD, FETCH ANY, FREE CHILD, RETRIEVE,
+CANCEL, DELAY, POST, WAIT EVENT, WAIT EXTERNAL, WAITCICS, ENQ, DEQ. One entry each: "line" (of `EXEC CICS`), "verb",
+"target" (TRANSID for RUN/START/START ATTACH/CANCEL, RESOURCE for ENQ/DEQ) only when the source fixes it -- a
+literal or its CHARACTER DCL's INIT string -- else null; "channel" (CHANNEL(...) resolved the same way, else null);
+"token" (the operand of CHILD(...) / ANY(...) / REQID(...), else null); "record" (the FROM / INTO / SET operand as
+written, else null).
+
+Files:
+{listing}
+
+OUTPUT: reply with ONLY one JSON object, no prose before or after (paths repo-relative):
+{{"files": {{"<path>": {{"resources": [{{"line": 1, "verb": "READ", "kind": "FILE", "name": "F", "qualifier": null,
+                                     "record_clause": "INTO", "record": "R"}}],
+                      "tasks": [{{"line": 1, "verb": "START", "target": null, "channel": null, "token": null, "record": null}}]}},
+           ...every file above...}}}}
+"""
+    return brief, truth
+
+
+def batches_pliresources(key: dict[str, Any], files: list[str], max_items: int) -> list[list[str]]:
+    facts = key_facts_pliresources(key, files)
+    return _pack({f: sum(len(facts[t].get(f, [])) for t in facts) for f in files}, max_items)
+
+
+def _sign_pli_resources_sample(key: dict[str, Any], truth: dict[str, Any], g: dict[str, Any],
+                               rulings: dict[str, Any], by: str, at: str) -> None:  # fmt: skip
+    """Record a PL/I CICS-operation sample batch; once every planned file is signed, flag
+    every PL/I entry of cics_resources and cics_tasks `sample_verified` with the bound."""
+    sc = key["sample_census"]["pli_resources"]
+    sc.setdefault("batches", []).append({"by": by, "at": at, "batch": truth["batch"], "files": truth["files"]})
+    sc["asked"] = sc.get("asked", 0) + sum(g["tasks"].get(t, {}).get("asked", 0) for t in ("resources", "tasks"))
+    sc["key_errors"] = sc.get("key_errors", 0) + sum(1 for r in rulings.values() if r.get("verdict") == "key_fixed")
+    done = {f for b in sc["batches"] for f in b["files"]}
+    if all(f in done for f in sc["plan"]["files"]):
+        sc["upper_bound_95"] = round(upper_bound_95(sc["key_errors"], sc["asked"]), 5)
+        stamp = {"status": "validated", "tier": "sample_verified", "census": {"by": by, "at": at, "sampled": True}}
+        for section, flag in (("cics_resources", "cics_validated"), ("cics_tasks", "cics_tasks_validated")):
+            for rel, entry in key.get(section, {}).items():
+                if rel.lower().endswith(PLI_EXTS):
+                    entry[flag] = True
+                    entry["verification"] = dict(entry.get("verification", {}), **stamp)
+
+
+# ---- the `csd` suite (#3575): CSD resource definitions, in full -----------------
+# Every CSD deck (a `.csd` / `.rdo` member, or a JCL job running DFHCSDUP with its
+# SYSIN in-stream) is read in full: each DEFINE with its key attributes. Compared
+# through the key's own canonical form (cobol_answer_key.csd_resource_values). A
+# program's entry transactions are the censused TRANSACTION -> PROGRAM rows joined
+# to its cross-verified PROGRAM-ID, so once every deck of the corpus is signed the
+# programs' `transactions_validated` is stamped too, recorded as derived.
+def corpus_files_csd(key: dict[str, Any], repo: Path) -> list[str]:
+    from cobol_answer_key import is_csd_deck  # noqa: PLC0415 -- the key's own deck test
+
+    found = set(key.get("csd_decks", {}))
+    for p in repo.rglob("*"):
+        if p.is_file() and ".git" not in p.parts and p.suffix.lower() in (".csd", ".rdo", ".jcl", ".prc"):
+            if is_csd_deck(p, p.read_text(encoding="utf-8", errors="ignore")):
+                found.add(p.relative_to(repo).as_posix())
+    return sorted(found)
+
+
+def _csd_row(r: dict[str, Any]) -> dict[str, Any]:
+    """A reviewer's row in the key's row shape: names upper-cased, sizes as integers."""
+    out: dict[str, Any] = {"line": int(r.get("line") or 0)}
+    for k in ("resource_type", "name", "group", "dsname", "ddname", "record_format", "queue_type", "plan",
+              "db2_entry", "transid", "program"):  # fmt: skip
+        v = r.get(k)
+        out[k] = str(v).strip().upper() if v not in (None, "") else None
+    for k in ("key_length", "record_size"):
+        v = r.get(k)
+        out[k] = int(v) if isinstance(v, int) or (isinstance(v, str) and v.strip().isdigit()) else None
+    return out
+
+
+def key_facts_csd(key: dict[str, Any], files: list[str]) -> dict[str, dict[str, list[str]]]:
+    from cobol_answer_key import csd_resource_values  # noqa: PLC0415
+
+    decks = key.get("csd_decks", {})
+    return {"csd": {rel: sorted(csd_resource_values(decks.get(rel, {}).get("resources", []))) for rel in files}}
+
+
+def reviewer_facts_csd(answers: dict[str, Any], repo: Path) -> dict[str, dict[str, set[str]]]:
+    from cobol_answer_key import csd_resource_values  # noqa: PLC0415
+
+    root = str(repo).rstrip("/") + "/"
+    out: dict[str, dict[str, set[str]]] = {"csd": {}}
+    for path, v in (answers.get("files") or {}).items():
+        r = path[len(root) :] if path.startswith(root) else path
+        rows = [_csd_row(x) for x in (v or {}).get("resources", []) if isinstance(x, dict)]
+        out["csd"][r] = set(csd_resource_values([x for x in rows if x["resource_type"] and x["name"]]))
+    return out
+
+
+def render_csd(key: dict[str, Any], repo: Path, files: list[str], index: int, of: int) -> tuple[str, dict[str, Any]]:
+    truth = {"corpus": key["corpus"], "ref": key["ref"], "root": str(repo), "mode": "section_census",
+             "suite": "csd", "batch": index, "of": of, "files": files, "facts": key_facts_csd(key, files)}  # fmt: skip
+    listing = "\n".join(str(repo / f) for f in files)
+    brief = f"""You are independently verifying facts about real IBM CICS resource definitions (CSD decks: the DFHCSDUP
+commands that define a CICS region's transactions, programs, files, queues, ...), as a second reviewer. Read the
+files yourself. They are all under the repository root {repo}; read only the files listed below. Do NOT edit or
+create any files except your answers file, and do not look for any existing answer key or analysis: the point is an
+independent reading. Line numbers are 1-based physical line numbers.
+
+A file is either a CSD deck, or a JCL job that runs DFHCSDUP with the commands in-stream after a `SYSIN DD *` line.
+READING RULES. A command starts with a line whose first word is DEFINE, DELETE, ALTER, ADD, REMOVE, LIST, UPGRADE
+or COPY, and continues on the following lines until the next such command, a blank line, a line starting with `*`,
+`//` or `/*`, or the end of the file. Only DEFINE commands are asked about. An operand is `KEYWORD(value)`; a value
+in apostrophes is the text between them (`''` is one apostrophe). Answer every value UPPER-CASED.
+
+For EACH file list, in "resources", every DEFINE command, one entry each:
+  "line"          the line the DEFINE is on
+  "resource_type" the keyword right after DEFINE (TRANSACTION, PROGRAM, FILE, TDQUEUE, DB2ENTRY, URIMAP, ...)
+  "name"          that keyword's value, upper-cased. SKIP the whole DEFINE if the name has any character other
+                  than a letter (either case), a digit, @ # $ (e.g. `<DB2SSID>`). A name such as `ZC@id@` is
+                  kept: it is letters and @ only (a template token, but a valid name)
+  "group"         GROUP(...)
+  "dsname"        DSNAME(...), else DSNAME01(...)
+  "ddname"        DDNAME(...)
+  "record_format" RECORDFORMAT(...)
+  "key_length"    KEYLENGTH(...) as an integer (null when not all digits)
+  "record_size"   RECORDSIZE(...) as an integer (null when not all digits)
+  "queue_type"    TYPE(...) -- only for a TDQUEUE, else null
+  "plan"          PLAN(...)
+  "db2_entry"     ENTRY(...) -- only for a DB2TRAN, else null
+  "transid"       for a TRANSACTION its own name; otherwise TRANSID(...), else TRANSACTION(...)
+  "program"       for a PROGRAM its own name; otherwise PROGRAM(...)
+An operand the DEFINE does not code is null. If a keyword appears twice, the first one counts. A file with no DEFINE
+gets an empty list.
+
+Files:
+{listing}
+
+OUTPUT: reply with ONLY one JSON object, no prose before or after (paths repo-relative):
+{{"files": {{"<path>": {{"resources": [{{"line": 3, "resource_type": "TRANSACTION", "name": "ACCT", "group": "BANK",
+   "dsname": null, "ddname": null, "record_format": null, "key_length": null, "record_size": null,
+   "queue_type": null, "plan": null, "db2_entry": null, "transid": "ACCT", "program": "ACCTPGM"}}]}},
+   ...every file above...}}}}
+"""
+    return brief, truth
+
+
+def batches_csd(key: dict[str, Any], files: list[str], max_items: int) -> list[list[str]]:
+    return _pack({f: len(v) for f, v in key_facts_csd(key, files)["csd"].items()}, max_items)
+
+
+def _sign_csd_transactions(key: dict[str, Any], by: str, at: str) -> None:
+    """Once every CSD deck is signed, stamp the programs' entry transactions (derived)."""
+    decks = key.get("csd_decks", {})
+    if not decks or not all(e.get("resources_validated") for e in decks.values()):
+        return
+    for entry in key.get("programs", {}).values():
+        if "transactions" in entry and not entry.get("transactions_validated"):
+            entry["transactions_validated"] = True
+            entry["transactions_census"] = {
+                "by": by, "at": at, "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the "
+                "cross-verified PROGRAM-ID (#3575)"}  # fmt: skip
+
+
+# ---- the `records` suite (#3575): a SAMPLED census of DATA DIVISION fields ------
+# The key's `records` are each program's own DATA DIVISION items (COPY members are
+# not expanded; copybook layouts are not keyed). ~5,500 elementary fields over the
+# six corpora, so a seeded sample of PROGRAMS is read in full: one per storage
+# section first (FILE / LINKAGE / LOCAL-STORAGE / WORKING-STORAGE), then random
+# programs until RECORD_SAMPLE_FACTS fields are covered. The comparison is the whole
+# elementary row -- line, level, name, PIC, USAGE, OCCURS, REDEFINES -- stronger
+# than the ledger's field-NAME comparison. Once every planned program is signed,
+# every program's `records_validated` is set with `records_validated_tier`
+# sample_verified (the program block's own tier backs other fields).
+RECORD_SAMPLE_FACTS = 150
+
+
+def _record_fields(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    return [r for r in entry.get("records", []) if r.get("pic") and r.get("name") and r["name"] != "FILLER"
+            and r.get("level") not in (66, 88)]  # fmt: skip
+
+
+def _pic(v: Any) -> str:
+    return re.sub(r"\(0+(\d)", r"(\1", re.sub(r"\s+", "", str(v).upper())) if v else "-"
+
+
+def _usage(v: Any) -> str:
+    u = re.sub(r"^(?:USAGE\s+)?(?:IS\s+)?", "", _ws(v)) if v else ""
+    return re.sub(r"^COMPUTATIONAL", "COMP", u) or "-"
+
+
+def canon_record(r: dict[str, Any]) -> str:
+    occ = "-"
+    if r.get("occurs_max") or r.get("occurs_min") or r.get("occurs_depending_on"):
+        occ = f"{_d(r.get('occurs_min'))}-{_d(r.get('occurs_max'))}/{_d(r.get('occurs_depending_on'))}"
+    return (
+        f"L{int(r.get('line') or 0)} {int(r.get('level') or 0):02d} {_ws(r.get('name'))} PIC={_pic(r.get('pic'))} "
+        f"U={_usage(r.get('usage'))} O={occ} R={_d(r.get('redefines'))}"
+    )
+
+
+def records_plan(key: dict[str, Any], seed: int, budget: int = RECORD_SAMPLE_FACTS) -> list[str]:
+    progs = {rel: _record_fields(e) for rel, e in sorted(key.get("programs", {}).items())}
+    rng = random.Random(seed)
+    order = sorted(progs)
+    rng.shuffle(order)
+    chosen: list[str] = []
+    for section in ("FILE", "LINKAGE", "LOCAL-STORAGE", "WORKING-STORAGE"):
+        pick = next((p for p in order if any(r.get("section") == section for r in progs[p])), None)
+        if pick and pick not in chosen:
+            chosen.append(pick)
+    for p in order:
+        if sum(len(progs[c]) for c in chosen) >= budget:
+            break
+        if p not in chosen:
+            chosen.append(p)
+    return sorted(chosen)
+
+
+def corpus_files_records(key: dict[str, Any]) -> list[str]:
+    return list(key.get("sample_census", {}).get("records", {}).get("plan", {}).get("files", []))
+
+
+def key_facts_records(key: dict[str, Any], files: list[str]) -> dict[str, dict[str, list[str]]]:
+    progs = key.get("programs", {})
+    return {"records": {rel: sorted({canon_record(r) for r in _record_fields(progs.get(rel, {}))}) for rel in files}}
+
+
+def reviewer_facts_records(answers: dict[str, Any], repo: Path) -> dict[str, dict[str, set[str]]]:
+    root = str(repo).rstrip("/") + "/"
+    out: dict[str, dict[str, set[str]]] = {"records": {}}
+    for path, v in (answers.get("files") or {}).items():
+        r = path[len(root) :] if path.startswith(root) else path
+        out["records"][r] = {canon_record(x) for x in (v or {}).get("fields", []) if isinstance(x, dict)}
+    return out
+
+
+def render_records(
+    key: dict[str, Any], repo: Path, files: list[str], index: int, of: int
+) -> tuple[str, dict[str, Any]]:
+    truth = {"corpus": key["corpus"], "ref": key["ref"], "root": str(repo), "mode": "section_census",
+             "suite": "records", "batch": index, "of": of, "files": files,
+             "facts": key_facts_records(key, files)}  # fmt: skip
+    listing = "\n".join(str(repo / f) for f in files)
+    brief = f"""You are independently verifying facts about real IBM mainframe COBOL source code, as a second reviewer.
+Read the files yourself. They are all under the repository root {repo}; read only the files listed below. Do NOT
+edit or create any files except your answers file, and do not look for any existing answer key or analysis of this
+code: the point is an independent reading. Line numbers are 1-based physical line numbers of the file.
+
+{FIXED_FORMAT_RULES}
+
+For EACH file list, in "fields", every ELEMENTARY DATA ITEM of its DATA DIVISION (FILE SECTION, WORKING-STORAGE,
+LOCAL-STORAGE and LINKAGE SECTION) that has a PICTURE / PIC clause and a name -- not FILLER (nor an unnamed item),
+not a level-66 RENAMES or level-88 condition name. Group items (no PIC) are not listed. Do NOT expand `COPY`
+statements: only items written in the file itself count. Ignore commented-out lines. One entry per item:
+  "line"       the line its level number is on
+  "level"      the level number (an integer: 1, 5, 10, 77, ...)
+  "name"       the data name, upper-cased
+  "pic"        the PICTURE string exactly as written (e.g. "X(08)", "S9(4)", "9(5)V99"), without PIC / IS
+  "usage"      its own USAGE as written, without USAGE / IS (e.g. "COMP-3", "COMP", "BINARY", "DISPLAY"), or null
+               when the item codes none (a group's USAGE is NOT inherited here)
+  "occurs_min" / "occurs_max"  its own OCCURS clause: `OCCURS 5` -> 5 / 5; `OCCURS 1 TO 50 DEPENDING ON N` -> 1 / 50;
+               null / null without one (an enclosing group's OCCURS is NOT inherited)
+  "occurs_depending_on"  the DEPENDING ON data name, else null
+  "redefines"  the data name in its own REDEFINES clause, else null
+A file with no such item gets an empty list.
+
+Files:
+{listing}
+
+OUTPUT: reply with ONLY one JSON object, no prose before or after (paths repo-relative):
+{{"files": {{"<path>": {{"fields": [{{"line": 42, "level": 5, "name": "WS-PGMNAME", "pic": "X(08)", "usage": null,
+   "occurs_min": null, "occurs_max": null, "occurs_depending_on": null, "redefines": null}}]}}, ...every file above...}}}}
+"""
+    return brief, truth
+
+
+def batches_records(key: dict[str, Any], files: list[str], max_items: int) -> list[list[str]]:
+    return _pack({f: len(v) for f, v in key_facts_records(key, files)["records"].items()}, max_items)
+
+
+def _sign_records_sample(key: dict[str, Any], truth: dict[str, Any], g: dict[str, Any], rulings: dict[str, Any],
+                         by: str, at: str) -> None:  # fmt: skip
+    sc = key["sample_census"]["records"]
+    sc.setdefault("batches", []).append({"by": by, "at": at, "batch": truth["batch"], "files": truth["files"]})
+    sc["asked"] = sc.get("asked", 0) + g["tasks"].get("records", {}).get("asked", 0)
+    sc["key_errors"] = sc.get("key_errors", 0) + sum(1 for r in rulings.values() if r.get("verdict") == "key_fixed")
+    done = {f for b in sc["batches"] for f in b["files"]}
+    if all(f in done for f in sc["plan"]["files"]):
+        sc["upper_bound_95"] = round(upper_bound_95(sc["key_errors"], sc["asked"]), 5)
+        for entry in key.get("programs", {}).values():
+            entry["records_validated"] = True
+            entry["records_validated_tier"] = "sample_verified"
+
+
+# ---- the `bms` suite (#3575): a SAMPLED census of BMS screen fields -------------
+# ~1,900 DFHMSD / DFHMDI / DFHMDF items over CardDemo, CBSA and GENAPP: a seeded
+# sample of BMS sources (up to BMS_SAMPLE_FACTS per corpus) is read in full. Compared
+# through the key's own unit (cobol_answer_key.bms_layout_units): each mapset and
+# map, and each field with its owner, POS, LENGTH, ATTRB, PICIN / PICOUT, OCCURS and
+# INITIAL. The reviewer names each item's parent; the rows are rebuilt as the key's
+# items. Signed all at once, `sample_verified` (a full census when the plan covers
+# every source).
+BMS_SAMPLE_FACTS = 300
+
+
+def bms_plan(key: dict[str, Any], seed: int, budget: int = BMS_SAMPLE_FACTS) -> list[str]:
+    from cobol_answer_key import bms_layout_units  # noqa: PLC0415
+
+    sizes = {rel: len(bms_layout_units(e.get("fields", []))) for rel, e in sorted(key.get("bms_maps", {}).items())}
+    order = sorted(sizes)
+    random.Random(seed).shuffle(order)
+    chosen: list[str] = []
+    for rel in order:
+        if chosen and sum(sizes[c] for c in chosen) >= budget:
+            break
+        chosen.append(rel)
+    return sorted(chosen)
+
+
+def corpus_files_bms(key: dict[str, Any]) -> list[str]:
+    return list(key.get("sample_census", {}).get("bms", {}).get("plan", {}).get("files", []))
+
+
+def key_facts_bms(key: dict[str, Any], files: list[str]) -> dict[str, dict[str, list[str]]]:
+    from cobol_answer_key import bms_layout_units  # noqa: PLC0415
+
+    maps = key.get("bms_maps", {})
+    return {"bms": {rel: sorted(bms_layout_units(maps.get(rel, {}).get("fields", []))) for rel in files}}
+
+
+def _bms_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A reviewer's rows as the key's items: ordinals, and parent_ordinal by parent name."""
+    items: list[dict[str, Any]] = []
+    last: dict[str, int] = {}
+    for r in rows:
+        kind = _ws(r.get("kind")).lower()
+        name = _ws(r["name"]) if r.get("name") else None
+        parent = last.get(_ws(r["parent"])) if r.get("parent") else None
+        it = {"kind": kind, "name": name, "ordinal": len(items), "parent_ordinal": parent}
+        for k in ("pos_line", "pos_column", "length", "occurs"):
+            v = r.get(k)
+            it[k] = int(v) if isinstance(v, int) or (isinstance(v, str) and v.strip().isdigit()) else None
+        attrb = r.get("attrb")
+        it["attrb"] = re.sub(r"\s+", "", str(attrb)).strip("()").upper() if attrb else None
+        for k in ("picin", "picout", "initial"):
+            it[k] = r.get(k) if r.get(k) not in ("",) else None
+        items.append(it)
+        if kind in ("mapset", "map") and name:
+            last[name] = it["ordinal"]
+    return items
+
+
+def reviewer_facts_bms(answers: dict[str, Any], repo: Path) -> dict[str, dict[str, set[str]]]:
+    from cobol_answer_key import bms_layout_units  # noqa: PLC0415
+
+    root = str(repo).rstrip("/") + "/"
+    out: dict[str, dict[str, set[str]]] = {"bms": {}}
+    for path, v in (answers.get("files") or {}).items():
+        r = path[len(root) :] if path.startswith(root) else path
+        rows = [x for x in (v or {}).get("items", []) if isinstance(x, dict)]
+        out["bms"][r] = bms_layout_units(_bms_items(rows))
+    return out
+
+
+def render_bms(key: dict[str, Any], repo: Path, files: list[str], index: int, of: int) -> tuple[str, dict[str, Any]]:
+    truth = {"corpus": key["corpus"], "ref": key["ref"], "root": str(repo), "mode": "section_census",
+             "suite": "bms", "batch": index, "of": of, "files": files, "facts": key_facts_bms(key, files)}  # fmt: skip
+    listing = "\n".join(str(repo / f) for f in files)
+    brief = f"""You are independently verifying facts about real IBM CICS BMS map sources (the assembler macros DFHMSD,
+DFHMDI and DFHMDF that define 3270 screens), as a second reviewer. Read the files yourself. They are all under the
+repository root {repo}; read only the files listed below. Do NOT edit or create any files except your answers file,
+and do not look for any existing answer key or analysis: the point is an independent reading.
+
+READING RULES. A line starting with `*` is a comment. A statement whose column 72 is non-blank continues on the next
+line, whose text starts in column 16 (columns 73-80 are a sequence field, never part of the statement). A statement
+is `label MACRO operands`: the label (if any) is the item's name; operands are KEYWORD=value separated by commas.
+
+For EACH file list, in "items", every DFHMSD (kind "mapset"), DFHMDI (kind "map") and DFHMDF (kind "field") in
+source order -- EXCEPT a DFHMSD TYPE=FINAL, which is not listed -- one entry each:
+  "kind"       "mapset" | "map" | "field"
+  "name"       its label, upper-cased; null for an unlabelled DFHMDF (a screen literal)
+  "parent"     for a map: its mapset's name; for a field: the name of the map it follows (the mapset's, if no map
+               yet); null for a mapset
+  for a FIELD only (null for mapsets and maps, and null when the field does not code the operand):
+  "pos_line", "pos_column"  from POS=(line,column) (a POS written as a single number: both null)
+  "length"     LENGTH=n as an integer
+  "attrb"      ATTRB's value without its parentheses, e.g. "ASKIP,NORM" (as written, upper-cased)
+  "picin", "picout"  PICIN= / PICOUT= without the enclosing apostrophes
+  "occurs"     OCCURS=n as an integer
+  "initial"    INITIAL= text between the apostrophes, the continued lines joined, `''` read as one `'` and `&&`
+               as one `&`
+
+Files:
+{listing}
+
+OUTPUT: reply with ONLY one JSON object, no prose before or after (paths repo-relative):
+{{"files": {{"<path>": {{"items": [{{"kind": "mapset", "name": "COSGN00", "parent": null, "pos_line": null,
+   "pos_column": null, "length": null, "attrb": null, "picin": null, "picout": null, "occurs": null, "initial": null}},
+   {{"kind": "field", "name": null, "parent": "COSGN0A", "pos_line": 1, "pos_column": 1, "length": 5,
+   "attrb": "ASKIP,NORM", "picin": null, "picout": null, "occurs": null, "initial": "Tran:"}}]}}, ...every file above...}}}}
+"""
+    return brief, truth
+
+
+def batches_bms(key: dict[str, Any], files: list[str], max_items: int) -> list[list[str]]:
+    return _pack({f: len(v) for f, v in key_facts_bms(key, files)["bms"].items()}, max_items)
+
+
+def _sign_bms_sample(key: dict[str, Any], truth: dict[str, Any], g: dict[str, Any], rulings: dict[str, Any],
+                     by: str, at: str) -> None:  # fmt: skip
+    sc = key["sample_census"]["bms"]
+    sc.setdefault("batches", []).append({"by": by, "at": at, "batch": truth["batch"], "files": truth["files"]})
+    sc["asked"] = sc.get("asked", 0) + g["tasks"].get("bms", {}).get("asked", 0)
+    sc["key_errors"] = sc.get("key_errors", 0) + sum(1 for r in rulings.values() if r.get("verdict") == "key_fixed")
+    done = {f for b in sc["batches"] for f in b["files"]}
+    if all(f in done for f in sc["plan"]["files"]):
+        sc["upper_bound_95"] = round(upper_bound_95(sc["key_errors"], sc["asked"]), 5)
+        full = set(sc["plan"]["files"]) >= set(key.get("bms_maps", {}))
+        tier = "cross_verified" if full else "sample_verified"
+        stamp = {"status": "validated", "tier": tier, "census": {"by": by, "at": at, "sampled": not full}}
+        for entry in key.get("bms_maps", {}).values():
+            entry["fields_validated"] = True
             entry["verification"] = dict(entry.get("verification", {}), **stamp)
 
 
@@ -1930,6 +2463,14 @@ def grade(truth: dict[str, Any], answers: dict[str, Any], repo: Path) -> dict[st
         if suite == "plicalls"
         else reviewer_facts_pliuow(answers, repo)
         if suite == "pliuow"
+        else reviewer_facts_pliresources(answers, repo)
+        if suite == "pliresources"
+        else reviewer_facts_csd(answers, repo)
+        if suite == "csd"
+        else reviewer_facts_records(answers, repo)
+        if suite == "records"
+        else reviewer_facts_bms(answers, repo)
+        if suite == "bms"
         else reviewer_facts_plimoves(answers, repo)
         if suite == "plimoves"
         else reviewer_facts(answers, repo)
@@ -1996,8 +2537,10 @@ def sign(
         if truth.get("suite") == "jcics"
         else RESOURCE_SECTIONS
         if truth.get("suite") == "resources"
+        else {("csd_decks", "resources_validated")}
+        if truth.get("suite") == "csd"
         else set()  # plicalls / pliuow: flagged all at once when the sample completes
-        if truth.get("suite") in ("plicalls", "pliuow", "plimoves")
+        if truth.get("suite") in ("plicalls", "pliuow", "plimoves", "pliresources", "records", "bms")
         else {SECTIONS[t] for t in PER_FILE}
     )
     for rel in truth["files"]:
@@ -2031,6 +2574,14 @@ def sign(
         _sign_pli_sample(key, truth, g, rulings, by, at)
     if truth.get("suite") == "pliuow":
         _sign_pli_uow_sample(key, truth, g, rulings, by, at)
+    if truth.get("suite") == "pliresources":
+        _sign_pli_resources_sample(key, truth, g, rulings, by, at)
+    if truth.get("suite") == "csd":
+        _sign_csd_transactions(key, by, at)
+    if truth.get("suite") == "records":
+        _sign_records_sample(key, truth, g, rulings, by, at)
+    if truth.get("suite") == "bms":
+        _sign_bms_sample(key, truth, g, rulings, by, at)
     if truth.get("suite") == "plimoves":
         _sign_pli_moves_sample(key, truth, g, rulings, by, at)
     return key
@@ -2110,6 +2661,10 @@ def main() -> int:
             "plicalls",
             "pliuow",
             "plimoves",
+            "pliresources",
+            "csd",
+            "records",
+            "bms",
         ),
         default="channels",
     )
@@ -2132,6 +2687,10 @@ def main() -> int:
             "plicalls",
             "pliuow",
             "plimoves",
+            "pliresources",
+            "csd",
+            "records",
+            "bms",
         ),
         default="channels",
     )
@@ -2164,6 +2723,14 @@ def main() -> int:
         if suite == "plicalls"
         else corpus_files_pliuow(key)
         if suite == "pliuow"
+        else corpus_files_pliresources(key)
+        if suite == "pliresources"
+        else corpus_files_csd(key, repo)
+        if suite == "csd"
+        else corpus_files_records(key)
+        if suite == "records"
+        else corpus_files_bms(key)
+        if suite == "bms"
         else corpus_files(repo)  # calls: every COBOL source
     )
     if args.cmd == "coverage":
@@ -2202,6 +2769,24 @@ def main() -> int:
                 (d / "truth.json").write_text(json.dumps(truth, indent=2) + "\n", encoding="utf-8")
                 print(f"{d}: {len(ws)} windows, {sum(len(v) for v in truth['facts']['moves'].values())} key facts")
             return 0
+        if suite == "pliresources":
+            pr = key.setdefault("sample_census", {}).setdefault("pli_resources", {})
+            if not pr.get("batches"):
+                pr["plan"] = {"seed": args.seed, "strata": PLI_RES_SAMPLE, "files": pli_resources_plan(key, args.seed)}
+                (REPO_ROOT / corpus["answer_key"]).write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+            files = corpus_files_pliresources(key)
+        if suite == "bms":
+            bc = key.setdefault("sample_census", {}).setdefault("bms", {})
+            if not bc.get("batches"):
+                bc["plan"] = {"seed": args.seed, "budget": BMS_SAMPLE_FACTS, "files": bms_plan(key, args.seed)}
+                (REPO_ROOT / corpus["answer_key"]).write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+            files = corpus_files_bms(key)
+        if suite == "records":
+            rc = key.setdefault("sample_census", {}).setdefault("records", {})
+            if not rc.get("batches"):
+                rc["plan"] = {"seed": args.seed, "budget": RECORD_SAMPLE_FACTS, "files": records_plan(key, args.seed)}
+                (REPO_ROOT / corpus["answer_key"]).write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
+            files = corpus_files_records(key)
         if suite == "pliuow":
             pu = key.setdefault("sample_census", {}).setdefault("pli_uow", {})
             if not pu.get("batches"):
@@ -2241,6 +2826,10 @@ def main() -> int:
             "resources": batches_resources,
             "plicalls": batches_plicalls,
             "pliuow": batches_pliuow,
+            "pliresources": batches_pliresources,
+            "csd": batches_csd,
+            "records": batches_records,
+            "bms": batches_bms,
         }.get(suite, batches)
         packed = pack(key, files, args.max_items)
         for i, batch in enumerate(packed, 1):
@@ -2256,6 +2845,10 @@ def main() -> int:
                 "resources": render_resources,
                 "plicalls": render_plicalls,
                 "pliuow": render_pliuow,
+                "pliresources": render_pliresources,
+                "csd": render_csd,
+                "records": render_records,
+                "bms": render_bms,
             }.get(suite, render)
             brief, truth = make(key, staged, batch, i, len(packed))
             (d / "brief.md").write_text(brief, encoding="utf-8")
@@ -2304,6 +2897,14 @@ def main() -> int:
         current = dict(truth, facts=key_facts_plicalls(key, truth["files"]))
     elif truth.get("suite") == "pliuow":
         current = dict(truth, facts=key_facts_pliuow(key, truth["files"]))
+    elif truth.get("suite") == "pliresources":
+        current = dict(truth, facts=key_facts_pliresources(key, truth["files"]))
+    elif truth.get("suite") == "csd":
+        current = dict(truth, facts=key_facts_csd(key, truth["files"]))
+    elif truth.get("suite") == "records":
+        current = dict(truth, facts=key_facts_records(key, truth["files"]))
+    elif truth.get("suite") == "bms":
+        current = dict(truth, facts=key_facts_bms(key, truth["files"]))
     elif truth.get("suite") == "plimoves":
         current = dict(truth, facts=key_facts_plimoves(key, truth["windows"]))
     else:

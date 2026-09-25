@@ -951,7 +951,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 96
+          "line": 98
         },
         {
           "ordinal": 52,
@@ -1127,7 +1127,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 114
+          "line": 116
         },
         {
           "ordinal": 63,
@@ -1143,7 +1143,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 118
+          "line": 120
         },
         {
           "ordinal": 64,
@@ -1196,7 +1196,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-authorization-ims-db2-mq/cbl/COPAUA0C.cbl": {
       "program_id": "COPAUA0C",
@@ -1608,7 +1616,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 31
+          "line": 32
         },
         {
           "ordinal": 1,
@@ -1752,7 +1760,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "ZERO",
-          "line": 41
+          "line": 42
         },
         {
           "ordinal": 10,
@@ -1864,7 +1872,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 49
+          "line": 50
         },
         {
           "ordinal": 17,
@@ -2152,7 +2160,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 68
+          "line": 72
         },
         {
           "ordinal": 35,
@@ -2248,7 +2256,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 80
+          "line": 81
         },
         {
           "ordinal": 41,
@@ -2520,7 +2528,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "ZERO",
-          "line": 98
+          "line": 99
         },
         {
           "ordinal": 58,
@@ -2600,7 +2608,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "ZERO",
-          "line": 104
+          "line": 105
         },
         {
           "ordinal": 63,
@@ -2664,7 +2672,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 109
+          "line": 110
         },
         {
           "ordinal": 67,
@@ -3240,7 +3248,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 146
+          "line": 148
         },
         {
           "ordinal": 103,
@@ -3256,7 +3264,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 150
+          "line": 151
         },
         {
           "ordinal": 104,
@@ -3272,7 +3280,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 153
+          "line": 154
         },
         {
           "ordinal": 105,
@@ -3288,7 +3296,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 156
+          "line": 157
         },
         {
           "ordinal": 106,
@@ -3304,7 +3312,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 159
+          "line": 160
         },
         {
           "ordinal": 107,
@@ -3320,7 +3328,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 162
+          "line": 163
         },
         {
           "ordinal": 108,
@@ -3336,7 +3344,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 165
+          "line": 166
         },
         {
           "ordinal": 109,
@@ -3352,7 +3360,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 168
+          "line": 169
         },
         {
           "ordinal": 110,
@@ -3368,7 +3376,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 171
+          "line": 177
         },
         {
           "ordinal": 111,
@@ -3384,7 +3392,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 179
+          "line": 181
         },
         {
           "ordinal": 112,
@@ -3400,7 +3408,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 186
+          "line": 192
         },
         {
           "ordinal": 113,
@@ -3416,7 +3424,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 194
+          "line": 196
         },
         {
           "ordinal": 114,
@@ -3471,7 +3479,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-authorization-ims-db2-mq/cbl/COPAUS0C.cbl": {
       "program_id": "COPAUS0C",
@@ -3749,7 +3765,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 31
+          "line": 32
         },
         {
           "ordinal": 1,
@@ -3925,7 +3941,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 43
+          "line": 44
         },
         {
           "ordinal": 12,
@@ -4085,7 +4101,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 54
+          "line": 55
         },
         {
           "ordinal": 22,
@@ -4181,7 +4197,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 61
+          "line": 65
         },
         {
           "ordinal": 28,
@@ -4277,7 +4293,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 73
+          "line": 74
         },
         {
           "ordinal": 34,
@@ -4549,7 +4565,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 91
+          "line": 93
         },
         {
           "ordinal": 51,
@@ -5061,7 +5077,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 154
+          "line": 160
         },
         {
           "ordinal": 83,
@@ -5077,7 +5093,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 162
+          "line": 164
         },
         {
           "ordinal": 84,
@@ -5130,7 +5146,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-authorization-ims-db2-mq/cbl/COPAUS1C.cbl": {
       "program_id": "COPAUS1C",
@@ -5351,7 +5375,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 31
+          "line": 32
         },
         {
           "ordinal": 1,
@@ -5623,7 +5647,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 49
+          "line": 50
         },
         {
           "ordinal": 18,
@@ -5703,7 +5727,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 55
+          "line": 56
         },
         {
           "ordinal": 23,
@@ -5943,7 +5967,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 74
+          "line": 75
         },
         {
           "ordinal": 38,
@@ -6215,7 +6239,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 92
+          "line": 93
         },
         {
           "ordinal": 55,
@@ -6583,7 +6607,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 136
+          "line": 141
         },
         {
           "ordinal": 78,
@@ -6599,7 +6623,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 143
+          "line": 145
         },
         {
           "ordinal": 79,
@@ -6652,7 +6676,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-authorization-ims-db2-mq/cbl/COPAUS2C.cbl": {
       "program_id": "COPAUS2C",
@@ -6713,7 +6745,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 31
+          "line": 32
         },
         {
           "ordinal": 1,
@@ -7097,7 +7129,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 57
+          "line": 58
         },
         {
           "ordinal": 25,
@@ -7328,7 +7360,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-authorization-ims-db2-mq/cbl/DBUNLDGS.CBL": {
       "program_id": "DBUNLDGS",
@@ -8364,7 +8404,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 113
+          "line": 115
         },
         {
           "ordinal": 54,
@@ -8636,7 +8676,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 140
+          "line": 142
         },
         {
           "ordinal": 71,
@@ -8652,7 +8692,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 144
+          "line": 146
         }
       ],
       "transactions": [],
@@ -8673,7 +8713,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-authorization-ims-db2-mq/cbl/PAUDBLOD.CBL": {
       "program_id": "PAUDBLOD",
@@ -9744,7 +9792,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 111
+          "line": 113
         },
         {
           "ordinal": 56,
@@ -10128,7 +10176,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 146
+          "line": 148
         },
         {
           "ordinal": 80,
@@ -10144,7 +10192,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 150
+          "line": 152
         },
         {
           "ordinal": 81,
@@ -10181,7 +10229,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-authorization-ims-db2-mq/cbl/PAUDBUNL.CBL": {
       "program_id": "PAUDBUNL",
@@ -11182,7 +11238,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 109
+          "line": 111
         },
         {
           "ordinal": 54,
@@ -11454,7 +11510,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 136
+          "line": 138
         },
         {
           "ordinal": 71,
@@ -11470,7 +11526,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 140
+          "line": 142
         }
       ],
       "transactions": [],
@@ -11489,7 +11545,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-transaction-type-db2/cbl/COBTUPDT.cbl": {
       "program_id": "COBTUPDT",
@@ -11650,7 +11714,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 55
+          "line": 57
         },
         {
           "ordinal": 5,
@@ -11714,7 +11778,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 63
+          "line": 64
         },
         {
           "ordinal": 9,
@@ -11746,7 +11810,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 66
+          "line": 67
         },
         {
           "ordinal": 11,
@@ -11794,7 +11858,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 70
+          "line": 71
         },
         {
           "ordinal": 14,
@@ -11861,7 +11925,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-transaction-type-db2/cbl/COTRTLIC.cbl": {
       "program_id": "COTRTLIC",
@@ -12349,7 +12421,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 38
+          "line": 42
         },
         {
           "ordinal": 1,
@@ -12637,7 +12709,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 61
+          "line": 65
         },
         {
           "ordinal": 19,
@@ -12717,7 +12789,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "SPACES",
-          "line": 73
+          "line": 77
         },
         {
           "ordinal": 24,
@@ -12813,7 +12885,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 83
+          "line": 84
         },
         {
           "ordinal": 30,
@@ -12829,7 +12901,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 88
+          "line": 89
         },
         {
           "ordinal": 31,
@@ -12893,7 +12965,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 93
+          "line": 98
         },
         {
           "ordinal": 35,
@@ -13517,7 +13589,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 141
+          "line": 143
         },
         {
           "ordinal": 74,
@@ -13549,7 +13621,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 145
+          "line": 146
         },
         {
           "ordinal": 76,
@@ -13581,7 +13653,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 148
+          "line": 149
         },
         {
           "ordinal": 78,
@@ -13645,7 +13717,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 153
+          "line": 154
         },
         {
           "ordinal": 82,
@@ -13677,7 +13749,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 157
+          "line": 165
         },
         {
           "ordinal": 84,
@@ -13805,7 +13877,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 173
+          "line": 175
         },
         {
           "ordinal": 92,
@@ -13933,7 +14005,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "LOW-VALUES",
-          "line": 189
+          "line": 190
         },
         {
           "ordinal": 100,
@@ -14013,7 +14085,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 196
+          "line": 197
         },
         {
           "ordinal": 105,
@@ -14205,7 +14277,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 221
+          "line": 225
         },
         {
           "ordinal": 117,
@@ -14669,7 +14741,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 270
+          "line": 274
         },
         {
           "ordinal": 146,
@@ -14925,7 +14997,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": ")",
-          "line": 299
+          "line": 300
         },
         {
           "ordinal": 162,
@@ -14941,7 +15013,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 305
+          "line": 309
         },
         {
           "ordinal": 163,
@@ -15005,7 +15077,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 314
+          "line": 318
         },
         {
           "ordinal": 167,
@@ -15021,7 +15093,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 319
+          "line": 320
         },
         {
           "ordinal": 168,
@@ -15069,7 +15141,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 376
+          "line": 377
         },
         {
           "ordinal": 171,
@@ -15133,7 +15205,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 382
+          "line": 386
         },
         {
           "ordinal": 175,
@@ -15245,7 +15317,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 393
+          "line": 395
         },
         {
           "ordinal": 182,
@@ -15341,7 +15413,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 402
+          "line": 403
         },
         {
           "ordinal": 188,
@@ -15597,7 +15669,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 419
+          "line": 420
         },
         {
           "ordinal": 204,
@@ -16376,7 +16448,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-transaction-type-db2/cbl/COTRTUPC.cbl": {
       "program_id": "COTRTUPC",
@@ -17007,7 +17087,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 54
+          "line": 55
         },
         {
           "ordinal": 9,
@@ -17039,7 +17119,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 57
+          "line": 58
         },
         {
           "ordinal": 11,
@@ -17103,7 +17183,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 62
+          "line": 67
         },
         {
           "ordinal": 15,
@@ -17391,7 +17471,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 91
+          "line": 94
         },
         {
           "ordinal": 33,
@@ -17455,7 +17535,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 98
+          "line": 99
         },
         {
           "ordinal": 37,
@@ -17743,7 +17823,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 121
+          "line": 125
         },
         {
           "ordinal": 55,
@@ -17855,7 +17935,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 137
+          "line": 142
         },
         {
           "ordinal": 62,
@@ -17999,7 +18079,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "CHANGES VALIDATED.PRESS F5 TO SAVE",
-          "line": 159
+          "line": 160
         },
         {
           "ordinal": 71,
@@ -18047,7 +18127,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 166
+          "line": 167
         },
         {
           "ordinal": 74,
@@ -18511,7 +18591,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 225
+          "line": 230
         },
         {
           "ordinal": 103,
@@ -18591,7 +18671,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "SPACES",
-          "line": 245
+          "line": 249
         },
         {
           "ordinal": 108,
@@ -18687,7 +18767,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 293
+          "line": 294
         },
         {
           "ordinal": 114,
@@ -18959,7 +19039,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 320
+          "line": 322
         },
         {
           "ordinal": 131,
@@ -19007,7 +19087,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "C",
-          "line": 325
+          "line": 326
         },
         {
           "ordinal": 134,
@@ -19223,7 +19303,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-vsam-mq/cbl/COACCT01.cbl": {
       "program_id": "COACCT01",
@@ -19444,7 +19532,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 12
+          "line": 13
         },
         {
           "ordinal": 1,
@@ -19476,7 +19564,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 15
+          "line": 16
         },
         {
           "ordinal": 3,
@@ -19508,7 +19596,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 18
+          "line": 19
         },
         {
           "ordinal": 5,
@@ -19540,7 +19628,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 21
+          "line": 22
         },
         {
           "ordinal": 7,
@@ -19572,7 +19660,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 24
+          "line": 26
         },
         {
           "ordinal": 9,
@@ -19652,7 +19740,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 31
+          "line": 35
         },
         {
           "ordinal": 14,
@@ -20132,7 +20220,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 68
+          "line": 70
         },
         {
           "ordinal": 44,
@@ -20148,7 +20236,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 72
+          "line": 74
         },
         {
           "ordinal": 45,
@@ -20164,7 +20252,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 76
+          "line": 78
         },
         {
           "ordinal": 46,
@@ -20180,7 +20268,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 80
+          "line": 82
         },
         {
           "ordinal": 47,
@@ -20196,7 +20284,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 84
+          "line": 86
         },
         {
           "ordinal": 48,
@@ -20212,7 +20300,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 88
+          "line": 89
         },
         {
           "ordinal": 49,
@@ -20228,7 +20316,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 91
+          "line": 92
         },
         {
           "ordinal": 50,
@@ -20308,7 +20396,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 97
+          "line": 98
         },
         {
           "ordinal": 55,
@@ -20324,7 +20412,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 99
+          "line": 100
         },
         {
           "ordinal": 56,
@@ -20340,7 +20428,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 101
+          "line": 102
         },
         {
           "ordinal": 57,
@@ -20356,7 +20444,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 103
+          "line": 104
         },
         {
           "ordinal": 58,
@@ -20500,7 +20588,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 113
+          "line": 114
         },
         {
           "ordinal": 67,
@@ -20660,7 +20748,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 129
+          "line": 130
         },
         {
           "ordinal": 77,
@@ -20676,7 +20764,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "ACCOUNT ID : ",
-          "line": 131
+          "line": 132
         },
         {
           "ordinal": 78,
@@ -21033,7 +21121,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/app-vsam-mq/cbl/CODATE01.cbl": {
       "program_id": "CODATE01",
@@ -21246,7 +21342,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 12
+          "line": 13
         },
         {
           "ordinal": 1,
@@ -21278,7 +21374,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 15
+          "line": 16
         },
         {
           "ordinal": 3,
@@ -21310,7 +21406,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 18
+          "line": 19
         },
         {
           "ordinal": 5,
@@ -21342,7 +21438,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 21
+          "line": 22
         },
         {
           "ordinal": 7,
@@ -21374,7 +21470,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 24
+          "line": 26
         },
         {
           "ordinal": 9,
@@ -21454,7 +21550,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 31
+          "line": 35
         },
         {
           "ordinal": 14,
@@ -21934,7 +22030,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 68
+          "line": 70
         },
         {
           "ordinal": 44,
@@ -21950,7 +22046,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 72
+          "line": 74
         },
         {
           "ordinal": 45,
@@ -21966,7 +22062,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 76
+          "line": 78
         },
         {
           "ordinal": 46,
@@ -21982,7 +22078,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 80
+          "line": 82
         },
         {
           "ordinal": 47,
@@ -21998,7 +22094,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 84
+          "line": 86
         },
         {
           "ordinal": 48,
@@ -22014,7 +22110,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 88
+          "line": 89
         },
         {
           "ordinal": 49,
@@ -22030,7 +22126,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 91
+          "line": 92
         },
         {
           "ordinal": 50,
@@ -22110,7 +22206,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 97
+          "line": 98
         },
         {
           "ordinal": 55,
@@ -22126,7 +22222,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 99
+          "line": 100
         },
         {
           "ordinal": 56,
@@ -22142,7 +22238,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 101
+          "line": 102
         },
         {
           "ordinal": 57,
@@ -22158,7 +22254,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 103
+          "line": 104
         },
         {
           "ordinal": 58,
@@ -22302,7 +22398,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 113
+          "line": 114
         },
         {
           "ordinal": 67,
@@ -22371,7 +22467,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBACT01C.cbl": {
       "program_id": "CBACT01C",
@@ -23089,7 +23193,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 103
+          "line": 104
         },
         {
           "ordinal": 35,
@@ -23249,7 +23353,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 114
+          "line": 115
         },
         {
           "ordinal": 45,
@@ -23297,7 +23401,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 118
+          "line": 119
         },
         {
           "ordinal": 48,
@@ -23606,7 +23710,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBACT02C.cbl": {
       "program_id": "CBACT02C",
@@ -23781,7 +23893,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 49
+          "line": 50
         },
         {
           "ordinal": 7,
@@ -23941,7 +24053,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 60
+          "line": 61
         },
         {
           "ordinal": 17,
@@ -23989,7 +24101,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 64
+          "line": 65
         },
         {
           "ordinal": 20,
@@ -24040,7 +24152,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBACT03C.cbl": {
       "program_id": "CBACT03C",
@@ -24215,7 +24335,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 49
+          "line": 50
         },
         {
           "ordinal": 7,
@@ -24375,7 +24495,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 60
+          "line": 61
         },
         {
           "ordinal": 17,
@@ -24423,7 +24543,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 64
+          "line": 65
         },
         {
           "ordinal": 20,
@@ -24474,7 +24594,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBACT04C.cbl": {
       "program_id": "CBACT04C",
@@ -25310,7 +25438,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 121
+          "line": 122
         },
         {
           "ordinal": 39,
@@ -25470,7 +25598,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 132
+          "line": 133
         },
         {
           "ordinal": 49,
@@ -25518,7 +25646,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 136
+          "line": 137
         },
         {
           "ordinal": 52,
@@ -26145,7 +26273,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBCUS01C.cbl": {
       "program_id": "CBCUS01C",
@@ -26320,7 +26456,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 49
+          "line": 50
         },
         {
           "ordinal": 7,
@@ -26480,7 +26616,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 60
+          "line": 61
         },
         {
           "ordinal": 17,
@@ -26528,7 +26664,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 64
+          "line": 65
         },
         {
           "ordinal": 20,
@@ -26579,7 +26715,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBEXPORT.cbl": {
       "program_id": "CBEXPORT",
@@ -26834,7 +26978,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 97
+          "line": 99
         },
         {
           "ordinal": 2,
@@ -27122,7 +27266,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 117
+          "line": 119
         },
         {
           "ordinal": 20,
@@ -27202,7 +27346,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 124
+          "line": 126
         },
         {
           "ordinal": 25,
@@ -27362,7 +27506,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 136
+          "line": 138
         },
         {
           "ordinal": 35,
@@ -27477,7 +27621,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBIMPORT.cbl": {
       "program_id": "CBIMPORT",
@@ -27731,7 +27883,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 114
+          "line": 116
         },
         {
           "ordinal": 3,
@@ -27987,7 +28139,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 132
+          "line": 134
         },
         {
           "ordinal": 19,
@@ -28035,7 +28187,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 137
+          "line": 139
         },
         {
           "ordinal": 22,
@@ -28179,7 +28331,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 148
+          "line": 152
         },
         {
           "ordinal": 31,
@@ -28326,7 +28478,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBSTM03A.CBL": {
       "program_id": "CBSTM03A",
@@ -28673,7 +28833,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 58
+          "line": 59
         },
         {
           "ordinal": 3,
@@ -29073,7 +29233,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 84
+          "line": 85
         },
         {
           "ordinal": 28,
@@ -30065,7 +30225,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 147
+          "line": 148
         },
         {
           "ordinal": 90,
@@ -30801,7 +30961,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 224
+          "line": 225
         },
         {
           "ordinal": 136,
@@ -30945,7 +31105,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 234
+          "line": 235
         },
         {
           "ordinal": 145,
@@ -31332,7 +31492,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBSTM03B.CBL": {
       "program_id": "CBSTM03B",
@@ -31685,7 +31853,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 81
+          "line": 83
         },
         {
           "ordinal": 15,
@@ -31733,7 +31901,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 86
+          "line": 87
         },
         {
           "ordinal": 18,
@@ -31781,7 +31949,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 90
+          "line": 91
         },
         {
           "ordinal": 21,
@@ -31829,7 +31997,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 94
+          "line": 95
         },
         {
           "ordinal": 24,
@@ -32088,7 +32256,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBTRN01C.cbl": {
       "program_id": "CBTRN01C",
@@ -32888,7 +33064,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 128
+          "line": 129
         },
         {
           "ordinal": 37,
@@ -32936,7 +33112,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 132
+          "line": 133
         },
         {
           "ordinal": 40,
@@ -33000,7 +33176,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 137
+          "line": 138
         },
         {
           "ordinal": 44,
@@ -33048,7 +33224,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 141
+          "line": 142
         },
         {
           "ordinal": 47,
@@ -33096,7 +33272,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 145
+          "line": 146
         },
         {
           "ordinal": 50,
@@ -33195,7 +33371,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBTRN02C.cbl": {
       "program_id": "CBTRN02C",
@@ -33931,7 +34115,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 116
+          "line": 117
         },
         {
           "ordinal": 31,
@@ -34075,7 +34259,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 130
+          "line": 131
         },
         {
           "ordinal": 40,
@@ -34235,7 +34419,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 141
+          "line": 142
         },
         {
           "ordinal": 50,
@@ -34283,7 +34467,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 145
+          "line": 146
         },
         {
           "ordinal": 53,
@@ -34731,7 +34915,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 175
+          "line": 176
         },
         {
           "ordinal": 81,
@@ -34779,7 +34963,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 179
+          "line": 180
         },
         {
           "ordinal": 84,
@@ -34827,7 +35011,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 183
+          "line": 184
         },
         {
           "ordinal": 87,
@@ -34891,7 +35075,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 188
+          "line": 189
         },
         {
           "ordinal": 91,
@@ -34926,7 +35110,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CBTRN03C.cbl": {
       "program_id": "CBTRN03C",
@@ -35694,7 +35886,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 117
+          "line": 118
         },
         {
           "ordinal": 33,
@@ -35742,7 +35934,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 121
+          "line": 122
         },
         {
           "ordinal": 36,
@@ -35806,7 +35998,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 126
+          "line": 127
         },
         {
           "ordinal": 40,
@@ -35950,7 +36142,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 138
+          "line": 139
         },
         {
           "ordinal": 49,
@@ -36110,7 +36302,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 149
+          "line": 150
         },
         {
           "ordinal": 59,
@@ -36158,7 +36350,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 153
+          "line": 154
         },
         {
           "ordinal": 62,
@@ -36209,7 +36401,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COACTUPC.cbl": {
       "program_id": "COACTUPC",
@@ -37286,7 +37486,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 54
+          "line": 55
         },
         {
           "ordinal": 9,
@@ -37366,7 +37566,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 60
+          "line": 61
         },
         {
           "ordinal": 14,
@@ -37398,7 +37598,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 63
+          "line": 64
         },
         {
           "ordinal": 16,
@@ -37654,7 +37854,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 81
+          "line": 82
         },
         {
           "ordinal": 32,
@@ -38086,7 +38286,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 116
+          "line": 117
         },
         {
           "ordinal": 59,
@@ -38470,7 +38670,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 147
+          "line": 151
         },
         {
           "ordinal": 83,
@@ -38518,7 +38718,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 156
+          "line": 157
         },
         {
           "ordinal": 86,
@@ -38758,7 +38958,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 181
+          "line": 183
         },
         {
           "ordinal": 101,
@@ -41446,7 +41646,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 353
+          "line": 357
         },
         {
           "ordinal": 269,
@@ -41654,7 +41854,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 372
+          "line": 376
         },
         {
           "ordinal": 282,
@@ -42086,7 +42286,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 417
+          "line": 418
         },
         {
           "ordinal": 309,
@@ -42614,7 +42814,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 457
+          "line": 462
         },
         {
           "ordinal": 342,
@@ -42758,7 +42958,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 478
+          "line": 479
         },
         {
           "ordinal": 351,
@@ -43670,7 +43870,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "SPACES",
-          "line": 603
+          "line": 607
         },
         {
           "ordinal": 408,
@@ -43766,7 +43966,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 651
+          "line": 652
         },
         {
           "ordinal": 414,
@@ -46415,7 +46615,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COACTVWC.cbl": {
       "program_id": "COACTVWC",
@@ -46858,7 +47066,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 49
+          "line": 50
         },
         {
           "ordinal": 6,
@@ -47930,7 +48138,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "COMEN01C",
-          "line": 167
+          "line": 168
         },
         {
           "ordinal": 73,
@@ -48202,7 +48410,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 212
+          "line": 213
         },
         {
           "ordinal": 90,
@@ -48266,7 +48474,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 217
+          "line": 218
         },
         {
           "ordinal": 94,
@@ -48324,7 +48532,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COADM01C.cbl": {
       "program_id": "COADM01C",
@@ -48502,7 +48718,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 34
+          "line": 35
         },
         {
           "ordinal": 1,
@@ -48763,7 +48979,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COBIL00C.cbl": {
       "program_id": "COBIL00C",
@@ -48974,7 +49198,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 35
+          "line": 36
         },
         {
           "ordinal": 1,
@@ -49262,7 +49486,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 54
+          "line": 55
         },
         {
           "ordinal": 19,
@@ -49555,7 +49779,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COBSWAIT.cbl": {
       "program_id": "COBSWAIT",
@@ -49624,7 +49856,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COCRDLIC.cbl": {
       "program_id": "COCRDLIC",
@@ -50009,7 +50249,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 39
+          "line": 41
         },
         {
           "ordinal": 1,
@@ -50025,7 +50265,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 45
+          "line": 46
         },
         {
           "ordinal": 2,
@@ -51001,7 +51241,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 142
+          "line": 145
         },
         {
           "ordinal": 63,
@@ -51017,7 +51257,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 146
+          "line": 147
         },
         {
           "ordinal": 64,
@@ -51273,7 +51513,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 172
+          "line": 176
         },
         {
           "ordinal": 80,
@@ -51561,7 +51801,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "CARDDAT ",
-          "line": 211
+          "line": 213
         },
         {
           "ordinal": 98,
@@ -51593,7 +51833,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 228
+          "line": 229
         },
         {
           "ordinal": 100,
@@ -51705,7 +51945,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 236
+          "line": 237
         },
         {
           "ordinal": 107,
@@ -51833,7 +52073,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 245
+          "line": 246
         },
         {
           "ordinal": 115,
@@ -52025,7 +52265,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 261
+          "line": 262
         },
         {
           "ordinal": 127,
@@ -52081,7 +52321,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COCRDSLC.cbl": {
       "program_id": "COCRDSLC",
@@ -52511,7 +52759,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 50
+          "line": 51
         },
         {
           "ordinal": 6,
@@ -53071,7 +53319,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 93
+          "line": 97
         },
         {
           "ordinal": 41,
@@ -53375,7 +53623,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 133
+          "line": 134
         },
         {
           "ordinal": 60,
@@ -53519,7 +53767,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "DID NOT FIND THIS ACCOUNT IN CARDS DATABASE",
-          "line": 150
+          "line": 151
         },
         {
           "ordinal": 69,
@@ -53823,7 +54071,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 199
+          "line": 200
         },
         {
           "ordinal": 88,
@@ -53887,7 +54135,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 204
+          "line": 205
         },
         {
           "ordinal": 92,
@@ -53940,7 +54188,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COCRDUPC.cbl": {
       "program_id": "COCRDUPC",
@@ -54425,7 +54681,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 52
+          "line": 53
         },
         {
           "ordinal": 7,
@@ -55385,7 +55641,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 124
+          "line": 128
         },
         {
           "ordinal": 67,
@@ -55753,7 +56009,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 172
+          "line": 173
         },
         {
           "ordinal": 90,
@@ -56473,7 +56729,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 273
+          "line": 274
         },
         {
           "ordinal": 135,
@@ -56841,7 +57097,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 302
+          "line": 303
         },
         {
           "ordinal": 158,
@@ -57145,7 +57401,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 322
+          "line": 324
         },
         {
           "ordinal": 177,
@@ -57198,7 +57454,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COMEN01C.cbl": {
       "program_id": "COMEN01C",
@@ -57379,7 +57643,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 34
+          "line": 35
         },
         {
           "ordinal": 1,
@@ -57640,7 +57904,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CORPT00C.cbl": {
       "program_id": "CORPT00C",
@@ -57828,7 +58100,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 35
+          "line": 36
         },
         {
           "ordinal": 1,
@@ -58100,7 +58372,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "ZEROS",
-          "line": 53
+          "line": 54
         },
         {
           "ordinal": 18,
@@ -58180,7 +58452,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 59
+          "line": 60
         },
         {
           "ordinal": 23,
@@ -58388,7 +58660,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "0",
-          "line": 73
+          "line": 74
         },
         {
           "ordinal": 36,
@@ -58420,7 +58692,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 76
+          "line": 77
         },
         {
           "ordinal": 38,
@@ -58468,7 +58740,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 80
+          "line": 81
         },
         {
           "ordinal": 41,
@@ -58964,7 +59236,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 128
+          "line": 129
         },
         {
           "ordinal": 72,
@@ -59129,7 +59401,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COSGN00C.cbl": {
       "program_id": "COSGN00C",
@@ -59289,7 +59569,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 34
+          "line": 35
         },
         {
           "ordinal": 1,
@@ -59518,7 +59798,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COTRN00C.cbl": {
       "program_id": "COTRN00C",
@@ -59728,7 +60016,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 34
+          "line": 35
         },
         {
           "ordinal": 1,
@@ -59952,7 +60240,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "ZEROS",
-          "line": 49
+          "line": 50
         },
         {
           "ordinal": 15,
@@ -60032,7 +60320,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 55
+          "line": 56
         },
         {
           "ordinal": 20,
@@ -60245,7 +60533,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COTRN01C.cbl": {
       "program_id": "COTRN01C",
@@ -60405,7 +60701,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 34
+          "line": 35
         },
         {
           "ordinal": 1,
@@ -60613,7 +60909,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 48
+          "line": 49
         },
         {
           "ordinal": 14,
@@ -60826,7 +61122,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COTRN02C.cbl": {
       "program_id": "COTRN02C",
@@ -61070,7 +61374,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 34
+          "line": 35
         },
         {
           "ordinal": 1,
@@ -61198,7 +61502,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "N",
-          "line": 43
+          "line": 44
         },
         {
           "ordinal": 9,
@@ -61326,7 +61630,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 52
+          "line": 53
         },
         {
           "ordinal": 17,
@@ -61454,7 +61758,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 61
+          "line": 62
         },
         {
           "ordinal": 25,
@@ -61763,7 +62067,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COUSR00C.cbl": {
       "program_id": "COUSR00C",
@@ -61988,7 +62300,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 34
+          "line": 35
         },
         {
           "ordinal": 1,
@@ -62212,7 +62524,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": "ZEROS",
-          "line": 49
+          "line": 50
         },
         {
           "ordinal": 15,
@@ -62292,7 +62604,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 55
+          "line": 56
         },
         {
           "ordinal": 20,
@@ -62617,7 +62929,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COUSR01C.cbl": {
       "program_id": "COUSR01C",
@@ -62777,7 +63097,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 34
+          "line": 35
         },
         {
           "ordinal": 1,
@@ -62974,7 +63294,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COUSR02C.cbl": {
       "program_id": "COUSR02C",
@@ -63144,7 +63472,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 34
+          "line": 35
         },
         {
           "ordinal": 1,
@@ -63533,7 +63861,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/COUSR03C.cbl": {
       "program_id": "COUSR03C",
@@ -63703,7 +64039,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 34
+          "line": 35
         },
         {
           "ordinal": 1,
@@ -64092,7 +64428,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     },
     "app/cbl/CSUTLDTC.cbl": {
       "program_id": "CSUTLDTC",
@@ -64138,7 +64482,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 23
+          "line": 25
         },
         {
           "ordinal": 1,
@@ -64538,7 +64882,7 @@
           "occurs_depending_on": null,
           "redefines": null,
           "value": null,
-          "line": 58
+          "line": 60
         },
         {
           "ordinal": 26,
@@ -64909,7 +65253,15 @@
           "at": "2026-09-24"
         }
       },
-      "commareas_validated": false
+      "commareas_validated": false,
+      "transactions_validated": true,
+      "transactions_census": {
+        "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "at": "2026-09-25",
+        "derived": "censused CSD TRANSACTION -> PROGRAM rows joined to the cross-verified PROGRAM-ID (#3575)"
+      },
+      "records_validated": true,
+      "records_validated_tier": "sample_verified"
     }
   },
   "pli_programs": {},
@@ -66846,10 +67198,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/app-authorization-ims-db2-mq/bms/COPAU01.bms": {
@@ -67695,10 +68053,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/app-transaction-type-db2/bms/COTRTLI.bms": {
@@ -68949,10 +69313,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/app-transaction-type-db2/bms/COTRTUP.bms": {
@@ -69363,10 +69733,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COACTUP.bms": {
@@ -71322,10 +71698,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COACTVW.bms": {
@@ -72861,10 +73243,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COADM01.bms": {
@@ -73320,10 +73708,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COBIL00.bms": {
@@ -73719,10 +74113,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COCRDLI.bms": {
@@ -74838,10 +75238,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COCRDSL.bms": {
@@ -75342,10 +75748,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COCRDUP.bms": {
@@ -75891,10 +76303,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COMEN01.bms": {
@@ -76350,10 +76768,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/CORPT00.bms": {
@@ -77019,10 +77443,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COSGN00.bms": {
@@ -77613,10 +78043,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COTRN00.bms": {
@@ -78987,10 +79423,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COTRN01.bms": {
@@ -79866,10 +80308,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COTRN02.bms": {
@@ -80820,10 +81268,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COUSR00.bms": {
@@ -82194,10 +82648,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COUSR01.bms": {
@@ -82653,10 +83113,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COUSR02.bms": {
@@ -83127,10 +83593,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     },
     "app/bms/COUSR03.bms": {
@@ -83556,10 +84028,16 @@
           "parent_ordinal": 1
         }
       ],
-      "fields_validated": false,
+      "fields_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "sample_verified",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "sampled": true
+        }
       }
     }
   },
@@ -86607,10 +87085,16 @@
           "program": null
         }
       ],
-      "resources_validated": false,
+      "resources_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+          "at": "2026-09-25"
+        }
       }
     },
     "app/app-transaction-type-db2/csd/CRDDEMOD.csd": {
@@ -86760,10 +87244,16 @@
           "program": null
         }
       ],
-      "resources_validated": false,
+      "resources_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+          "at": "2026-09-25"
+        }
       }
     },
     "app/app-vsam-mq/csd/CRDDEMOM.csd": {
@@ -86849,10 +87339,16 @@
           "program": null
         }
       ],
-      "resources_validated": false,
+      "resources_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+          "at": "2026-09-25"
+        }
       }
     },
     "app/csd/CARDDEMO.CSD": {
@@ -87882,10 +88378,16 @@
           "program": null
         }
       ],
-      "resources_validated": false,
+      "resources_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+          "at": "2026-09-25"
+        }
       }
     },
     "app/jcl/CBADMCDJ.jcl": {
@@ -88611,10 +89113,16 @@
           "program": "COTSTP4C"
         }
       ],
-      "resources_validated": false,
+      "resources_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "notes": [],
+        "tier": "cross_verified",
+        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+        "census": {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+          "at": "2026-09-25"
+        }
       }
     }
   },
@@ -88675,9 +89183,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -88762,9 +89270,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -88813,9 +89321,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -88852,9 +89360,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -88877,10 +89385,10 @@
           "verb": "SEND",
           "kind": "MAP",
           "access": "write",
-          "name": null,
-          "resolution": "unresolved",
+          "name": "CTRTUPA",
+          "resolution": "move",
           "candidates": null,
-          "qualifier": null,
+          "qualifier": "COTRTUP",
           "record_clause": "FROM",
           "record": "CTRTUPAO",
           "line": 1433
@@ -88891,9 +89399,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -88918,9 +89426,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -88943,10 +89451,10 @@
           "verb": "SEND",
           "kind": "MAP",
           "access": "write",
-          "name": null,
-          "resolution": "unresolved",
+          "name": "CACTUPA",
+          "resolution": "move",
           "candidates": null,
-          "qualifier": null,
+          "qualifier": "COACTUP",
           "record_clause": "FROM",
           "record": "CACTUPAO",
           "line": 3594
@@ -89041,9 +89549,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89054,10 +89562,10 @@
           "verb": "SEND",
           "kind": "MAP",
           "access": "write",
-          "name": null,
-          "resolution": "unresolved",
+          "name": "CACTVWA",
+          "resolution": "move",
           "candidates": null,
-          "qualifier": null,
+          "qualifier": "COACTVW",
           "record_clause": "FROM",
           "record": "CACTVWAO",
           "line": 583
@@ -89116,9 +89624,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89155,9 +89663,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89278,9 +89786,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89413,9 +89921,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89426,10 +89934,10 @@
           "verb": "SEND",
           "kind": "MAP",
           "access": "write",
-          "name": null,
-          "resolution": "unresolved",
+          "name": "CCRDSLA",
+          "resolution": "move",
           "candidates": null,
-          "qualifier": null,
+          "qualifier": "COCRDSL",
           "record_clause": "FROM",
           "record": "CCRDSLAO",
           "line": 569
@@ -89476,9 +89984,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89501,10 +90009,10 @@
           "verb": "SEND",
           "kind": "MAP",
           "access": "write",
-          "name": null,
-          "resolution": "unresolved",
+          "name": "CCRDUPA",
+          "resolution": "move",
           "candidates": null,
-          "qualifier": null,
+          "qualifier": "COCRDUP",
           "record_clause": "FROM",
           "record": "CCRDUPAO",
           "line": 1329
@@ -89551,9 +90059,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89590,9 +90098,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89653,9 +90161,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89704,9 +90212,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89803,9 +90311,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89854,9 +90362,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -89965,9 +90473,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -90064,9 +90572,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -90115,9 +90623,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -90178,9 +90686,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -90241,9 +90749,9 @@
         "status": "validated",
         "notes": [],
         "tier": "cross_verified",
-        "cross_by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+        "cross_by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
         "census": {
-          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo resources census, #3528)",
+          "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
           "at": "2026-09-25"
         }
       }
@@ -94009,6 +94517,309 @@
         "uow": {
           "agree": 0,
           "asked": 0
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
+      "at": "2026-09-25",
+      "batch": 1,
+      "files": [
+        "app/app-authorization-ims-db2-mq/cbl/COPAUS0C.cbl",
+        "app/app-authorization-ims-db2-mq/cbl/COPAUS2C.cbl",
+        "app/cbl/COACTUPC.cbl",
+        "app/cbl/COACTVWC.cbl",
+        "app/cbl/COBIL00C.cbl",
+        "app/cbl/COCRDLIC.cbl",
+        "app/cbl/COTRN00C.cbl",
+        "app/cbl/COTRN02C.cbl",
+        "app/cbl/COUSR00C.cbl"
+      ],
+      "wide": false,
+      "suite": "resources",
+      "tasks": {
+        "resources": {
+          "agree": 61,
+          "asked": 61
+        },
+        "tasks": {
+          "agree": 0,
+          "asked": 0
+        },
+        "uow": {
+          "agree": 0,
+          "asked": 0
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5.5 blind reviewers (carddemo resources census with MOVE chains, #3578)",
+      "at": "2026-09-25",
+      "batch": 2,
+      "files": [
+        "app/app-authorization-ims-db2-mq/cbl/COPAUA0C.cbl",
+        "app/app-authorization-ims-db2-mq/cbl/COPAUS1C.cbl",
+        "app/app-transaction-type-db2/cbl/COTRTLIC.cbl",
+        "app/app-transaction-type-db2/cbl/COTRTUPC.cbl",
+        "app/app-vsam-mq/cbl/COACCT01.cbl",
+        "app/app-vsam-mq/cbl/CODATE01.cbl",
+        "app/cbl/COADM01C.cbl",
+        "app/cbl/COCRDSLC.cbl",
+        "app/cbl/COCRDUPC.cbl",
+        "app/cbl/COMEN01C.cbl",
+        "app/cbl/CORPT00C.cbl",
+        "app/cbl/COSGN00C.cbl",
+        "app/cbl/COTRN01C.cbl",
+        "app/cbl/COUSR01C.cbl",
+        "app/cbl/COUSR02C.cbl",
+        "app/cbl/COUSR03C.cbl"
+      ],
+      "wide": false,
+      "suite": "resources",
+      "tasks": {
+        "resources": {
+          "agree": 46,
+          "asked": 46
+        },
+        "tasks": {
+          "agree": 0,
+          "asked": 0
+        },
+        "uow": {
+          "agree": 0,
+          "asked": 0
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+      "at": "2026-09-25",
+      "batch": 1,
+      "files": [
+        "app/csd/CARDDEMO.CSD"
+      ],
+      "wide": false,
+      "suite": "csd",
+      "tasks": {
+        "csd": {
+          "agree": 64,
+          "asked": 64
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+      "at": "2026-09-25",
+      "batch": 2,
+      "files": [
+        "app/app-authorization-ims-db2-mq/csd/CRDDEMO2.csd",
+        "app/app-transaction-type-db2/csd/CRDDEMOD.csd",
+        "app/jcl/CBADMCDJ.jcl"
+      ],
+      "wide": false,
+      "suite": "csd",
+      "tasks": {
+        "csd": {
+          "agree": 65,
+          "asked": 65
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo csd census, #3575)",
+      "at": "2026-09-25",
+      "batch": 3,
+      "files": [
+        "app/app-vsam-mq/csd/CRDDEMOM.csd"
+      ],
+      "wide": false,
+      "suite": "csd",
+      "tasks": {
+        "csd": {
+          "agree": 5,
+          "asked": 5
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo records sampled census, #3575)",
+      "at": "2026-09-25",
+      "batch": 1,
+      "files": [
+        "app/app-transaction-type-db2/cbl/COTRTLIC.cbl"
+      ],
+      "wide": false,
+      "suite": "records",
+      "tasks": {
+        "records": {
+          "agree": 119,
+          "asked": 125
+        }
+      },
+      "rulings": {
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L145 10 WS-EDIT-ALPHANUM-ONLY PIC=X(256) U=- O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L148 10 WS-EDIT-ALPHANUM-ONLY-FLAGS PIC=X(1) U=- O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L173 05 WS-EDIT-SELECT-COUNTER PIC=S9(4) U=COMP-3 O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L189 05 WS-EDIT-SELECT-ERROR-FLAGS PIC=X(7) U=- O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L227 10 TRAN-TYPE-CD-N PIC=9(2) U=- O=- R=-": {
+          "verdict": "key_correct",
+          "why": "The source codes `10  TRAN-TYPE-CD-N REDEFINES TRAN-TYPE-CD-X` (the PIC on the next line); the key's REDEFINES is right and the reviewer omitted it. Same shape at WS-IN-TYPE-CD-N and WS-CA-TYPE-CD-N."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L227 10 TRAN-TYPE-CD-N PIC=9(2) U=- O=- R=TRAN-TYPE-CD-X": {
+          "verdict": "key_correct",
+          "why": "The source codes `10  TRAN-TYPE-CD-N REDEFINES TRAN-TYPE-CD-X` (the PIC on the next line); the key's REDEFINES is right and the reviewer omitted it. Same shape at WS-IN-TYPE-CD-N and WS-CA-TYPE-CD-N."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L312 10 WS-IN-TYPE-CD-N PIC=9(2) U=- O=- R=-": {
+          "verdict": "key_correct",
+          "why": "The source codes `10  TRAN-TYPE-CD-N REDEFINES TRAN-TYPE-CD-X` (the PIC on the next line); the key's REDEFINES is right and the reviewer omitted it. Same shape at WS-IN-TYPE-CD-N and WS-CA-TYPE-CD-N."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L312 10 WS-IN-TYPE-CD-N PIC=9(2) U=- O=- R=WS-IN-TYPE-CD": {
+          "verdict": "key_correct",
+          "why": "The source codes `10  TRAN-TYPE-CD-N REDEFINES TRAN-TYPE-CD-X` (the PIC on the next line); the key's REDEFINES is right and the reviewer omitted it. Same shape at WS-IN-TYPE-CD-N and WS-CA-TYPE-CD-N."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L314 05 WS-ROW-NUMBER PIC=S9(4) U=COMP O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L319 05 WS-RECORDS-TO-PROCESS-FLAG PIC=X(1) U=- O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L380 10 WS-CA-TYPE-CD-N PIC=9(2) U=- O=- R=-": {
+          "verdict": "key_correct",
+          "why": "The source codes `10  TRAN-TYPE-CD-N REDEFINES TRAN-TYPE-CD-X` (the PIC on the next line); the key's REDEFINES is right and the reviewer omitted it. Same shape at WS-IN-TYPE-CD-N and WS-CA-TYPE-CD-N."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L380 10 WS-CA-TYPE-CD-N PIC=9(2) U=- O=- R=WS-CA-TYPE-CD": {
+          "verdict": "key_correct",
+          "why": "The source codes `10  TRAN-TYPE-CD-N REDEFINES TRAN-TYPE-CD-X` (the PIC on the next line); the key's REDEFINES is right and the reviewer omitted it. Same shape at WS-IN-TYPE-CD-N and WS-CA-TYPE-CD-N."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L393 10 WS-CA-ROW-SELECTED PIC=S9(4) U=COMP O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L402 15 WS-CA-SCREEN-NUM PIC=9(1) U=- O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L419 01 WS-COMMAREA PIC=X(2000) U=- O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L73 01 LIT-ALL-ALPHA-FROM PIC=X(52) U=- O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        },
+        "records:app/app-transaction-type-db2/cbl/COTRTLIC.cbl::L93 05 WS-INPUT-FLAG PIC=X(1) U=- O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        }
+      }
+    },
+    {
+      "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo records sampled census, #3575)",
+      "at": "2026-09-25",
+      "batch": 2,
+      "files": [
+        "app/cbl/CBSTM03B.CBL",
+        "app/cbl/COUSR00C.cbl"
+      ],
+      "wide": false,
+      "suite": "records",
+      "tasks": {
+        "records": {
+          "agree": 46,
+          "asked": 46
+        }
+      },
+      "rulings": {
+        "records:app/cbl/COUSR00C.cbl::L49 05 WS-RESP-CD PIC=S9(9) U=COMP O=- R=-": {
+          "verdict": "key_fixed",
+          "why": "The key's DATA DIVISION reader anchored each entry with `^\\s*` under re.M, so the match began on the blank or comment line(s) before the level number and `line` fell early; the reviewer's line is the level number's own line (checked in the source). Fixed in the key reader (`^[ \\t]*`, #3575): 1,229 record lines corrected across the six keys, nothing else changed. The engine's record_data already had the right line."
+        }
+      }
+    },
+    {
+      "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+      "at": "2026-09-25",
+      "batch": 1,
+      "files": [
+        "app/app-authorization-ims-db2-mq/bms/COPAU00.bms"
+      ],
+      "wide": false,
+      "suite": "bms",
+      "tasks": {
+        "bms": {
+          "agree": 106,
+          "asked": 106
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+      "at": "2026-09-25",
+      "batch": 2,
+      "files": [
+        "app/bms/COUSR00.bms"
+      ],
+      "wide": false,
+      "suite": "bms",
+      "tasks": {
+        "bms": {
+          "agree": 91,
+          "asked": 91
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+      "at": "2026-09-25",
+      "batch": 3,
+      "files": [
+        "app/app-transaction-type-db2/bms/COTRTLI.bms"
+      ],
+      "wide": false,
+      "suite": "bms",
+      "tasks": {
+        "bms": {
+          "agree": 83,
+          "asked": 83
+        }
+      },
+      "rulings": {}
+    },
+    {
+      "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+      "at": "2026-09-25",
+      "batch": 4,
+      "files": [
+        "app/bms/COCRDSL.bms"
+      ],
+      "wide": false,
+      "suite": "bms",
+      "tasks": {
+        "bms": {
+          "agree": 33,
+          "asked": 33
         }
       },
       "rulings": {}
@@ -110580,6 +111391,89 @@
           ]
         }
       ]
+    },
+    "records": {
+      "plan": {
+        "seed": 3452,
+        "budget": 150,
+        "files": [
+          "app/app-transaction-type-db2/cbl/COTRTLIC.cbl",
+          "app/cbl/CBSTM03B.CBL",
+          "app/cbl/COUSR00C.cbl"
+        ]
+      },
+      "batches": [
+        {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo records sampled census, #3575)",
+          "at": "2026-09-25",
+          "batch": 1,
+          "files": [
+            "app/app-transaction-type-db2/cbl/COTRTLIC.cbl"
+          ]
+        },
+        {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo records sampled census, #3575)",
+          "at": "2026-09-25",
+          "batch": 2,
+          "files": [
+            "app/cbl/CBSTM03B.CBL",
+            "app/cbl/COUSR00C.cbl"
+          ]
+        }
+      ],
+      "asked": 171,
+      "key_errors": 12,
+      "upper_bound_95": 0.10945,
+      "note": "key_errors are the census's findings against the key AS DRAFTED -- all one systematic defect (a record's `line` fell on the blank/comment line before its level number), fixed in the key reader in the same change; against the corrected key every sampled field agrees, the only remaining disagreements being reviewer omissions ruled key_correct. upper_bound_95 therefore bounds the pre-fix key."
+    },
+    "bms": {
+      "plan": {
+        "seed": 3452,
+        "budget": 300,
+        "files": [
+          "app/app-authorization-ims-db2-mq/bms/COPAU00.bms",
+          "app/app-transaction-type-db2/bms/COTRTLI.bms",
+          "app/bms/COCRDSL.bms",
+          "app/bms/COUSR00.bms"
+        ]
+      },
+      "batches": [
+        {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "batch": 1,
+          "files": [
+            "app/app-authorization-ims-db2-mq/bms/COPAU00.bms"
+          ]
+        },
+        {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "batch": 2,
+          "files": [
+            "app/bms/COUSR00.bms"
+          ]
+        },
+        {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "batch": 3,
+          "files": [
+            "app/app-transaction-type-db2/bms/COTRTLI.bms"
+          ]
+        },
+        {
+          "by": "claude-opus-5.5 blind reviewers (aws-mainframe-modernization-carddemo bms sampled census, #3575)",
+          "at": "2026-09-25",
+          "batch": 4,
+          "files": [
+            "app/bms/COCRDSL.bms"
+          ]
+        }
+      ],
+      "asked": 313,
+      "key_errors": 0,
+      "upper_bound_95": 0.00953
     }
   },
   "symbolic_maps": {
@@ -111148,10 +112042,18 @@
           "TRNNAMEV @18+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/app-authorization-ims-db2-mq/cpy-bms/COPAU00.cpy"
+          ]
+        }
       }
     },
     "app/app-authorization-ims-db2-mq/bms/COPAU01.bms": {
@@ -111404,10 +112306,18 @@
           "TRNNAMEV @18+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/app-authorization-ims-db2-mq/cpy-bms/COPAU01.cpy"
+          ]
+        }
       }
     },
     "app/app-transaction-type-db2/bms/COTRTLI.bms": {
@@ -111777,10 +112687,18 @@
           "TRTYPEV @178+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/app-transaction-type-db2/cpy-bms/COTRTLI.cpy"
+          ]
+        }
       }
     },
     "app/app-transaction-type-db2/bms/COTRTUP.bms": {
@@ -111925,10 +112843,18 @@
           "TRTYPCDV @168+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/app-transaction-type-db2/cpy-bms/COTRTUP.cpy"
+          ]
+        }
       }
     },
     "app/bms/COACTUP.bms": {
@@ -112424,10 +113350,18 @@
           "TRNNAMEV @18+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COACTUP.CPY"
+          ]
+        }
       }
     },
     "app/bms/COACTVW.bms": {
@@ -112770,10 +113704,18 @@
           "TRNNAMEV @18+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COACTVW.CPY"
+          ]
+        }
       }
     },
     "app/bms/COADM01.bms": {
@@ -112963,10 +113905,18 @@
           "TRNNAMEV @18+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COADM01.CPY"
+          ]
+        }
       }
     },
     "app/bms/COBIL00.bms": {
@@ -113066,10 +114016,18 @@
           "TRNNAMEV @18+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COBIL00.CPY"
+          ]
+        }
       }
     },
     "app/bms/COCRDLI.bms": {
@@ -113484,10 +114442,18 @@
           "TRNNAMEV @18+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COCRDLI.CPY"
+          ]
+        }
       }
     },
     "app/bms/COCRDSL.bms": {
@@ -113632,10 +114598,18 @@
           "TRNNAMEV @18+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COCRDSL.CPY"
+          ]
+        }
       }
     },
     "app/bms/COCRDUP.bms": {
@@ -113798,10 +114772,18 @@
           "TRNNAMEV @18+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COCRDUP.CPY"
+          ]
+        }
       }
     },
     "app/bms/COMEN01.bms": {
@@ -113991,10 +114973,18 @@
           "TRNNAMEV @18+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COMEN01.CPY"
+          ]
+        }
       }
     },
     "app/bms/CORPT00.bms": {
@@ -114157,10 +115147,18 @@
           "YEARLYV @176+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/CORPT00.CPY"
+          ]
+        }
       }
     },
     "app/bms/COSGN00.bms": {
@@ -114269,10 +115267,18 @@
           "USERIDV @199+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COSGN00.CPY"
+          ]
+        }
       }
     },
     "app/bms/COTRN00.bms": {
@@ -114813,10 +115819,18 @@
           "TRNNAMEV @18+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COTRN00.CPY"
+          ]
+        }
       }
     },
     "app/bms/COTRN01.bms": {
@@ -115015,10 +116029,18 @@
           "TTYPCDV @237+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COTRN01.CPY"
+          ]
+        }
       }
     },
     "app/bms/COTRN02.bms": {
@@ -115217,10 +116239,18 @@
           "TTYPCDV @209+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COTRN02.CPY"
+          ]
+        }
       }
     },
     "app/bms/COUSR00.bms": {
@@ -115761,10 +116791,18 @@
           "UTYPE10V @1040+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COUSR00.CPY"
+          ]
+        }
       }
     },
     "app/bms/COUSR01.bms": {
@@ -115882,10 +116920,18 @@
           "USRTYPEV @252+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COUSR01.CPY"
+          ]
+        }
       }
     },
     "app/bms/COUSR02.bms": {
@@ -116003,10 +117049,18 @@
           "USRTYPEV @252+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COUSR02.CPY"
+          ]
+        }
       }
     },
     "app/bms/COUSR03.bms": {
@@ -116115,10 +117169,18 @@
           "USRTYPEV @237+1"
         ]
       },
-      "symbolic_validated": false,
+      "symbolic_validated": true,
       "verification": {
-        "status": "draft",
-        "notes": []
+        "status": "validated",
+        "tier": "cross_verified",
+        "notes": [],
+        "census": {
+          "by": "oracle: IBM DFHMAPS-generated symbolic-map copybooks checked into the corpus",
+          "at": "2026-09-25T12:22:48+00:00",
+          "copybooks": [
+            "app/cpy-bms/COUSR03.CPY"
+          ]
+        }
       }
     }
   },

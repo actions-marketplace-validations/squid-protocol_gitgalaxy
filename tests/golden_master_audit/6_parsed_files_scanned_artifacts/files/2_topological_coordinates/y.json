@@ -2499,7 +2499,7 @@
       "php/wordpress/formatting.php": -177.82,
       "php/wordpress/functions.php": -224.26,
       "php/wordpress/license.txt": -107.15,
-      "php/wordpress/plugin.php": -105.39,
+      "php/wordpress/plugin.php": -105.38,
       "php/wordpress/wp-login.php": -352.19,
       "php/wordpress/wp-settings.php": -226.24
     },
@@ -2705,7 +2705,7 @@
     },
     "python/cython": {
       "python/cython/CodeGeneration.py": -18.75,
-      "python/cython/MemoryView.pxd": 2.31,
+      "python/cython/MemoryView.pxd": 2.39,
       "python/cython/MemoryView.pyx": 23.66,
       "python/cython/Nodes.py": 32.59
     },
@@ -2961,7 +2961,7 @@
       "python/numpy/generate_umath_doc.py": -279.96,
       "python/numpy/lapack_litemodule.c": -187.22,
       "python/numpy/numpy_api.py": -105.45,
-      "python/numpy/symbolic.py": -343.53,
+      "python/numpy/symbolic.py": -343.56,
       "python/numpy/testutils.py": -334.49,
       "python/numpy/ufunc_docstrings.py": -69.45,
       "python/numpy/verify_c_api_version.py": -292.87
@@ -3068,9 +3068,9 @@
     "rust/tokio": {
       "rust/tokio/addr_of.rs": 122.31,
       "rust/tokio/block_on.rs": 50.4,
-      "rust/tokio/blocking.rs": 12.16,
+      "rust/tokio/blocking.rs": 77.53,
       "rust/tokio/builder.rs": 98.54,
-      "rust/tokio/config.rs": 30.97,
+      "rust/tokio/config.rs": -34.42,
       "rust/tokio/fuzz.rs": 19.82,
       "rust/tokio/interval.rs": 51.11,
       "rust/tokio/lib.rs": -16.68,

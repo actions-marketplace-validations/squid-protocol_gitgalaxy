@@ -40,7 +40,7 @@ Jinja2==3.1.6
 joblib==1.5.3
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
-jupyter_client==8.9.1
+jupyter_client==8.10.0
 jupyter_core==5.9.1
 jupyterlab_pygments==0.3.0
 keyring==25.7.0
@@ -88,7 +88,7 @@ pyan3==2.8.1
 pycparser==3.0
 pydeps==3.0.7
 Pygments==2.20.0
-pymdown-extensions==11.0.1
+pymdown-extensions==12.0.1
 pynndescent==0.6.0
 pypandoc==1.17
 pyparsing==3.3.2
@@ -120,8 +120,8 @@ stack-data==0.6.3
 stdlib-list==0.12.0
 stripe==14.4.1
 threadpoolctl==3.6.0
-tiktoken==0.13.0
-tinycss2==1.4.0
+tiktoken==0.14.0
+tinycss2==1.5.1
 tornado==6.5.8
 tqdm==4.69.0
 traitlets==5.16.1

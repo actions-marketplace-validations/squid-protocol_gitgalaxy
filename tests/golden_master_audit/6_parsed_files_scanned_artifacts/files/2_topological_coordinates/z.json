@@ -506,7 +506,7 @@
     },
     "cobol/Z-SMS-Gateway": {
       "cobol/Z-SMS-Gateway/BALANCE.cbl": -5284.09,
-      "cobol/Z-SMS-Gateway/HISTORY.cbl": -5927.66,
+      "cobol/Z-SMS-Gateway/HISTORY.cbl": -5927.67,
       "cobol/Z-SMS-Gateway/MESSAGES.cbl": -5778.42,
       "cobol/Z-SMS-Gateway/SENDSMS.cbl": -5428.76
     },
@@ -2498,7 +2498,7 @@
       "php/wordpress/class-wp-query.php": -5937.88,
       "php/wordpress/formatting.php": -5369.68,
       "php/wordpress/functions.php": -5736.74,
-      "php/wordpress/license.txt": -6301.26,
+      "php/wordpress/license.txt": -6301.27,
       "php/wordpress/plugin.php": -5743.63,
       "php/wordpress/wp-login.php": -5377.43,
       "php/wordpress/wp-settings.php": -5769.31
@@ -2705,8 +2705,8 @@
     },
     "python/cython": {
       "python/cython/CodeGeneration.py": 10286.86,
-      "python/cython/MemoryView.pxd": 9381.94,
-      "python/cython/MemoryView.pyx": 10081.5,
+      "python/cython/MemoryView.pxd": 9378.4,
+      "python/cython/MemoryView.pyx": 10081.55,
       "python/cython/Nodes.py": 9772.39
     },
     "python/fastapi": {
@@ -2961,7 +2961,7 @@
       "python/numpy/generate_umath_doc.py": -7271.5,
       "python/numpy/lapack_litemodule.c": -6585.46,
       "python/numpy/numpy_api.py": -6312.03,
-      "python/numpy/symbolic.py": -7303.07,
+      "python/numpy/symbolic.py": -7303.26,
       "python/numpy/testutils.py": -7671.4,
       "python/numpy/ufunc_docstrings.py": -6451.38,
       "python/numpy/verify_c_api_version.py": -7294.06
@@ -3068,9 +3068,9 @@
     "rust/tokio": {
       "rust/tokio/addr_of.rs": 9712.59,
       "rust/tokio/block_on.rs": 10068.9,
-      "rust/tokio/blocking.rs": 9733.74,
+      "rust/tokio/blocking.rs": 9004.67,
       "rust/tokio/builder.rs": 9854.11,
-      "rust/tokio/config.rs": 9075.04,
+      "rust/tokio/config.rs": 9804.2,
       "rust/tokio/fuzz.rs": 8990.82,
       "rust/tokio/interval.rs": 9315.32,
       "rust/tokio/lib.rs": 9219.78,

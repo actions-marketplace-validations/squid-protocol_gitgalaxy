@@ -248,6 +248,45 @@ def _init_worker(
     _worker_state["guidestar"].scan_project_config()
 
 
+def extract_raw_imports(import_regex: "re.Pattern[str]", content: str, lang_def: dict[str, Any]) -> set[str]:
+    """The import tokens a language's `_dependency_capture` finds in `content`.
+
+    Each match contributes its first non-empty group, comma-split (Rust/Scala
+    `{A, B}` blocks, Python `import a, b as c`) with `as` aliases dropped. A
+    language may declare `relative_import_groups` = (dots group, names groups...)
+    for Python's `from . import a, b`: each imported name is then recorded as
+    `.a` -- the submodule it names when one exists (network_risk_sensor.py falls
+    back to the package when it does not). A language's
+    `local_module_capture_group` (1-based; Rust `mod name;`, #3554) declares a
+    LOCAL module, recorded as `./name`: never an external package.
+    """
+    tokens: set[str] = set()
+    relative_groups = lang_def.get("relative_import_groups")
+    local_group = lang_def.get("local_module_capture_group")
+    for match in import_regex.finditer(content):
+        if local_group and match.group(local_group):
+            tokens.add("./" + match.group(local_group).strip())
+            continue
+        if relative_groups and match.group(relative_groups[0]):
+            dots = match.group(relative_groups[0])
+            names = next((match.group(i) for i in relative_groups[1:] if match.group(i)), "")
+            for item in names.split(","):
+                name = re.split(r"\s+as\s+", item.strip())[0].strip()
+                if name.isidentifier():
+                    tokens.add(dots + name)
+            continue
+        extracted_path = next((g for g in match.groups() if g), None)
+        if extracted_path:
+            # Handle comma-separated blocks and brackets (e.g., Rust/Scala: {A, B}, Python: a, b as c)
+            clean_group = extracted_path.replace("{", "").replace("}", "")
+            for item in clean_group.split(","):
+                # Strip 'as alias' and whitespace to isolate the pure module name
+                clean_module = re.split(r"\s+as\s+", item)[0].strip()
+                if clean_module:
+                    tokens.add(clean_module)
+    return tokens
+
+
 def _process_file_worker(rel_path: str) -> dict[str, Any]:
     """Processes a single file path using the worker's cached hardware modules."""
 
@@ -708,16 +747,9 @@ def _process_file_worker(rel_path: str) -> dict[str, Any]:
             import_regex = lang_defs.get(lang_id, {}).get("rules", {}).get("_dependency_capture")
             if import_regex:
                 try:
-                    for match in import_regex.finditer(content_buffer):
-                        extracted_path = next((g for g in match.groups() if g), None)
-                        if extracted_path:
-                            # Handle comma-separated blocks and brackets (e.g., Rust/Scala: {A, B}, Python: a, b as c)
-                            clean_group = extracted_path.replace("{", "").replace("}", "")
-                            for item in clean_group.split(","):
-                                # Strip 'as alias' and whitespace to isolate the pure module name
-                                clean_module = re.split(r"\s+as\s+", item)[0].strip()
-                                if clean_module:
-                                    raw_imports.add(clean_module)
+                    raw_imports.update(
+                        extract_raw_imports(import_regex, cast(str, content_buffer), lang_defs.get(lang_id, {}))
+                    )
                 except Exception:
                     logging.exception("Import extraction failed for language '%s'.", lang_id)
 
@@ -2273,6 +2305,14 @@ class Orchestrator:
         )
 
         external_imports_tally = {}  # <--- NEW: Track external dependencies
+        # Languages whose `.`-led tokens are local by construction: Rust's
+        # `./name` module declarations (#3554) and Python's relative imports,
+        # including the `.name` form `relative_import_groups` records.
+        local_module_langs = {
+            lid
+            for lid, ldef in self.config.get("LANGUAGE_DEFINITIONS", {}).items()
+            if isinstance(ldef, dict) and (ldef.get("local_module_capture_group") or ldef.get("relative_import_groups"))
+        }
 
         for rel_path, meta in self.ram_cache.items():
             raw_imports = sorted(meta.get("raw_imports", set()))
@@ -2363,7 +2403,14 @@ class Orchestrator:
                                 matched_internal = True
 
                 # ---> NEW: LOG EXTERNAL IMPORTS <---
-                if not matched_internal:
+                # #3554: a declared local module (`./name` from a language's
+                # `local_module_capture_group`) or a Python relative import
+                # (`.name`, `..pkg.mod`) is never an external package -- the
+                # typosquat radar read cython's `from . import Options` as a
+                # package mimicking `Option`.
+                if not matched_internal and not (
+                    raw_import.startswith(".") and str(meta.get("lang_id", "")).lower() in local_module_langs
+                ):
                     if clean_path not in external_imports_tally:
                         external_imports_tally[clean_path] = []
                     external_imports_tally[clean_path].append(rel_path)

@@ -337,3 +337,184 @@ def test_many_move_statements_stay_linear():
     start = time.perf_counter()
     extract_boundary("cobol", src + "\n           EXEC CICS READ FILE(A) END-EXEC\n")
     assert time.perf_counter() - start < 2.0
+
+
+# ---- WEB / SERVICE / TRANSFORM (#3512) ----------------------------------------
+
+
+def _brief(op: dict) -> tuple:
+    return (op["verb"], op["kind"], op["access"], op["name"], op["qualifier"], op["record_clause"], op["record"])
+
+
+def test_a_hand_written_http_provider_is_server_side():
+    # zECS ZECS001.cbl: WEB RECEIVE / READ HTTPHEADER / WRITE HTTPHEADER / SEND, no session token.
+    ops = _ops(
+        "       01  HEADER-ACAO  PIC X(27) VALUE 'Access-Control-Allow-Origin'.\n"
+        "           EXEC CICS WEB RECEIVE SET(CACHE-ADDRESS) LENGTH(RECEIVE-LENGTH)\n"
+        "                MEDIATYPE(WEB-MEDIA-TYPE) RESP(WEBRESP) NOHANDLE END-EXEC.\n"
+        "           EXEC CICS WEB READ HTTPHEADER(HTTP-HEADER) VALUE(HTTP-HEADER-VALUE)\n"
+        "                NOHANDLE END-EXEC.\n"
+        "           EXEC CICS WEB WRITE HTTPHEADER(HEADER-ACAO) VALUE(VALUE-ACAO)\n"
+        "                NOHANDLE END-EXEC.\n"
+        "           EXEC CICS WEB SEND FROM (CACHE-MESSAGE) FROMLENGTH(CACHE-LENGTH)\n"
+        "                MEDIATYPE (WEB-MEDIA-TYPE) STATUSCODE(HTTP-STATUS-200) SRVCONVERT\n"
+        "                NOHANDLE END-EXEC.\n"
+    )
+    assert [_brief(op) for op in ops] == [
+        ("WEB RECEIVE", "WEB", "read", None, "SERVER", "SET", "CACHE-ADDRESS"),
+        ("WEB READ", "WEB", "read", None, "SERVER", None, None),  # HTTP-HEADER has no fixed value
+        ("WEB WRITE", "WEB", "write", "Access-Control-Allow-Origin", "SERVER", None, None),
+        ("WEB SEND", "WEB", "write", None, "SERVER", "FROM", "CACHE-MESSAGE"),
+    ]
+    assert ops[0]["attributes"] == "LENGTH(RECEIVE-LENGTH) MEDIATYPE(WEB-MEDIA-TYPE)"
+    assert ops[1]["operand"] == "HTTP-HEADER" and ops[1]["resolution"] == "unresolved"
+
+
+def test_an_outbound_session_is_client_side():
+    # zECS ZECS001.cbl replication: OPEN a host, CONVERSE on the session, CLOSE it.
+    ops = _ops(
+        "           EXEC CICS WEB OPEN HOST(URL-HOST-NAME) PORTNUMBER(URL-PORT)\n"
+        "                SCHEME(URL-SCHEME) SESSTOKEN(SESSION-TOKEN) NOHANDLE END-EXEC.\n"
+        "           EXEC CICS WEB CONVERSE SESSTOKEN(SESSION-TOKEN) PATH(WEB-PATH)\n"
+        "                METHOD(WEB-METHOD) FROM(CACHE-MESSAGE) INTO(CONVERSE-RESPONSE)\n"
+        "                NOHANDLE END-EXEC.\n"
+        "           EXEC CICS WEB SEND SESSTOKEN(SESSION-TOKEN) PATH('/api/v1')\n"
+        "                FROM(REQ) END-EXEC.\n"
+        "           EXEC CICS WEB OPEN URIMAP('ZECSREPL') SESSTOKEN(S) END-EXEC.\n"
+        "           EXEC CICS WEB CLOSE SESSTOKEN(SESSION-TOKEN) NOHANDLE END-EXEC.\n"
+    )
+    assert [_brief(op) for op in ops] == [
+        ("WEB OPEN", "WEB", "open", None, "CLIENT", None, None),
+        ("WEB CONVERSE", "WEB", "converse", None, "CLIENT", "INTO", "CONVERSE-RESPONSE"),  # INTO before FROM
+        ("WEB SEND", "WEB", "write", "/api/v1", "CLIENT", "FROM", "REQ"),
+        ("WEB OPEN", "WEB", "open", "ZECSREPL", "CLIENT", None, None),  # a URIMAP wins over HOST
+        ("WEB CLOSE", "WEB", "close", None, "CLIENT", None, None),
+    ]
+    assert ops[0]["operand"] == "URL-HOST-NAME"
+
+
+def test_web_commands_that_name_nothing_draw_nothing():
+    assert not _ops(
+        "           EXEC CICS WEB EXTRACT SCHEME(S) HOST(H) PATH(P) NOHANDLE END-EXEC.\n"
+        "           EXEC CICS WEB PARSE URL(U) HOST(H) NOHANDLE END-EXEC.\n"
+        "           EXEC CICS WEB READ FORMFIELD(F) VALUE(V) END-EXEC.\n"
+        "           EXEC CICS WEB STARTBROWSE HTTPHEADER END-EXEC.\n"
+    )
+
+
+def test_invoke_service_names_the_service_and_its_channel():
+    ops = _ops(
+        "       01  WS-CHAN  PIC X(16) VALUE 'QUOTE-CHANNEL'.\n"
+        "           EXEC CICS INVOKE SERVICE('GETQUOTE') CHANNEL(WS-CHAN)\n"
+        "                OPERATION('getQuote') RESP(R) END-EXEC.\n"
+        "           EXEC CICS INVOKE WEBSERVICE(WS-NAME) CHANNEL('C2')\n"
+        "                OPERATION(OP-NAME) URI('http://example.com/q') END-EXEC.\n"
+    )
+    assert [_brief(op) for op in ops] == [
+        ("INVOKE SERVICE", "SERVICE", "invoke", "GETQUOTE", "QUOTE-CHANNEL", None, None),
+        ("INVOKE WEBSERVICE", "SERVICE", "invoke", None, "C2", None, None),
+    ]
+    assert ops[0]["attributes"] == "OPERATION('getQuote')"
+    assert ops[1]["attributes"] == "OPERATION(OP-NAME) URI('http://example.com/q')"
+
+
+def test_transform_names_its_transformer_and_channel():
+    ops = _ops(
+        "           EXEC CICS TRANSFORM DATATOXML CHANNEL('ORDERS')\n"
+        "                XMLTRANSFORM('ORDERXF') DATCONTAINER('DATA') XMLCONTAINER('XML')\n"
+        "           END-EXEC.\n"
+        "           EXEC CICS TRANSFORM JSONTODATA CHANNEL(CH) JSONTRANSFRM('CUSTJS') END-EXEC.\n"
+        "           EXEC CICS TRANSFORM XMLTODATA CHANNEL(CH) ELEMNAME(E) END-EXEC.\n"
+    )
+    assert [_brief(op) for op in ops] == [
+        ("TRANSFORM DATATOXML", "TRANSFORM", "encode", "ORDERXF", "ORDERS", None, None),
+        ("TRANSFORM JSONTODATA", "TRANSFORM", "decode", "CUSTJS", None, None, None),
+        ("TRANSFORM XMLTODATA", "TRANSFORM", "decode", None, None, None, None),
+    ]
+    assert ops[0]["attributes"] == "DATCONTAINER('DATA') XMLCONTAINER('XML')"
+
+
+def test_pli_web_commands_end_at_semicolon():
+    op = _one(" EXEC CICS WEB SEND FROM(BUF) FROMLENGTH(L) MEDIATYPE('text/plain');\n X = 1;\n", "pli")
+    assert _brief(op) == ("WEB SEND", "WEB", "write", None, "SERVER", "FROM", "BUF")
+
+
+def test_a_pli_operand_continued_past_a_sequence_field_is_its_value():
+    # #3577, navikt/DSF R0010102: the MAPSET operand's `(` ends a line whose columns
+    # 73-80 hold a sequence number; the literal is on the next line.
+    src = "\n".join(
+        [
+            "    EXEC CICS RECEIVE MAP('S001011') MAPSET (".ljust(72) + "00001010",
+            "     'S001013') SET(BMSMAPBR);".ljust(72) + "00001020",
+            "    EXEC CICS SEND MAP(".ljust(72) + "00018110",
+            "                'S001014') MAPSET('S001013') ERASE MAPONLY;".ljust(72) + "00018120",
+        ]
+    )
+    ops = _ops(src, "pli")
+    assert [(o["verb"], o["name"], o["qualifier"], o["line"]) for o in ops] == [
+        ("RECEIVE", "S001011", "S001013", 1),
+        ("SEND", "S001014", "S001013", 3),
+    ]
+
+
+# ---- MOVE chains (#3578) --------------------------------------------------------
+
+
+def test_a_name_moved_from_a_valued_name_resolves_through_it():
+    # CardDemo COACTUPC: SEND MAP(CCARD-NEXT-MAP) after MOVE LIT-THISMAP TO CCARD-NEXT-MAP.
+    op = _one(
+        "       01  LIT-THISMAP     PIC X(7) VALUE 'CACTUPA'.\n"
+        "       01  LIT-THISMAPSET  PIC X(8) VALUE 'COACTUP'.\n"
+        "       01  CCARD-NEXT-MAP     PIC X(7).\n"
+        "       01  CCARD-NEXT-MAPSET  PIC X(8).\n"
+        "           MOVE LIT-THISMAPSET         TO CCARD-NEXT-MAPSET\n"
+        "           MOVE LIT-THISMAP            TO CCARD-NEXT-MAP\n"
+        "           EXEC CICS SEND MAP(CCARD-NEXT-MAP) MAPSET(CCARD-NEXT-MAPSET)\n"
+        "                FROM(CACTUPAO) END-EXEC.\n"
+    )
+    assert (op["name"], op["resolution"], op["qualifier"]) == ("CACTUPA", "move", "COACTUP")
+
+
+def test_chains_stop_at_three_hops_and_at_cycles():
+    src = (
+        "           MOVE 'F1' TO A\n"
+        "           MOVE A TO B\n"
+        "           MOVE B TO C\n"
+        "           MOVE C TO D\n"
+        "           MOVE D TO E\n"
+        "           MOVE P TO Q\n"
+        "           MOVE Q TO P\n"
+        "           EXEC CICS READ FILE(D) INTO(R) END-EXEC.\n"
+        "           EXEC CICS READ FILE(E) INTO(R) END-EXEC.\n"
+        "           EXEC CICS READ FILE(Q) INTO(R) END-EXEC.\n"
+    )
+    assert [(op["name"], op["resolution"]) for op in _ops(src)] == [
+        ("F1", "move"),  # D <- C <- B <- A <- 'F1': three name hops
+        (None, "unresolved"),  # E is four hops away
+        (None, "unresolved"),  # P and Q only feed each other
+    ]
+
+
+def test_a_chain_that_can_hold_two_values_is_ambiguous_and_figuratives_are_not_sources():
+    ops = _ops(
+        "       01  FILE-A  PIC X(8) VALUE 'ACCTFILE'.\n"
+        "           MOVE 'CARDFILE' TO WS-FILE\n"
+        "           MOVE FILE-A TO WS-FILE\n"
+        "           MOVE SPACES TO WS-Q\n"
+        "           EXEC CICS READ FILE(WS-FILE) INTO(R) END-EXEC.\n"
+        "           EXEC CICS WRITEQ TS QUEUE(WS-Q) FROM(R) END-EXEC.\n"
+    )
+    assert [(op["name"], op["resolution"], op["candidates"]) for op in ops] == [
+        (None, "ambiguous", "ACCTFILE,CARDFILE"),
+        (None, "unresolved", None),
+    ]
+
+
+def test_a_subscripted_or_qualified_move_is_not_a_chain():
+    ops = _ops(
+        "       01  NAMES  VALUE 'X'.\n"
+        "           MOVE TAB(I) TO WS-F\n"
+        "           MOVE NAMES TO WS-G(2)\n"
+        "           EXEC CICS READ FILE(WS-F) INTO(R) END-EXEC.\n"
+    )
+    assert (ops[0]["name"], ops[0]["resolution"]) == (None, "unresolved")
