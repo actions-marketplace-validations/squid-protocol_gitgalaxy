@@ -9,6 +9,25 @@ With `--galaxy-db/--scan` the refractor also writes `06_skeleton/` (#3614, `skel
 
 CICS programs (#3615, `cobol_to_java_transaction_forge.py`) are the first consumer of the skeleton. `GalaxyIR.program_interfaces()` resolves each program's COMMAREA layout: what the resolved callers pass, else its own fixed DFHCOMMAREA, else a stated gap. It also resolves its GET/PUT containers. From those, the forge generates `dto/cics/*` plus one endpoint per entry transaction, `/link` and `/channel`. Every class and field cites the fact and its field-testing status. Compile that path with `java_target_matrix.py --scan`; CI runs both paths.
 
+Calls (#3616, `cobol_to_java_call_forge.py`):
+- A resolved LINK/XCTL becomes `link<T>`/`xctl<T>`, calling the target's `handleLink`.
+- A resolved CALL becomes `call<T>(...)`, typed by the target's USING items (`program_interfaces().parameters`).
+- A data-driven site becomes `dispatch<Operand>L<line>`, a switch over the candidates.
+- A remote DPL LINK (`integration.remote_calls: http`) becomes a `<Region>RemoteClient`.
+- Targets are injected as `ObjectProvider` because CICS screens XCTL in cycles.
+- A site passing a record other than the one the target receives gets a mapping TODO.
+
+VSAM (#3617, `cobol_to_java_repository_forge.py`):
+- `GalaxyIR.vsam_stores()` joins each base cluster: IDCAMS KEYS / RECORDSIZE / AIX / PATH, the CSD FILEs on it, the CICS users (verbs, INTO/FROM layouts, RIDFLD placed in the record, groups included via `_position_in`) and the batch users (SELECT, FD layout, OPEN modes).
+- It becomes one `entity.vsam` entity plus a `repository.vsam` repository. A group key becomes an `@EmbeddedId`. The layout is the one of RECORDSIZE, then the one whose fields carry the most keys.
+- Services get exactly the verbs (CICS) or OPEN modes (batch) each program uses.
+- A store used only by programs that are not converted (DSF's PL/I) is listed in the audit, not generated.
+- The installation-symbol DSNAMEs (`@BANK_PREFIX@`, `<USRHLQ>`) are NOT joined by guess to the CSD's concrete names.
+
+The skeleton-driven forges share one pipeline (#3657). `cobol_to_java_skeleton_forges.SkeletonForges` plans every forge over the same skeletons and one `ClassNames` registry. It writes their files, merges each service's extras and writes the audit lines. The shared helpers live in `cobol_to_java_common.py`: type and identifier mapping, `status_text`, `merge_extras`. A new layer (#3618+) is a new forge registered in `SkeletonForges`; the controller does not change. Counts come from the forge's own counters, never from parsing generated text.
+
+Program-ID lookups must go through `_program_index` / `_nearest_program` / `_program_file`. They skip CSD/BMS/JCL/DDL "program ids": the CSD deck used to shadow every program it DEFINEs.
+
 **Neither side is the oracle.** The answer key is.
 
 ## Read first (canonical, don't re-derive)
@@ -89,6 +108,10 @@ Attribute every difference to one of the differential doc's four causes: old-par
   label never runs it. Re-run it on the branch's current head with
   `gh workflow run "Full Suite Gate (All OS x Python)" --ref <branch>` (#3209).
 - **X-Ray fails on a dense string literal** over 64 chars. Build long regexes from short named fragments.
+- **Mainframe fixtures obey column 72.** COBOL fixed format and IDCAMS SYSIN both ignore columns 73-80, and the engine does too, correctly. A fixture line that runs past column 72 loses its tail. `RECORDSIZE(38 38))` read as 3 in a #3617 test, which looked like an engine defect but was not. Continue long IDCAMS commands with `-`.
+- **Run both audits locally, not just ruff.** `ruff_audit.py --ci` and `mypy_audit.py --ci`, plus the dead-key audit when you add dict-keyed reads. #3640 reached CI with 5 mypy findings; the usual cause is an Optional that is never narrowed. See #3654 for a single preflight command.
+- **A PR stacked on a squash-merged PR.** When the base PR merges, its branch is deleted and the stacked branch still carries the base's pre-squash commits. Replay only your commits with `git rebase --onto origin/main <old base tip>`, force-push with lease, then open or retarget the PR against `main`. `gh pr create --base <deleted branch>` fails with "Base ref must be a branch".
+- **Generators read the skeleton, never the DB.** The Java side must build from `06_skeleton/*` only, so the facts it used are the facts it cites. When a generator needs more (a layout, a key position), add it to an IR join and export it, as `program_interfaces` and `vsam_stores` do.
 
 ## Who owns what (open, as of 2026-09-20)
 
@@ -103,6 +126,31 @@ Attribute every difference to one of the differential doc's four causes: old-par
 
 Update this table when an issue closes. The current scores live in the answer-key README, not here.
 
+## A new generator is a consumer audit (#3616 lesson)
+
+A generator that builds from a skeleton section is the first consumer that needs every
+attribute of that fact to be right. The answer keys check only what they compare. For
+example, the `dynamic call targets` key compares `L<line> VERB OPERAND -> PROGRAM`. The
+generator also needed `resolves_to`, which nothing checked: D022, 88 of 89 CardDemo
+candidates pointed at the CSD deck. So, for every join a new generator reads:
+
+1. **List the attributes it relies on**: the file links, layouts, keys, lengths and
+   modes that shape the Java, not just the ones it prints.
+2. **Check each against the key**: find what `cobol_answer_key.py` compares for that
+   ledger field. An attribute the key does not compare is unverified. Spot-check it on
+   the corpora, by diffing the join and reading the generated Java. If it matters, open
+   an issue to add it to the key.
+3. **Log what you find**: a wrong value is an engine defect. Log it in
+   `tests/cobol_mainframe/field_testing.json` (`found_by`: the generator; `severity:
+   attribute` when the keyed fact itself was right), fix it in the same PR, and diff
+   every IR join on the 6 corpora, main vs branch, to state the blast radius.
+4. **Say it in the PR**: an "attributes consumed" table, with each attribute marked
+   keyed / spot-checked / unverified.
+
+The compile matrix (`java_target_matrix.py --scan`) is the second check. Facts that
+contradict each other (two declarers, duplicate field names) fail compilation. A
+plausible but wrong fact compiles fine, which is why step 2 exists.
+
 ## Done means
 
 - `score` before → after in the PR description, for the column you moved and the column you didn't.
@@ -112,3 +160,4 @@ Update this table when an issue closes. The current scores live in the answer-ke
 - `tool_regex_redos.py --ci` passes, and any baseline entry you fixed is removed.
 - `docs/refraction_engine_differential.md` has an `## Update:` section if an attribution changed.
 - The ownership table above is still true.
+- A generator PR has its "attributes consumed" table (see the consumer audit above).
