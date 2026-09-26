@@ -846,6 +846,7 @@ class RecordKeeper:
                 references_to TEXT,
                 references_qualifiers TEXT,
                 transfers_to TEXT,
+                def_shape TEXT,
                 func_pagerank REAL,
                 func_fan_in INTEGER,
                 func_fan_out INTEGER,
@@ -988,6 +989,7 @@ class RecordKeeper:
                 line_number INTEGER,
                 dsn_resolved TEXT,
                 dsn_resolution TEXT,
+                open_sites TEXT,
                 FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
             )
         """)
@@ -998,6 +1000,9 @@ class RecordKeeper:
         # ambiguous / unresolved -- see mainframe_boundary._jcl_resolve_datasets).
         # Both NULL on a COBOL row. Healed onto a table created before #3345.
         _ensure_columns(cursor, "dataset_data", ["dsn_resolved TEXT", "dsn_resolution TEXT"])
+        # #3348: a COBOL row's OPEN sites, a JSON list of [mode, line] in line order, so
+        # the refractor can drop the OPENs in dead paragraphs. NULL on a JCL row.
+        _ensure_columns(cursor, "dataset_data", ["open_sites TEXT"])
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_dataset_file_id ON dataset_data(file_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_dataset_dd_name ON dataset_data(dd_name);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_dataset_snapshot ON dataset_data(repo_name, commit_hash);")
@@ -1846,6 +1851,10 @@ class RecordKeeper:
         # Receiver name -> class, per function (the call resolver's `typed` step):
         # a JSON object, NULL where the function has none.
         self._heal_column(cursor, "function_data", "calls_out_receiver_types", "TEXT")
+        # #3757: typescript/javascript 'binding' | 'member' | 'signature' -- what a
+        # definition is, which decides what the call resolver lets reach it. NULL
+        # for every other language.
+        self._heal_column(cursor, "function_data", "def_shape", "TEXT")
         # Decorators applied to the function, aligned like calls_out_to /
         # calls_out_qualifiers (the resolver's kind='decorator' edges).
         self._heal_column(cursor, "function_data", "decorated_by", "TEXT")
@@ -2566,6 +2575,7 @@ class RecordKeeper:
                         json.dumps(func["references_to"]) if func.get("references_to") else None,
                         _aligned_json(func, "references_to", "references_qualifiers"),
                         json.dumps(func["transfers_to"]) if func.get("transfers_to") else None,
+                        func.get("def_shape") or None,
                         func.get("func_pagerank"),
                         func.get("func_fan_in"),
                         func.get("func_fan_out"),
@@ -2638,7 +2648,7 @@ class RecordKeeper:
             cursor.executemany(
                 f"""
                 INSERT INTO function_data
-                (file_id, parent_class_id, func_name, complexity, loc, start_line, args, usage_status, keyword_density, func_archetype, func_z_score, docstring, calls_out_to, calls_out_qualifiers, calls_out_receiver_types, decorated_by, decorated_by_qualifiers, references_to, references_qualifiers, transfers_to, func_pagerank, func_fan_in, func_fan_out, token_mass, is_public, is_documented, {", ".join([self.SHORT_KEY_MAP.get(h, h) for h in self.SIGNAL_SCHEMA])}, impact)
+                (file_id, parent_class_id, func_name, complexity, loc, start_line, args, usage_status, keyword_density, func_archetype, func_z_score, docstring, calls_out_to, calls_out_qualifiers, calls_out_receiver_types, decorated_by, decorated_by_qualifiers, references_to, references_qualifiers, transfers_to, def_shape, func_pagerank, func_fan_in, func_fan_out, token_mass, is_public, is_documented, {", ".join([self.SHORT_KEY_MAP.get(h, h) for h in self.SIGNAL_SCHEMA])}, impact)
                 VALUES ({func_placeholders})
             """,  # noqa: S608
                 all_func_rows,
@@ -2849,6 +2859,7 @@ class RecordKeeper:
                 "line_number",
                 "dsn_resolved",
                 "dsn_resolution",
+                "open_sites",
             ),
             "dataset_bindings",
             lambda b: (
@@ -2861,6 +2872,7 @@ class RecordKeeper:
                 int(b.get("line", 0) or 0),
                 b.get("dsn_resolved"),  # #3345
                 b.get("dsn_resolution"),
+                json.dumps(b["open_sites"]) if b.get("open_sites") is not None else None,  # #3348
             ),
         )
 

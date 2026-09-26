@@ -2849,6 +2849,102 @@ def test_detector_ts_param_function_type_annotation_not_counted_as_function():
         assert "ap" in names2, f"[{lang}] object-literal arrow property dropped: {names2}"
 
 
+def test_detector_ts_js_quoted_method_key_after_modifier_is_not_named_by_the_modifier():
+    """
+    Regression test for issue #3760: a quoted object-literal method key behind a
+    modifier (`async "array-objects"() {}`, zod's packages/bench/compile-vs-arktype.ts:414)
+    was named `async`. The brace-safe stream blanks the whole literal, quotes
+    included, so func_start saw `async                 () {` and captured the
+    modifier as the name. The key is read back from the raw code instead, quotes
+    kept (the convention groovy's quoted names already follow). A method that
+    really is named like a modifier (`get() {}`, `static async() {}`) has no literal
+    after the name and keeps it.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    for lang in ("typescript", "javascript"):
+        detector = StructuralExtractor(lang, LANGUAGE_DEFINITIONS)
+        rules = LANGUAGE_DEFINITIONS[lang]["rules"]
+        code = (
+            "export const suites = {\n"
+            '  async "array-objects"() {\n'
+            "    run1();\n"
+            "  },\n"
+            "  async 'single-q'() {\n"
+            "    run2();\n"
+            "  },\n"
+            "  get() {\n"
+            "    return 1;\n"
+            "  },\n"
+            "  static async() {\n"
+            "    run3();\n"
+            "  },\n"
+            "};\n"
+        )
+        satellites, _ = detector._slice_by_braces(code, lang, rules, 0, {})
+        names = [s["name"] for s in satellites]
+        assert names == ['"array-objects"', "'single-q'", "get", "async"], f"[{lang}] {names}"
+
+
+def test_detector_ts_js_def_shape_separates_bindings_members_and_signatures():
+    """
+    #3757/#3758/#3759: only a declaration binds a name a bare call can reach
+    (`function f`, `const/let/var f =`); an object-literal method, an object
+    property or a member assignment is reached through its object, and a bodyless
+    signature (interface member, `abstract` method, overload) runs no code. The
+    call resolver reads this as `def_shape`.
+    """
+    from gitgalaxy.standards.language_standards import LANGUAGE_DEFINITIONS
+
+    code = (
+        "export function optional(x) {\n"
+        "  return x;\n"
+        "}\n"
+        "const Node = () => z.object({});\n"
+        "let f2 = function () { return 1; };\n"
+        "const o = { clone(def) { return 1; }, prop: () => 2 };\n"
+        "inst.parse = (payload) => {\n"
+        "  return payload;\n"
+        "};\n"
+    )
+    ts_only = (
+        "export interface Z {\n"
+        "  check(a: number): this;\n"
+        "}\n"
+        "abstract class A {\n"
+        "  abstract _parse(input: string): number;\n"
+        "}\n"
+        "function over(a: string): void;\n"
+        "function over(a: any) {}\n"
+    )
+    expected = {"optional": "binding", "Node": "binding", "f2": "binding", "clone": "member", "parse": "member"}
+    for lang in ("typescript", "javascript"):
+        detector = StructuralExtractor(lang, LANGUAGE_DEFINITIONS)
+        satellites, _ = detector._slice_by_braces(code, lang, LANGUAGE_DEFINITIONS[lang]["rules"], 0, {})
+        got = {s["name"]: s.get("def_shape") for s in satellites if s["name"] in expected}
+        # javascript does not extract the one-line object-literal method at all
+        # (a separate recall gap); every unit it does extract has the right shape
+        assert got == {n: expected[n] for n in got}, f"[{lang}] {got}"
+        assert set(got) == set(expected) - ({"clone"} if lang == "javascript" else set()), f"[{lang}] {got}"
+
+    detector = StructuralExtractor("typescript", LANGUAGE_DEFINITIONS)
+    rules = LANGUAGE_DEFINITIONS["typescript"]["rules"]
+    satellites, _ = detector._slice_by_braces(ts_only, "typescript", rules, 0, {})
+    assert [(s["name"], s.get("def_shape")) for s in satellites] == [
+        ("check", "signature"),
+        ("_parse", "signature"),
+        ("over", "signature"),
+        ("over", "binding"),
+    ]
+
+    # other languages leave it unset
+    c_detector = StructuralExtractor("c", LANGUAGE_DEFINITIONS)
+    c_sats, _ = c_detector._slice_by_braces(
+        "int f(void) {\n  return 1;\n}\n", "c", LANGUAGE_DEFINITIONS["c"]["rules"], 0, {}
+    )
+    assert c_sats and all("def_shape" not in s for s in c_sats)
+
+
 def test_detector_string_literal_fix_gated_away_from_other_mode_b_languages():
     """
     The safe_code-matching fix above is deliberately gated to
