@@ -12,6 +12,10 @@
 # THE LADDER (first match wins, per (caller function, callee name)):
 #   1. `class`   -- a method of the caller's own class, in the caller's file.
 #   2. `file`    -- a definition in the caller's own file.
+#   2b. `typed`  -- `x.save()` where this function shows x's class
+#                   (`x = Store()`, `def f(x: Store)`; the detector's
+#                   calls_out_receiver_types): Store's method, or its
+#                   nearest ancestor's. Python only for now.
 #   3. `import`  -- a definition in a file the caller's file imports (the
 #                   resolved import graph, NetworkRiskSensor.dependency_edges).
 #   4. `unique`  -- the name is defined exactly once in the repository.
@@ -75,6 +79,7 @@ _GROUP_OF = {lang: min(group) for group in _LINK_GROUPS for lang in group}
 RESOLUTION_OF_STEP = {
     "class": "scoped",
     "qualified": "scoped",
+    "typed": "scoped",
     "file": "scoped",
     "import": "scoped",
     "unique": "unique",
@@ -90,7 +95,7 @@ CONFIDENT_RESOLUTIONS = frozenset({"scoped", "unique"})
 _RANK = {
     step: i
     for i, step in enumerate(
-        ("class", "qualified", "import", "file", "unique", "unseen", "nearest", "receiver", "tie", "none")
+        ("class", "qualified", "typed", "import", "file", "unique", "unseen", "nearest", "receiver", "tie", "none")
     )
 }
 
@@ -455,6 +460,51 @@ def _index(parsed_files: list[dict[str, Any]]) -> dict[tuple[str, str], _Bucket]
     return index
 
 
+# What a language calls a class's constructor, when it is a method (#3642
+# follow-up). A call that resolves to a class is linked to this method, so the
+# function graph sees `Foo(...)` reach `Foo.__init__`. Languages not listed
+# name the constructor after the class (java, c#, c++, dart); go, rust, c and
+# the rest have no constructor method at all, and keep the class as the target.
+_CONSTRUCTOR_NAMES: dict[str, tuple[str, ...]] = {
+    "python": ("__init__", "__new__"),
+    "embedded_python": ("__init__", "__new__"),
+    "javascript": ("constructor",),
+    "typescript": ("constructor",),
+    "kotlin": ("constructor",),
+    "php": ("__construct",),
+    "ruby": ("initialize",),
+    "swift": ("init",),
+}
+_CLASS_NAMED_CONSTRUCTOR_LANGS = frozenset({"java", "csharp", "cpp", "dart", "apex", "objective-c"})
+
+
+def _constructor_of(index: dict[tuple[str, str], "_Bucket"], cls: _Definition, lang: str) -> Optional[_Definition]:
+    """The constructor method of class definition `cls`, if the scan extracted one.
+
+    One in the class's own file, else one beside it with the same stem (a C++
+    `foo.h` class, its `Foo::Foo` in `foo.cpp`). Owner keys are bare class
+    names, so a constructor anywhere else may belong to another class of the
+    same name and is never taken. None when the class has no constructor of
+    its own (an inherited or implicit one): the call keeps the class.
+    """
+    leaf = _leaf(cls.name)[0]
+    names = _CONSTRUCTOR_NAMES.get(lang) or ((leaf,) if lang in _CLASS_NAMED_CONSTRUCTOR_LANGS else ())
+    group = _group(lang)
+    owner = _key(leaf, lang)
+    for n in names:
+        bucket = index.get((group, _key(n, lang)))
+        defs = [d for d in (bucket.by_owner.get(owner, []) if bucket else []) if d.kind == "function"]
+        if not defs:
+            continue
+        for d in defs:
+            if d.path == cls.path:
+                return d
+        for d in defs:
+            if d.dir == cls.dir and d.stem == cls.stem:
+                return d
+    return None
+
+
 def _imports_by_file(dependency_edges: Optional[list[dict[str, Any]]]) -> dict[str, set[str]]:
     out: dict[str, set[str]] = {}
     for e in dependency_edges or []:
@@ -514,6 +564,11 @@ def _ancestry(parsed_files: list[dict[str, Any]]) -> dict[tuple[str, str], set[s
             bases = {_leaf(str(b).strip())[0] for b in cls.get("inheritance", []) or [] if str(b).strip()}
             parents.setdefault((group, _key(name, lang)), set()).update(_key(b, lang) for b in bases)
     return parents
+
+
+def _is_class(index: dict[tuple[str, str], "_Bucket"], group: str, name: str, lang: str) -> bool:
+    bucket = index.get((group, _key(name, lang)))
+    return bucket is not None and any(d.kind == "class" for d in bucket.defs)
 
 
 def _lineage(owner: Optional[str], group: str, lang: str, parents: dict[tuple[str, str], set[str]]) -> list[str]:
@@ -653,6 +708,7 @@ def _resolve_one(
     lineage: list[str],
     qualifier: Optional[str],
     cache: _Cache,
+    typed: Optional[dict[str, list[str]]] = None,
 ) -> tuple[str, Optional[_Definition]]:
     """One (caller, callee, qualifier) lookup. `qualifier` None = not captured."""
     if bucket is None:
@@ -704,6 +760,13 @@ def _resolve_one(
             if d is not None:
                 return "class", d
         return "none", None
+    if typed and qualifier in typed:
+        # The receiver's class is known from this function (`app = FastAPI()`):
+        # the method on that class, or on the nearest ancestor that has it.
+        for owner_key in typed[qualifier]:
+            d = owned(owner_key)
+            if d is not None:
+                return "typed", d
     head = qualifier.split(".", 1)[0]
     last = qualifier.rsplit(".", 1)[-1]
     d = owned(_key(last, caller.lang))
@@ -772,17 +835,30 @@ def resolve_calls(
             caller_line = int(func.get("start_line", 0) or 0)
             lineage = _lineage(func.get("parent_class_name") or _leaf(caller_name)[1], group, lang, parents)
             qualifier_map = func.get("calls_out_qualifiers") or {}
+            # receiver -> its class's lineage, for receivers whose class the scan
+            # knows (a factory function's name is not a class, and is ignored)
+            typed = {
+                q: _lineage(c, group, lang, parents)
+                for q, c in (func.get("calls_out_receiver_types") or {}).items()
+                if _is_class(index, group, str(c), lang)
+            }
             for callee, kind in callees:
                 bucket = index.get((group, _key(str(callee), lang)))
                 options: list[Optional[str]] = (list(qualifier_map.get(callee) or []) if kind == "call" else []) or [
                     None
                 ]
-                step, dst = _resolve_one(bucket, caller, lineage, options[0], cache)
+                step, dst = _resolve_one(bucket, caller, lineage, options[0], cache, typed)
                 used = options[0]
                 for q in options[1:]:
-                    alt_step, alt_dst = _resolve_one(bucket, caller, lineage, q, cache)
+                    alt_step, alt_dst = _resolve_one(bucket, caller, lineage, q, cache, typed)
                     if _RANK[alt_step] < _RANK[step]:
                         step, dst, used = alt_step, alt_dst, q
+                cls = None
+                if dst is not None and dst.kind == "class":
+                    # A constructor call reaches the class's constructor method.
+                    ctor = _constructor_of(index, dst, lang)
+                    if ctor is not None:
+                        cls, dst = dst, ctor
                 if dst is not None and dst.path == src_path and dst.line == caller_line and dst.name == caller_name:
                     continue  # recursion through a qualified name (`Foo::bar` calling `bar`)
                 resolution = RESOLUTION_OF_STEP[step]
@@ -807,6 +883,9 @@ def resolve_calls(
                         "dst_name": dst.name if dst else None,
                         "dst_line": dst.line if dst else None,
                         "dst_kind": dst.kind if dst else None,
+                        # the class a constructor call named, when dst is its constructor
+                        "dst_class_path": cls.path if cls else None,
+                        "dst_class_name": cls.name if cls else None,
                     }
                 )
 

@@ -1,8 +1,8 @@
 {
-  "ambiguous_precision_pct": 94.5,
-  "confident_judged": 1567,
+  "ambiguous_precision_pct": 75.0,
+  "confident_judged": 1803,
   "confident_precision_pct": 99.4,
   "pyan_edges": 3492,
-  "recall_pct": 44.6,
-  "resolution_recall_pct": 90.2
+  "recall_pct": 51.3,
+  "resolution_recall_pct": 96.9
 }

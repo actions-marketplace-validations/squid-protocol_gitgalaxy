@@ -820,6 +820,7 @@ class RecordKeeper:
                 docstring TEXT,
                 calls_out_to TEXT,
                 calls_out_qualifiers TEXT,
+                calls_out_receiver_types TEXT,
                 transfers_to TEXT,
                 func_pagerank REAL,
                 func_fan_in INTEGER,
@@ -1014,6 +1015,7 @@ class RecordKeeper:
                 line_number INTEGER,
                 attributes TEXT,
                 copy_members TEXT,
+                sign_separate INTEGER,
                 FOREIGN KEY(file_id) REFERENCES file_data(id) ON DELETE CASCADE
             )
         """)
@@ -1025,6 +1027,9 @@ class RecordKeeper:
         # recorded: expanding the member is the reader's job (galaxy_ir), so a
         # COMMAREA record and a callee's DFHCOMMAREA can be compared field by field.
         _ensure_columns(cursor, "record_data", ["copy_members TEXT"])
+        # #3694: `sign_separate` -- 1 when a COBOL item codes SIGN ... SEPARATE (its sign
+        # takes a byte of its own), NULL otherwise; widths are the reader's job (galaxy_ir).
+        _ensure_columns(cursor, "record_data", ["sign_separate INTEGER"])
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_file_id ON record_data(file_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_snapshot ON record_data(repo_name, commit_hash);")
 
@@ -1784,6 +1789,9 @@ class RecordKeeper:
         # kind of link an fcall_data row is ('call' | 'transfer').
         self._heal_column(cursor, "function_data", "transfers_to", "TEXT")
         self._heal_column(cursor, "fcall_data", "kind", "TEXT DEFAULT 'call'")
+        # Receiver name -> class, per function (the call resolver's `typed` step):
+        # a JSON object, NULL where the function has none.
+        self._heal_column(cursor, "function_data", "calls_out_receiver_types", "TEXT")
 
         # #3329: the receiver chain per callee, a JSON list aligned with
         # calls_out_to (call_resolver.encode_qualifiers). Same auto-heal for a
@@ -2484,6 +2492,11 @@ class RecordKeeper:
                         str(func.get("docstring", ""))[:2000],
                         json.dumps(func.get("calls_out_to", [])),
                         _qualifiers_json(func),
+                        (
+                            json.dumps(func["calls_out_receiver_types"], sort_keys=True, separators=(",", ":"))
+                            if func.get("calls_out_receiver_types")
+                            else None
+                        ),
                         json.dumps(func["transfers_to"]) if func.get("transfers_to") else None,
                         func.get("func_pagerank"),
                         func.get("func_fan_in"),
@@ -2556,7 +2569,7 @@ class RecordKeeper:
             cursor.executemany(
                 f"""
                 INSERT INTO function_data
-                (file_id, parent_class_id, func_name, complexity, loc, start_line, args, usage_status, keyword_density, func_archetype, func_z_score, docstring, calls_out_to, calls_out_qualifiers, transfers_to, func_pagerank, func_fan_in, func_fan_out, token_mass, is_public, is_documented, {", ".join([self.SHORT_KEY_MAP.get(h, h) for h in self.SIGNAL_SCHEMA])}, impact)
+                (file_id, parent_class_id, func_name, complexity, loc, start_line, args, usage_status, keyword_density, func_archetype, func_z_score, docstring, calls_out_to, calls_out_qualifiers, calls_out_receiver_types, transfers_to, func_pagerank, func_fan_in, func_fan_out, token_mass, is_public, is_documented, {", ".join([self.SHORT_KEY_MAP.get(h, h) for h in self.SIGNAL_SCHEMA])}, impact)
                 VALUES ({func_placeholders})
             """,  # noqa: S608
                 all_func_rows,
@@ -2673,7 +2686,12 @@ class RecordKeeper:
                         func_key_to_id.get((dst_path, dst_name, int(site.get("dst_line") or 0)))
                         if dst_kind == "function"
                         else None,
-                        class_key_to_id.get((dst_path, dst_name)) if dst_kind == "class" else None,
+                        class_key_to_id.get((dst_path, dst_name))
+                        if dst_kind == "class"
+                        # a constructor call keeps the class it named beside its constructor
+                        else class_key_to_id.get((str(site.get("dst_class_path")), str(site.get("dst_class_name"))))
+                        if site.get("dst_class_name")
+                        else None,
                     )
                 )
             if fcall_rows:
@@ -2803,6 +2821,7 @@ class RecordKeeper:
                 "line_number",
                 "attributes",
                 "copy_members",
+                "sign_separate",
             ),
             "record_layouts",
             lambda it: (
@@ -2822,6 +2841,7 @@ class RecordKeeper:
                 int(it.get("line", 0) or 0),
                 it.get("attributes"),
                 it.get("copy_members"),  # #3355
+                1 if it.get("sign_separate") else None,  # #3694
             ),
         )
 

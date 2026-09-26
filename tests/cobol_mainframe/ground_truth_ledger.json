@@ -155,7 +155,7 @@
             "truth": 46
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "CICS resources": {
           "engine": {
@@ -355,7 +355,7 @@
             "truth": 2131
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "sample_verified"
         },
         "copybook paths": {
           "engine": {
@@ -526,7 +526,7 @@
             "truth": 174
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "symbolic maps": {
           "engine": {
@@ -1057,7 +1057,7 @@
             "truth": 17
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "CICS resources": {
           "engine": {
@@ -1241,7 +1241,7 @@
             "truth": 389
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "copybook paths": {
           "engine": {
@@ -1404,7 +1404,7 @@
             "truth": 95
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "symbolic maps": {
           "engine": {
@@ -1545,7 +1545,7 @@
             "truth": 7
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "CICS resources": {
           "engine": {
@@ -1721,7 +1721,7 @@
             "truth": 188
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "copybook paths": {
           "engine": {
@@ -1880,7 +1880,7 @@
             "truth": 61
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "symbolic maps": {
           "engine": {
@@ -1973,7 +1973,7 @@
             "truth": 689
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "sample_verified"
         },
         "CICS resources": {
           "engine": {
@@ -2373,7 +2373,7 @@
             "truth": 22
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "CICS resources": {
           "engine": {
@@ -2541,7 +2541,7 @@
             "truth": 17
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "copybook paths": {
           "engine": {
@@ -2700,7 +2700,7 @@
             "truth": 42
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "symbolic maps": {
           "engine": null,
@@ -2929,7 +2929,7 @@
             "truth": 34
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "copybook paths": {
           "engine": {
@@ -3096,7 +3096,7 @@
             "truth": 1
           },
           "forge": null,
-          "truth": "draft"
+          "truth": "cross_verified"
         },
         "symbolic maps": {
           "engine": null,

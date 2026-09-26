@@ -437,6 +437,63 @@
       "issue": 3575,
       "fixed_by": "#3601",
       "summary": "The brief did not say override DDs (//PROCSTEP.DD) are out of scope, as key and engine define them."
+    },
+    {
+      "id": "D023",
+      "estate": "aws-mainframe-modernization-carddemo",
+      "side": "engine",
+      "fields": [
+        "refmod spans",
+        "data moves"
+      ],
+      "language": "cobol",
+      "severity": "fact",
+      "found_by": "census",
+      "issue": 3649,
+      "summary": "A reference modification of a FUNCTION result (`MOVE FUNCTION CURRENT-DATE(1:4) TO ...`) was read as the function's argument list and dropped: 6 CBIMPORT sources lost their refmod (the key reader shared it).",
+      "fixed_by": "#3695"
+    },
+    {
+      "id": "D024",
+      "estate": "cics-banking-sample-application-cbsa",
+      "side": "engine",
+      "fields": [
+        "copybook layouts"
+      ],
+      "language": "cobol",
+      "severity": "fact",
+      "found_by": "census",
+      "issue": 3694,
+      "summary": "`PIC S9(n) DISPLAY SIGN LEADING SEPARATE` was sized n bytes, not n+1: record_data keeps no SIGN clause (3 ABNDINFO items; the key reader shared it).",
+      "fixed_by": "#3700"
+    },
+    {
+      "id": "B004",
+      "estate": "zopeneditor-sample",
+      "side": "brief",
+      "fields": [
+        "copybook layouts"
+      ],
+      "language": "cobol",
+      "severity": "fact",
+      "found_by": "census",
+      "issue": 3649,
+      "summary": "The layouts brief did not say pseudo-text awaiting COPY REPLACING (`:TAG:-REC`) is not a data name, as the key (and the data-move contract) define it.",
+      "fixed_by": "#3695"
+    },
+    {
+      "id": "D025",
+      "estate": "cics-genapp",
+      "side": "engine",
+      "fields": [
+        "record fields"
+      ],
+      "language": "cobol",
+      "severity": "attribute",
+      "found_by": "Java conversion review (#3688)",
+      "issue": 3688,
+      "summary": "A caller's record always outranked the program's own concrete DFHCOMMAREA: GENAPP's five lg*vs01 took a caller record of unknown width over their declared 32,500 bytes, and CBSA's BNK1UAC / UPDACC silently took a caller layout of another size (now the declaration, with each disagreeing caller a conflict).",
+      "fixed_by": "#3702"
     }
   ],
   "fields": {

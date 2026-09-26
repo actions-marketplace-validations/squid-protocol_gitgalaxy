@@ -52,6 +52,10 @@ from gitgalaxy.tools.cobol_to_java.cobol_to_java_build_forge import (
 from gitgalaxy.tools.cobol_to_java.cobol_to_java_decoder_forge import (
     generate_decoder_util,
 )
+
+# Current Imports
+from gitgalaxy.tools.cobol_to_java.cobol_to_java_guardrail import audit_section as guardrail_audit_section
+from gitgalaxy.tools.cobol_to_java.cobol_to_java_guardrail import write_baseline
 from gitgalaxy.tools.cobol_to_java.cobol_to_java_names import (
     java_class_base,
     output_key,
@@ -60,8 +64,6 @@ from gitgalaxy.tools.cobol_to_java.cobol_to_java_service_forge import (
     generate_service_skeleton,
 )
 from gitgalaxy.tools.cobol_to_java.cobol_to_java_skeleton_forges import SkeletonForges
-
-# Current Imports
 from gitgalaxy.tools.cobol_to_java.cobol_to_java_spring_forge import (
     dto_class_name,
     entity_class_name,
@@ -69,6 +71,7 @@ from gitgalaxy.tools.cobol_to_java.cobol_to_java_spring_forge import (
     generate_java_entity,
     is_transient_record,
 )
+from gitgalaxy.tools.cobol_to_java.cobol_to_java_worklist import NATURES, write_worklist
 from gitgalaxy.tools.cobol_to_java.java_target import (
     DEFAULT_CONFIG,
     ConfigError,
@@ -164,6 +167,18 @@ def _write_skeleton_audit(f, skeletons: dict, forges: Optional[SkeletonForges] =
     f.write("  'open' = verified on the keyed reference corpora, still being field-tested on fresh estates.\n")
     if forges is not None:
         forges.write_audit(f)
+    f.write("\n")
+
+
+def _write_worklist_audit(f, worklist: dict) -> None:
+    """#3651: the open items the generators left, by nature and category (details in migration_worklist.md)."""
+    s = worklist["summary"]
+    f.write("[3] MIGRATION WORKLIST (migration_worklist.md / .json)\n")
+    f.write("----------------------------------------------------------\n")
+    f.write(f"  • Open items : {s['items']} across {s['programs']} COBOL sources\n")
+    f.write("  • By nature  : " + ", ".join(f"{n} {s['by_nature'][n]}" for n in NATURES) + "\n")
+    for cid, n in s["by_category"].items():
+        f.write(f"    {worklist['categories'][cid]['title']:<42} {n:>5}  ({worklist['categories'][cid]['nature']})\n")
     f.write("\n")
 
 
@@ -314,6 +329,9 @@ def main():
 
     # 3. Generate REST Controllers & Service Layers from IR State Files
     ir_dir = clean_room_path / "04_ir_state_dumps"
+    owners: dict[str, str] = {}
+    mock_calls: dict[str, set[str]] = {}
+    estate_root = clean_room_path.parent / clean_room_path.name.split("_gitgalaxy_clean")[0]
     if ir_dir.exists():
         for ir_file in sorted(ir_dir.glob("*_ir.json"), key=lambda p: p.name):
             try:
@@ -331,6 +349,10 @@ def main():
                     raw_prog_id = "legacy-service"
 
                 safe_file_name = java_class_base(raw_prog_id)
+                # #3651: the COBOL file this program's Service / Controller came from, estate-relative
+                source = Path((ir_state.get("metadata") or {}).get("path") or "")
+                if source.is_relative_to(estate_root):
+                    owners[safe_file_name] = source.relative_to(estate_root).as_posix()
                 cics_prog = None
                 skeleton_key = output_key(ir_file, "_ir")
                 if forges is not None and forges.class_base(skeleton_key) != safe_file_name:
@@ -383,6 +405,8 @@ def main():
                     # If it stripped down to nothing, skip it to prevent writing "Service.java"
                     if not safe_sub_name:
                         continue
+                    # #3652: the program may call its mock (the agent is told to wire it)
+                    mock_calls.setdefault(f"{safe_file_name}Service", set()).add(f"{safe_sub_name}Service")
 
                     # Ensure we don't accidentally overwrite a real service if it was already generated
                     out_path_mock = java_dirs["service"] / f"{safe_sub_name}Service.java"
@@ -426,12 +450,17 @@ def main():
 
     # 5. Generate Master CI/CD Audit Report
     # #3650: the traceability manifest, once every service and controller has been generated
+    manifest = None
     if forges is not None:
         version = next((sk.get("skeleton_version") for sk in forges.skeletons.values()), None)
         manifest = forges.trace.as_dict({"clean_room": clean_room_path.name, "skeleton_version": version})
         (java_out_dir / "traceability.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+    # #3651: every TODO the generators left, as one plan by category and COBOL source
+    worklist = write_worklist(java_out_dir, manifest, {"clean_room": clean_room_path.name}, owners)
+    # #3652: the inventory an AI agent's changes are checked against
+    guard_baseline = write_baseline(java_out_dir, {"clean_room": clean_room_path.name}, mock_calls, owners)
 
     audit_report_path = java_out_dir / "java_migration_audit.txt"
     with open(audit_report_path, "w", encoding="utf-8") as f:
@@ -461,6 +490,8 @@ def main():
         f.write(f"  • AI Agent Tickets Generated      : {stats['agent_jobs']}\n\n")
         if skeletons:
             _write_skeleton_audit(f, skeletons, forges)
+        _write_worklist_audit(f, worklist)
+        f.write(guardrail_audit_section(None, guard_baseline))
         f.write("==========================================================\n")
 
     print("\n" + "=" * 70)

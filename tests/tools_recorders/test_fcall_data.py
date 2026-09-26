@@ -186,3 +186,26 @@ def test_brief_section_states_rates_and_caveat():
     assert "not that the choice was correct" in text
     assert "| php | 5 | 40.0% | 20.0% | 20.0% | 20.0% |" in text
     assert LLMRecorder.__new__(LLMRecorder)._call_resolution_lines({}) == []
+
+
+def test_a_constructor_call_links_the_constructor_and_keeps_the_class(tmp_path):
+    # #3642 follow-up: `new Store()` reaches Store's `__construct`, and the row still names the class.
+    files = _universe()
+    files[2]["functions"].append(_fn("__construct", 3, owner="Store"))
+    db = tmp_path / "f.db"
+    _record(db, files)
+    rows = [r for r in _rows(db, _SITES_SQL) if r[1] == "Store"]
+    assert rows == [("main", "Store", "unique", "lib/store.php", "__construct", "Store")]
+
+
+def test_receiver_types_persist_and_rehydrate(tmp_path):
+    db = tmp_path / "f.db"
+    files = _universe()
+    files[0]["functions"][0]["calls_out_receiver_types"] = {"d": "Store"}
+    _record(db, files)
+    assert _rows(db, "SELECT calls_out_receiver_types FROM function_data WHERE func_name = 'main'") == [
+        ('{"d":"Store"}',)
+    ]
+    cache = StateRehydrator(str(db)).load_state("FcallRepo")["ram_cache"]
+    main = [f for node in cache.values() for f in node["functions"] if f["name"] == "main"]
+    assert main[0]["calls_out_receiver_types"] == {"d": "Store"}

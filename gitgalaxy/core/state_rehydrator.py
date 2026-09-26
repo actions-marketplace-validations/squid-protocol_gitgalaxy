@@ -22,6 +22,19 @@ from typing import Any, Optional
 from gitgalaxy.core.call_resolver import decode_qualifiers
 
 
+def _json_dict(value: Any) -> dict:
+    """Decode a persisted JSON-object column; NULL or malformed text -> {}."""
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        out = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return out if isinstance(out, dict) else {}
+
+
 def _json_list(value: Any) -> list:
     """Decode a persisted JSON-list column (e.g. calls_out_to) back to a list.
     Tolerates already-decoded lists, NULLs and malformed text (-> [])."""
@@ -335,6 +348,10 @@ class StateRehydrator:
                             _json_list(r["calls_out_to"]) if "calls_out_to" in rk else [],
                             _json_list(r["calls_out_qualifiers"]) if "calls_out_qualifiers" in rk else None,
                         ),
+                        # the receiver -> class map the resolver's `typed` step reads
+                        "calls_out_receiver_types": _json_dict(r["calls_out_receiver_types"])
+                        if "calls_out_receiver_types" in rk
+                        else {},
                         "start_line": int(r["start_line"] or 0) if "start_line" in rk else 0,
                         # #3362: COBOL GO TO targets, re-resolved on a delta scan.
                         "transfers_to": _json_list(r["transfers_to"]) if "transfers_to" in rk else [],
@@ -483,6 +500,13 @@ class StateRehydrator:
                     if _has_table(cursor, "record_data") and _has_column(cursor, "record_data", "copy_members")
                     else "NULL"
                 )
+                # #3694: `sign_separate` likewise -- NULL before the column existed, and
+                # left off the payload exactly as the extractor leaves it off.
+                sign_col = (
+                    "rd.sign_separate"
+                    if _has_table(cursor, "record_data") and _has_column(cursor, "record_data", "sign_separate")
+                    else "NULL"
+                )
                 records_by_file = _restore_child_table(
                     cursor,
                     repo_name,
@@ -491,7 +515,8 @@ class StateRehydrator:
                     "SELECT fd.file_path AS _fp, rd.section, rd.fd_name, rd.ordinal, rd.parent_ordinal, "  # noqa: S608 -- attributes_col is one of two literals; values are bound
                     "rd.level_number AS level, rd.item_name AS name, rd.pic, rd.usage, rd.occurs_min, "
                     "rd.occurs_max, rd.occurs_depending_on, rd.redefines, rd.value_literal AS value, "
-                    f"rd.line_number AS line, {attributes_col} AS attributes, {copy_col} AS copy_members "
+                    f"rd.line_number AS line, {attributes_col} AS attributes, {copy_col} AS copy_members, "
+                    f"{sign_col} AS sign_separate "
                     "FROM record_data rd JOIN file_data fd ON rd.file_id = fd.id "
                     "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY rd.file_id, rd.ordinal",
                     lambda r: {
@@ -511,6 +536,7 @@ class StateRehydrator:
                         "line": int(r["line"] or 0),
                         "attributes": r["attributes"],
                         **({"copy_members": r["copy_members"]} if r["copy_members"] else {}),
+                        **({"sign_separate": True} if r["sign_separate"] else {}),
                     },
                 )
                 # #3211-followup: the CSD transaction definitions, restored per
