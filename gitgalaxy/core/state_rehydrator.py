@@ -348,11 +348,26 @@ class StateRehydrator:
                             _json_list(r["calls_out_to"]) if "calls_out_to" in rk else [],
                             _json_list(r["calls_out_qualifiers"]) if "calls_out_qualifiers" in rk else None,
                         ),
+                        # the decorators applied to it (the resolver's kind='decorator' edges)
+                        "decorated_by": _json_list(r["decorated_by"]) if "decorated_by" in rk else [],
+                        "decorated_by_qualifiers": decode_qualifiers(
+                            _json_list(r["decorated_by"]) if "decorated_by" in rk else [],
+                            _json_list(r["decorated_by_qualifiers"]) if "decorated_by_qualifiers" in rk else None,
+                        ),
+                        # function names used as values (the resolver's kind='reference' edges)
+                        "references_to": _json_list(r["references_to"]) if "references_to" in rk else [],
+                        "references_qualifiers": decode_qualifiers(
+                            _json_list(r["references_to"]) if "references_to" in rk else [],
+                            _json_list(r["references_qualifiers"]) if "references_qualifiers" in rk else None,
+                        ),
                         # the receiver -> class map the resolver's `typed` step reads
                         "calls_out_receiver_types": _json_dict(r["calls_out_receiver_types"])
                         if "calls_out_receiver_types" in rk
                         else {},
                         "start_line": int(r["start_line"] or 0) if "start_line" in rk else 0,
+                        # with start_line, the caller's span the resolver uses to prefer
+                        # a function nested inside it over a same-named one elsewhere
+                        "loc": int(r["loc"] or 0) if "loc" in rk else 0,
                         # #3362: COBOL GO TO targets, re-resolved on a delta scan.
                         "transfers_to": _json_list(r["transfers_to"]) if "transfers_to" in rk else [],
                         # engine stores the complexity/branch metric under "branch"
@@ -856,12 +871,19 @@ class StateRehydrator:
                 )
 
                 # #3451: JCL job flow, aliased back to the payload keys.
+                # #3622: `disp_normal` is NULL on a baseline written before it existed.
+                normal_col = (
+                    "jf.disp_normal"
+                    if _has_table(cursor, "job_flow_data") and _has_column(cursor, "job_flow_data", "disp_normal")
+                    else "NULL"
+                )
                 job_flow_by_file = _restore_child_table(
                     cursor,
                     repo_name,
                     baseline_hash,
                     "job_flow_data",
-                    'SELECT fd.file_path AS _fp, jf.kind, jf.job_name AS "name", jf.step_ordinal, jf.step_name, jf.program, jf.proc_name AS "proc", jf.cond, jf.if_cond, jf.in_proc, jf.dd_name, jf.dsn, jf.disp, jf.generation, jf.line_number AS "line" '
+                    'SELECT fd.file_path AS _fp, jf.kind, jf.job_name AS "name", jf.step_ordinal, jf.step_name, jf.program, jf.proc_name AS "proc", jf.cond, jf.if_cond, jf.in_proc, jf.dd_name, jf.dsn, jf.disp, jf.generation, jf.line_number AS "line", '  # noqa: S608 -- normal_col is one of two literals
+                    f"{normal_col} AS disp_normal "
                     "FROM job_flow_data jf JOIN file_data fd ON jf.file_id = fd.id "
                     "WHERE fd.repo_name = ? AND fd.commit_hash = ? ORDER BY jf.id",
                     lambda r: {
@@ -879,6 +901,7 @@ class StateRehydrator:
                         "disp": r["disp"],
                         "generation": r["generation"],
                         "line": int(r["line"] or 0),
+                        **({"disp_normal": r["disp_normal"]} if r["disp_normal"] else {}),
                     },
                 )
 

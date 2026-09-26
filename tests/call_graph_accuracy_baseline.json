@@ -27,13 +27,13 @@
     "tp": 2632
   },
   "go": {
-    "fn": 239,
+    "fn": 29,
     "fp": 5,
     "matched_functions": 1294,
     "parse_failures": 0,
     "precision_pct": 99.9,
-    "recall_pct": 96.4,
-    "tp": 6365
+    "recall_pct": 99.6,
+    "tp": 6575
   },
   "java": {
     "fn": 35,
@@ -72,22 +72,22 @@
     "tp": 11138
   },
   "ruby": {
-    "fn": 71,
-    "fp": 73,
-    "matched_functions": 338,
+    "fn": 64,
+    "fp": 0,
+    "matched_functions": 340,
     "parse_failures": 0,
-    "precision_pct": 92.7,
-    "recall_pct": 92.9,
-    "tp": 925
+    "precision_pct": 100.0,
+    "recall_pct": 93.8,
+    "tp": 969
   },
   "rust": {
-    "fn": 697,
-    "fp": 734,
+    "fn": 5,
+    "fp": 250,
     "matched_functions": 1774,
     "parse_failures": 0,
-    "precision_pct": 89.8,
-    "recall_pct": 90.3,
-    "tp": 6497
+    "precision_pct": 96.6,
+    "recall_pct": 99.9,
+    "tp": 7189
   },
   "typescript": {
     "fn": 177,

@@ -16,6 +16,10 @@ def test_gated_metrics_flatten_the_scored_result():
         "recall_pct": 36.1,
         "resolution_recall_pct": 71.8,
         "pyan_edges": 3492,
+        "decorator": {"agree": 575, "wrong": 0, "precision_pct": 100.0},
+        "recall_with_decorators_pct": 67.9,
+        "reference_edges": {"agree": 322, "wrong": 1, "precision_pct": 99.7},
+        "recall_all_kinds_pct": 77.3,
     }
     assert cgr.gated_metrics(py) == {
         "confident_precision_pct": 98.0,
@@ -24,6 +28,12 @@ def test_gated_metrics_flatten_the_scored_result():
         "recall_pct": 36.1,
         "resolution_recall_pct": 71.8,
         "pyan_edges": 3492,
+        "decorator_precision_pct": 100.0,
+        "decorator_judged": 575,
+        "recall_with_decorators_pct": 67.9,
+        "reference_precision_pct": 99.7,
+        "reference_judged": 323,
+        "recall_all_kinds_pct": 77.3,
     }
 
 

@@ -235,3 +235,40 @@ def test_synthetic_units_persist_and_rehydrate_to_the_same_resolution(tmp_path):
         )
 
     assert key(resolve_calls(restored, _IMPORTS)[0]) == key(resolve_calls(files, _IMPORTS)[0])
+
+
+def test_decorators_persist_and_rehydrate(tmp_path):
+    db = tmp_path / "f.db"
+    files = _universe()
+    main = files[0]["functions"][0]
+    main["decorated_by"] = ["helper"]
+    main["decorated_by_qualifiers"] = {"helper": [""]}
+    _record(db, files)
+    assert _rows(db, "SELECT decorated_by, decorated_by_qualifiers FROM function_data WHERE func_name = 'main'") == [
+        ('["helper"]', '[""]')
+    ]
+    assert _rows(db, "SELECT callee, kind FROM fcall_data WHERE kind = 'decorator'") == [("helper", "decorator")]
+    cache = StateRehydrator(str(db)).load_state("FcallRepo")["ram_cache"]
+    restored = [f for node in cache.values() for f in node["functions"] if f["name"] == "main"]
+    assert restored[0]["decorated_by"] == ["helper"]
+    assert restored[0]["decorated_by_qualifiers"] == {"helper": [""]}
+
+
+def test_references_and_loc_persist_and_rehydrate(tmp_path):
+    db = tmp_path / "f.db"
+    files = _universe()
+    main = files[0]["functions"][0]
+    main["references_to"] = ["helper"]
+    main["references_qualifiers"] = {"helper": [""]}
+    main["loc"] = 7
+    _record(db, files)
+    assert _rows(db, "SELECT references_to, references_qualifiers FROM function_data WHERE func_name = 'main'") == [
+        ('["helper"]', '[""]')
+    ]
+    cache = StateRehydrator(str(db)).load_state("FcallRepo")["ram_cache"]
+    restored = [f for node in cache.values() for f in node["functions"] if f["name"] == "main"][0]
+    assert (restored["references_to"], restored["references_qualifiers"], restored["loc"]) == (
+        ["helper"],
+        {"helper": [""]},
+        7,
+    )

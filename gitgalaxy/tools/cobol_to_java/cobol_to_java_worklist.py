@@ -59,9 +59,10 @@ CATEGORIES = (
              "Map the program's record onto the entity's fields (or split the entity); "
              "the two layouts' sizes are in the TODO."),
     Category("missing-layout", "Unresolved layouts", "fact-gap",
-             ("no COMMAREA layout", "the layout of", "COPY members not found", "was not found in the DATA DIVISION",
+             ("no COMMAREA layout", "the layout of", "COPY members not found", "%INCLUDE members not found", "was not found in the DATA DIVISION",
               "has no known width", "no single BMS source defines"),
-             "Add the missing copybook or record to the repository and re-run; the DTO then gets its real fields."),
+             "Add the missing copybook / %INCLUDE member or record to the repository and re-run; the DTO then gets its "
+             "real fields."),
     Category("vsam-key", "Keys that are not one field", "fact-gap",
              ("the key (offset", "no key is known", "STARTBR / READNEXT", "alternate index", "start from a key",
               "reads through path"),
@@ -71,6 +72,10 @@ CATEGORIES = (
              ("the queue name is data-driven", "is an installation symbol"),
              "Resolve the name (the MOVEs into the operand, or the installation's symbol table) and pass it: "
              "the port takes any queue name."),
+    Category("batch-utility", "Utility job steps to port", "port",
+             ("a utility step to port",),
+             "Replace the utility with its Spring Batch equivalent (SORT -> a sorting step, IDCAMS REPRO -> a copy, "
+             "a TSO / IMS runner -> the program's runBatch), reading its control statements in SYSIN."),
     Category("open-mode", "DDs without an OPEN mode", "fact-gap",
              ("no OPEN mode",),
              "Add the JCL step that runs the program (or state the mode); the access methods are generated from it."),
@@ -90,11 +95,12 @@ CATEGORIES = (
              "End the transaction at the SYNCPOINT the comment cites: a nested REQUIRES_NEW call, or two service "
              "methods."),
     Category("interface-call", "Calls to other services", "port",
-             ("Implement or mock interface call", "submits a job through the internal reader"),
+             ("Implement or mock interface call", "submits a job through the internal reader", "submits job"),
              "Wire the called service (or a mock) in place of the placeholder."),
     Category("business-logic", "Business logic to port", "port",
              ("implement from the program's business rules", "Implement extracted business rules", "port paragraph",
               "port the logic that fills", "port the logic that reads", "port the logic that handles the MQ request",
+              "port the PROCEDURE DIVISION main line",
               "build the response"),
              "Port the cited paragraphs; the skeleton names the COBOL lines and the facts they touch."),
     Category("configuration", "Target configuration", "review",
@@ -230,7 +236,7 @@ def build_worklist(
             _owner(it["file"], owners or {})
             or _program(it["facts"])
             or _program(file_facts.get(it["file"], []))
-            or ("(no COBOL source cited)" if it["file"].endswith(".java") else "(project configuration)")
+            or ("(no program source cited)" if it["file"].endswith(".java") else "(project configuration)")
         )
     items.sort(
         key=lambda i: (
@@ -278,7 +284,7 @@ def render_markdown(wl: dict) -> str:
           ("Every TODO the generators left in this project: where a fact was missing or two facts disagreed, "
            "the Java says so instead of guessing. Each item names the fact it rests on (from "
            "`traceability.json`) and a suggested resolution."), "",
-          f"**{s['items']} items** across {s['programs']} COBOL sources.", "",
+          f"**{s['items']} items** across {s['programs']} program sources (COBOL, PL/I).", "",
           "| nature | items | what it takes |", "|---|---:|---|"]  # fmt: skip
     what = {"conflict": "two facts disagree: a person decides which one the Java follows",
             "fact-gap": "a fact is missing: supply it and re-run",
@@ -292,7 +298,7 @@ def render_markdown(wl: dict) -> str:
     programs: dict[str, Counter] = {}
     for it in wl["items"]:
         programs.setdefault(it["program"], Counter())[it["nature"]] += 1
-    md += ["", "## By COBOL source", "", "| source | " + " | ".join(NATURES) + " | total |",
+    md += ["", "## By program source", "", "| source | " + " | ".join(NATURES) + " | total |",
            "|---|" + "---:|" * (len(NATURES) + 1)]  # fmt: skip
     for prog, cnt in sorted(programs.items(), key=lambda kv: (-sum(kv[1].values()), kv[0])):
         md.append(f"| `{prog}` | " + " | ".join(str(cnt[n] or "") for n in NATURES) + f" | {sum(cnt.values())} |")
