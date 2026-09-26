@@ -10,6 +10,9 @@ field by field, decimals exact.
 A CASE (tests/equivalence/<case>/case.json) names a corpus program, the datasets it
 reads and writes (per DD: the corpus data file, record length, VSAM keys, the
 copybook that lays the record out), the step's PARM, and the pinned clock.
+A dataset's input may be `@generate` (#3804, equivalence_inputs.py): records built from
+its copybook layout -- edge values per PICTURE, unique sorted keys, joins drawn from the
+files they must meet -- so an estate that ships no data can be proven too.
 
 COBOL side -- GnuCOBOL 3.x (BDB indexed files) in a container built from
 tests/equivalence/gnucobol.Dockerfile. Each KSDS input is loaded by a generated
@@ -59,7 +62,7 @@ def _cbl(lines: list[str]) -> str:
     out = []
     for ln in lines:
         body = ln.rstrip()
-        assert len(body) <= 65, f"COBOL line too long: {body!r}"  # noqa: S101 -- generated text, a harness bug
+        assert len(body) <= 65, f"COBOL line too long: {body!r}"
         out.append(" " * 7 + body)
     return "\n".join(out) + "\n"
 
@@ -137,8 +140,13 @@ def run_cobol(case: dict[str, Any], corpus: Path, work: Path) -> dict[str, bytes
                 shutil.copy(p, src / p.name)
     script = ["set -e", "cd /work"]
     flags = "-std=ibm -fsign=EBCDIC -I /work/src"
+    import equivalence_inputs  # #3804: `@generate` inputs, from their record layouts
+
+    generated = equivalence_inputs.generate_inputs(case, corpus)
     for dd, spec in case["datasets"].items():
-        if "input" in spec:
+        if dd in generated:
+            (work / f"{dd}.in").write_bytes(generated[dd])
+        elif "input" in spec:
             (work / f"{dd}.in").write_bytes(_fixed(_input_path(case, corpus, spec["input"]), spec["reclen"]))
         if spec.get("organization") == "indexed":
             (src / f"LD{dd}.cbl").write_text(cobol_loader(dd, spec["reclen"], spec["keys"]), encoding="ascii")
@@ -160,8 +168,8 @@ def run_cobol(case: dict[str, Any], corpus: Path, work: Path) -> dict[str, bytes
         elif spec.get("compare"):
             script.append(f"cp /work/{dd}.idx /work/{dd}.out")
     (work / "run.sh").write_text("\n".join(script) + "\n", encoding="ascii")
-    proc = subprocess.run(  # noqa: S603 -- fixed argv, a local image
-        ["docker", "run", "--rm", "-v", f"{work}:/work", IMAGE, "bash", "/work/run.sh"],  # noqa: S607
+    proc = subprocess.run(
+        ["docker", "run", "--rm", "-v", f"{work}:/work", IMAGE, "bash", "/work/run.sh"],
         capture_output=True, text=True, check=False,
     )  # fmt: skip
     if proc.returncode != 0:
@@ -172,8 +180,8 @@ def run_cobol(case: dict[str, Any], corpus: Path, work: Path) -> dict[str, bytes
 
 
 def build_image() -> None:
-    subprocess.run(  # noqa: S603
-        ["docker", "build", "-q", "-t", IMAGE, "-f", str(CASES / "gnucobol.Dockerfile"), str(CASES)],  # noqa: S607
+    subprocess.run(
+        ["docker", "build", "-q", "-t", IMAGE, "-f", str(CASES / "gnucobol.Dockerfile"), str(CASES)],
         check=True, capture_output=True,
     )  # fmt: skip
 
