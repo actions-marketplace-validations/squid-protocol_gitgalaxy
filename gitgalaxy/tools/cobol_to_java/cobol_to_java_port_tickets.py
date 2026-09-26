@@ -35,6 +35,10 @@ from gitgalaxy.tools.cobol_to_java.cobol_to_java_names import java_class_base
 TICKET_VERSION = 1
 PORTING_RULES = [
     (
+        "Deliver the whole port: every paragraph the ported method reaches, every screen field it sets, every "
+        "file it reads. A partial port or a sketch is not proven: the equivalence harness compares every output."
+    ),
+    (
         "Port the PROCEDURE DIVISION into the service's methods, paragraph by paragraph; name the paragraph "
         "each block ports in a comment, so the port can be reviewed against the source."
     ),
@@ -69,6 +73,16 @@ PORTING_RULES = [
         "Decode and encode a numeric field held in record bytes or a text column (zoned with an overpunched "
         "sign, COMP-3, COMP) only through the generated CobolRecords (zoned / packed / binary and their put "
         "methods) or the entity codecs, never a hand-written decoder."
+    ),
+    (
+        "A CICS program is ported into runTask(CicsTask task), one task per call (#3754): EIBCALEN = 0 is "
+        "!task.hasCommarea(), DFHCOMMAREA is task.commarea(<its DTO>.class), EIBAID is task.aid() (ENTER, CLEAR, "
+        "PF1-PF24, PA1-PA3), RECEIVE MAP is task.receive(map, <its screen>.class) (empty = MAPFAIL), SEND MAP "
+        "is task.sendMap(map, screen), SEND TEXT / SEND is task.sendText, RETURN TRANSID COMMAREA is "
+        "task.returnTransid, XCTL is task.xctl, ABEND is task.abend -- in the order the program does them, and "
+        "the task ends at RETURN / XCTL / ABEND. A file READ is the service's generated read method (an empty "
+        "result is NOTFND, DFHRESP 13). A screen field shows what the symbolic map's O field would hold: text "
+        "as moved, an edited PICTURE formatted as COBOL formats it."
     ),
     (
         "Read the time only from the generated batch runtime's MainframeClock (now()), never from the "
