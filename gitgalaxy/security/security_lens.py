@@ -15,6 +15,8 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from gitgalaxy.core.rule_prefilter import derive_literal_gate, fold_haystack
+from gitgalaxy.security.credential_lexicon import COBOL_CREDENTIAL_ALTERNATION, CODE_CREDENTIAL_ALTERNATION
+from gitgalaxy.standards.language_standards.identifiers import VIRAMA
 
 logger = logging.getLogger("security_lens")
 
@@ -74,7 +76,9 @@ class SecurityLens:
                 r"\b(?:atob|btoa|base64_decode|base64_encode|gzuncompress|str_rot13)\b|"
                 r"\\x[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|"
                 r'(?:\w{15,}[ \t]*=[ \t]*["\'][A-Za-z0-9+/]{40,}={0,2}["\'])|'
-                r"[\u200B-\u200D\uFEFF\u200E\u200F\u202A-\u202E]",  # Invisible Unicode
+                # Invisible Unicode. #3814: a ZWNJ / ZWJ right after a virama is Indic spelling
+                # (`क्‍ष`, allowed in names by UAX #31 A1/A2), not hidden text -- only that is exempt.
+                r"[\u200B\uFEFF\u200E\u200F\u202A-\u202E]|(?<![" + VIRAMA + r"])[\u200C\u200D]",
                 re.I,
             ),
             # 2. Security Control & Safety Bypasses (e.g., Disabling SSL Verification)
@@ -160,9 +164,14 @@ class SecurityLens:
                 re.I,
             ),
             # 10. Hardcoded Secrets & Credentials
+            # The credential names come from a multilingual lexicon (#3832): a
+            # German `passwort`, a Brazilian `senha` or a Spanish COBOL
+            # `CONTRASENA` field is the same leak as an English `password`.
             "hardcoded_secrets": re.compile(
-                r"\b(password|secret|token|api[_-]?key|client[_-]?secret|credentials|private[_-]?key|auth[_-]?token)\b[ \t]*(?:[:=]|=>)[ \t]*[\"'][A-Za-z0-9\-_+/=]{16,}[\"']|"
-                r"\b(PASSWORD|SECRET|TOKEN|KEY|CREDENTIALS)[A-Za-z0-9_-]*\b[ \t]+(?:IS[ \t]+)?(?:PIC[ \t]+[A-Za-z0-9\-\(\)]+[ \t]+)?VALUE[ \t]+['\"][^'\"]+['\"]|"
+                r"\b(" + CODE_CREDENTIAL_ALTERNATION + r")\b[ \t]*(?:[:=]|=>)[ \t]*[\"'][A-Za-z0-9\-_+/=]{16,}[\"']|"
+                r"\b("
+                + COBOL_CREDENTIAL_ALTERNATION
+                + r")[A-Za-z0-9_-]*\b[ \t]+(?:IS[ \t]+)?(?:PIC[ \t]+[A-Za-z0-9\-\(\)]+[ \t]+)?VALUE[ \t]+['\"][^'\"]+['\"]|"
                 r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP )?(?:PRIVATE KEY|MESSAGE|CERTIFICATE)-----|"
                 r"\b(?:sk_live|rk_live)_[0-9a-zA-Z]{24,99}\b|"
                 r"\bghp_[0-9a-zA-Z]{36}\b|"
